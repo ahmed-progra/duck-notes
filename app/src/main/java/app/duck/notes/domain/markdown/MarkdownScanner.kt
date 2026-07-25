@@ -34,6 +34,13 @@ object MarkdownScanner {
                 else -> carry
             }
             // A fence line that neither opens nor closes is just body text inside the block.
+            //
+            // FENCE_MARKER carries no conceal ranges on purpose, so ``` stays visible. The phase
+            // spec says to hide backticks, and for inline code we do — but hiding a fence would
+            // leave two blank lines where the block's boundary was, because a SpanStyle cannot draw
+            // a block background to replace it. Visible fences read better than invisible ones until
+            // the code block gets real decoration drawing in Phase 5/8. Pinned by
+            // GoldenSpanTest.fencedBlockIsNotStyledAsMarkdown.
             return if (next != carry) {
                 listOf(Token(TokenKind.FENCE_MARKER, base, base + line.length)) to next
             } else {
@@ -89,8 +96,11 @@ object MarkdownScanner {
             val task = taskAt(line, content)
             if (task != null) {
                 val (kind, afterBox) = task
-                out += Token(kind, base + i, base + line.length, listOf(base + i until base + afterBox))
-                return skipSpace(line, afterBox)
+                // Through the space after `]`, not just the box — every other block marker eats its
+                // trailing space, and leaving this one would indent concealed task lines by one.
+                val body = skipSpace(line, afterBox)
+                out += Token(kind, base + i, base + line.length, listOf(base + i until base + body))
+                return body
             }
             out += Token(TokenKind.BULLET, base + i, base + line.length, listOf(base + i until base + content))
             return content

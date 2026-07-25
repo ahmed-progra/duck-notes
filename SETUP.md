@@ -136,6 +136,31 @@ adb shell am instrument -w -r -e class app.duck.notes.markdown.OutputTransformat
 
 Android Studio's own test runner also reports correctly — use it for interactive runs.
 
+### Emulator instability — class-level instrumented runs dying
+
+**Symptom, precisely:** a *class-level* instrumented run dies partway through or reports
+`Expected N tests, received 0`, while the same test methods pass when run individually. Seen during
+Phase 4 with `ConcealMappingTest`.
+
+**Cause:** the emulator, not the tests.
+
+**Fix:**
+1. Cold-boot the AVD.
+2. Exclude the Android SDK folder from Avast (or your AV) Web/Mail/File shields.
+
+After that fix, `ConcealMappingTest` passed 10/10 class-level and the full instrumented suite 19/19.
+
+**What this does and does not rule out.** Reach for the two steps above first — they resolved it.
+But nothing about the tests themselves was disproved by experiment; fixing the emulator made the
+test-side hypotheses *moot*, not *false*. Worth keeping in mind if a Compose test misbehaves again:
+
+- Per-test `Activity` churn under `createComposeRule` and IME wedging from `performTextInput` were
+  plausible and remain untested.
+- A recomposition loop — an `OutputTransformation` invalidating every frame so `waitForIdle` never
+  settles — was never excluded by evidence. It is unlikely, since single-method runs settle in ~3s,
+  but it is the one with product consequences rather than harness ones. If a future Compose test
+  **hangs** rather than dying abruptly, check that before assuming the emulator.
+
 Unit tests are unaffected: `gradle testDebugUnitTest` works normally.
 
 To create an emulator via command line:

@@ -72,7 +72,9 @@ dependencies {
     ksp(libs.room.compiler)
 
     // Bundled SQLite: Android's system SQLite does not reliably ship the FTS5 module.
-    // androidTestImplementation extends implementation, so the test source set gets this too.
+    // Instrumented tests get this at runtime because the androidTest APK is instrumented into the
+    // app's own process — NOT by configuration inheritance. androidTestImplementation does not
+    // extend implementation, which is also why the Compose BOM has to be declared separately below.
     implementation(libs.androidx.sqlite.bundled)
 
     // Cold path only — export and AST queries. The editor's per-keystroke path never calls these.
