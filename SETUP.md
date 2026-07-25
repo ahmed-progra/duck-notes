@@ -17,18 +17,17 @@ is also given.
 | `local.properties` | Machine-specific, git-ignored | Android Studio writes it on open, or create it by hand (step 2) |
 | Real duck launcher icon | Design work is Phase 5 | Placeholder accent icon ships now |
 
-`gradle/wrapper/gradle-wrapper.properties` **is** present and pins **Gradle 8.9** — the version AGP 8.7
+`gradle/wrapper/gradle-wrapper.properties` **is** present and pins **Gradle 8.13** — the version AGP 8.13.2
 requires. Keep it.
 
 ---
 
 ## 1. Prerequisites
 
-- **JDK 17** must be resolvable by Gradle. This project sets `kotlin { jvmToolchain(17) }`, so Gradle
-  needs a Java 17 toolchain even though the machine has JDK 21.
-  - Android Studio: it ships a compatible embedded JDK — nothing to do.
-  - Command line / fully offline: install **Temurin 17** next to your JDK 21. Gradle auto-detects
-    installed JDKs; with no network it cannot download one, so 17 must already be present.
+- **JDK 21** must be resolvable by Gradle. This project sets `kotlin { jvmToolchain(21) }` and
+  `sourceCompatibility`/`targetCompatibility = VERSION_21`, matching the JDK 21 on this machine.
+  - Android Studio: its embedded JDK (21+) satisfies this — nothing to do.
+  - Command line / fully offline: JDK 21 must already be installed and auto-detectable by Gradle.
 - **Network:** the following hosts must be reachable. On this machine they are blocked (an Avast SSL
   filter is present) — whitelist them in Avast Web Shield **and** the firewall, or build on a network
   that allows them:
@@ -72,10 +71,10 @@ requires. Keep it.
 
 ## 3. Gradle wrapper (command-line path only)
 
-Android Studio does this for you. Otherwise, install Gradle 8.9 once
+Android Studio does this for you. Otherwise, install Gradle 8.13 once
 (<https://gradle.org/releases/>), then from the project root:
 ```
-gradle wrapper --gradle-version 8.9
+gradle wrapper --gradle-version 8.13
 ```
 This mints `gradlew`, `gradlew.bat`, and `gradle/wrapper/gradle-wrapper.jar`.
 
@@ -119,5 +118,5 @@ package boundaries and the Hilt app scaffold created here already exist.
 
 ## Pinned versions (from `gradle/libs.versions.toml`)
 
-AGP 8.7.0 · Gradle 8.9 · Kotlin 2.0.21 · KSP 2.0.21-1.0.28 · Hilt 2.52 ·
-Compose BOM 2024.09.03 · compileSdk 35 · targetSdk 35 · minSdk 26 · JVM target 17.
+AGP 8.13.2 · Gradle 8.13 · Kotlin 2.0.21 · KSP 2.0.21-1.0.28 · Hilt 2.52 ·
+Compose BOM 2024.09.03 · compileSdk 35 · targetSdk 35 · minSdk 26 · JVM target 21.
