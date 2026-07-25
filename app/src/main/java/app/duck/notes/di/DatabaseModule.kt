@@ -1,0 +1,39 @@
+package app.duck.notes.di
+
+import android.content.Context
+import androidx.room.Room
+import app.duck.notes.BuildConfig
+import app.duck.notes.data.local.DUCK_MIGRATIONS
+import app.duck.notes.data.local.DuckDatabase
+import app.duck.notes.data.local.DuckDatabaseCallback
+import app.duck.notes.data.local.dao.NoteDao
+import app.duck.notes.data.local.dao.TagDao
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+
+/** Wires the Room database and its DAOs into the Hilt graph. Sample notes are seeded in debug only. */
+@Module
+@InstallIn(SingletonComponent::class)
+object DatabaseModule {
+
+    @Provides
+    @Singleton
+    fun provideDatabase(@ApplicationContext context: Context): DuckDatabase =
+        Room.databaseBuilder(context, DuckDatabase::class.java, DuckDatabase.NAME)
+            .addCallback(DuckDatabaseCallback(seedSampleNotes = BuildConfig.DEBUG))
+            .addMigrations(*DUCK_MIGRATIONS)
+            // A downgrade rebuilds the DB; the callback's onDestructiveMigration re-creates
+            // and repopulates the FTS index. Forward migrations still go through DUCK_MIGRATIONS.
+            .fallbackToDestructiveMigrationOnDowngrade()
+            .build()
+
+    @Provides
+    fun provideNoteDao(db: DuckDatabase): NoteDao = db.noteDao()
+
+    @Provides
+    fun provideTagDao(db: DuckDatabase): TagDao = db.tagDao()
+}
