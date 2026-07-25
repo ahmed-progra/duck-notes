@@ -3,12 +3,12 @@ package app.duck.notes.data.local
 import android.content.Context
 import android.util.Log
 import androidx.room.Room
-import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.data.local.dao.NoteDao
 import app.duck.notes.data.local.dao.TagDao
 import app.duck.notes.data.local.entity.NoteEntity
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -36,6 +36,8 @@ class DuckDatabaseTest {
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
+            // Must match production: system SQLite may lack FTS5, which `notes_fts` requires.
+            .setDriver(BundledSQLiteDriver())
             .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
             .build()
         notes = db.noteDao()
@@ -127,9 +129,9 @@ class DuckDatabaseTest {
 
     @Test
     fun perf_at5000Notes() = runBlocking {
-        db.withTransaction {
-            repeat(COUNT) { i -> notes.insert(note("Note $i", "alpha body token$i")) }
-        }
+        // insertAll is one Room transaction; room-ktx withTransaction can't be used here because
+        // it goes through the SupportSQLite path, which a SQLiteDriver replaces.
+        notes.insertAll(List(COUNT) { i -> note("Note $i", "alpha body token$i") })
         val bulkTagId = tags.observeAll().first().firstOrNull()?.id
             ?: run {
                 notes.saveNoteWithTags(note("tagged", "alpha"), listOf("bulk"))

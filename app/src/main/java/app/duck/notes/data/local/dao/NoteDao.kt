@@ -6,10 +6,9 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.RawQuery
+import androidx.room.RoomRawQuery
 import androidx.room.Transaction
 import androidx.room.Update
-import androidx.sqlite.db.SimpleSQLiteQuery
-import androidx.sqlite.db.SupportSQLiteQuery
 import app.duck.notes.data.local.entity.NoteEntity
 import app.duck.notes.data.local.entity.NoteTagCrossRef
 import app.duck.notes.data.local.entity.TagEntity
@@ -54,6 +53,9 @@ abstract class NoteDao {
      * Prefix full-text search over active notes, most-recent first. Each token is turned into an
      * FTS5 prefix term (`duck note` -> `duck* note*`, implicit AND). Query hardening — operators,
      * phrases, snippet highlighting — lands in Phase 10.
+     *
+     * `notes_fts` is deliberately NOT aliased: MATCH's left side resolves to the hidden column
+     * named after the table, which keeps the real table name even under an alias.
      */
     open suspend fun search(term: String): List<NoteEntity> {
         val match = ftsMatch(term)
@@ -61,20 +63,25 @@ abstract class NoteDao {
         val sql =
             """
             SELECT n.* FROM notes AS n
-            JOIN notes_fts AS f ON f.rowid = n.rowid
-            WHERE f MATCH ? AND n.is_trashed = 0
+            JOIN notes_fts ON notes_fts.rowid = n.rowid
+            WHERE notes_fts MATCH ? AND n.is_trashed = 0
             ORDER BY n.modified_at DESC
             """.trimIndent()
-        return searchRaw(SimpleSQLiteQuery(sql, arrayOf(match)))
+        // Bind index is 1-based.
+        return searchRaw(RoomRawQuery(sql) { statement -> statement.bindText(1, match) })
     }
 
     @RawQuery
-    protected abstract suspend fun searchRaw(query: SupportSQLiteQuery): List<NoteEntity>
+    protected abstract suspend fun searchRaw(query: RoomRawQuery): List<NoteEntity>
 
     // --- Direct writes ------------------------------------------------------
 
     @Insert
     abstract suspend fun insert(note: NoteEntity): Long
+
+    /** Bulk insert in a single Room transaction — used to populate large fixtures. */
+    @Insert
+    abstract suspend fun insertAll(notes: List<NoteEntity>)
 
     @Update
     abstract suspend fun update(note: NoteEntity)

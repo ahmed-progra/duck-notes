@@ -66,6 +66,10 @@ dependencies {
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
+    // Bundled SQLite: Android's system SQLite does not reliably ship the FTS5 module.
+    // androidTestImplementation extends implementation, so the test source set gets this too.
+    implementation(libs.androidx.sqlite.bundled)
+
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
 

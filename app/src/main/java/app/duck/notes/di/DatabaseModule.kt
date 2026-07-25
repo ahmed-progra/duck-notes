@@ -13,6 +13,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import javax.inject.Singleton
 
 /** Wires the Room database and its DAOs into the Hilt graph. Sample notes are seeded in debug only. */
@@ -24,6 +25,10 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): DuckDatabase =
         Room.databaseBuilder(context, DuckDatabase::class.java, DuckDatabase.NAME)
+            // Bundled SQLite — the system one may lack the FTS5 module `notes_fts` needs.
+            // Installing a driver also means DuckDatabaseCallback must override the
+            // SQLiteConnection callbacks; the SupportSQLiteDatabase ones are never invoked.
+            .setDriver(BundledSQLiteDriver())
             .addCallback(DuckDatabaseCallback(seedSampleNotes = BuildConfig.DEBUG))
             .addMigrations(*DUCK_MIGRATIONS)
             // A downgrade rebuilds the DB; the callback's onDestructiveMigration re-creates

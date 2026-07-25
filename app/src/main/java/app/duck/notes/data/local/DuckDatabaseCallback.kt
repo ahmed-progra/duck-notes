@@ -1,53 +1,58 @@
 package app.duck.notes.data.local
 
 import androidx.room.RoomDatabase
-import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.SQLiteConnection
 
 /**
  * Owns the parts of the schema Room can't declare: the FTS5 table/triggers ([FtsSchema]) and,
  * in debug builds, a few sample notes.
  *
+ * These are the **[SQLiteConnection] overloads**, not the `SupportSQLiteDatabase` ones — with a
+ * `SQLiteDriver` installed (see `DatabaseModule`), Room never invokes the Support-based callbacks,
+ * so using those signatures would silently leave the database without `notes_fts`.
+ *
  * The FTS layer is (re)created on every [onCreate], [onOpen], and [onDestructiveMigration] so it
- * survives fresh installs, re-opens, and fallback rebuilds alike. Seeding uses raw `execSQL`
- * only — the [RoomDatabase] instance isn't finished constructing inside a callback, so touching a
- * DAO here would deadlock. Seeds run after the triggers exist, so the AFTER-INSERT trigger fills
- * `notes_fts` for us.
+ * survives fresh installs, re-opens, and fallback rebuilds alike. Seeding goes through prepared
+ * statements on the raw connection — never a DAO, which would deadlock since the [RoomDatabase]
+ * isn't finished constructing inside a callback. Seeds run after the triggers exist, so the
+ * AFTER-INSERT trigger fills `notes_fts` for us.
  */
 class DuckDatabaseCallback(
     private val seedSampleNotes: Boolean,
 ) : RoomDatabase.Callback() {
 
-    override fun onCreate(db: SupportSQLiteDatabase) {
-        FtsSchema.create(db)
-        if (seedSampleNotes) seed(db)
+    override fun onCreate(connection: SQLiteConnection) {
+        FtsSchema.create(connection)
+        if (seedSampleNotes) seed(connection)
     }
 
-    override fun onOpen(db: SupportSQLiteDatabase) {
-        FtsSchema.create(db)
+    override fun onOpen(connection: SQLiteConnection) {
+        FtsSchema.create(connection)
     }
 
-    override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
-        FtsSchema.create(db)
-        FtsSchema.rebuild(db)
+    override fun onDestructiveMigration(connection: SQLiteConnection) {
+        FtsSchema.create(connection)
+        FtsSchema.rebuild(connection)
     }
 
-    private fun seed(db: SupportSQLiteDatabase) {
+    private fun seed(connection: SQLiteConnection) {
         val now = System.currentTimeMillis()
-        insertNote(db, SEED_NOTE_WELCOME, "Welcome to Duck", "# Welcome to Duck\n\nTap + to start. #welcome", now)
-        insertNote(db, SEED_NOTE_MARKDOWN, "Markdown basics", "**Bold**, _italic_, `code`. #duck", now - 1)
-        insertNote(db, SEED_NOTE_TODO, "Todo", "- [ ] Try full-text search #todo", now - 2)
+        insertNote(connection, SEED_NOTE_WELCOME, "Welcome to Duck", "# Welcome to Duck\n\nTap + to start. #welcome", now)
+        insertNote(connection, SEED_NOTE_MARKDOWN, "Markdown basics", "**Bold**, _italic_, `code`. #duck", now - 1)
+        insertNote(connection, SEED_NOTE_TODO, "Todo", "- [ ] Try full-text search #todo", now - 2)
 
-        insertTag(db, SEED_TAG_WELCOME, "welcome")
-        insertTag(db, SEED_TAG_DUCK, "duck")
-        insertTag(db, SEED_TAG_TODO, "todo")
+        insertTag(connection, SEED_TAG_WELCOME, "welcome")
+        insertTag(connection, SEED_TAG_DUCK, "duck")
+        insertTag(connection, SEED_TAG_TODO, "todo")
 
-        linkTag(db, SEED_NOTE_WELCOME, SEED_TAG_WELCOME)
-        linkTag(db, SEED_NOTE_MARKDOWN, SEED_TAG_DUCK)
-        linkTag(db, SEED_NOTE_TODO, SEED_TAG_TODO)
+        linkTag(connection, SEED_NOTE_WELCOME, SEED_TAG_WELCOME)
+        linkTag(connection, SEED_NOTE_MARKDOWN, SEED_TAG_DUCK)
+        linkTag(connection, SEED_NOTE_TODO, SEED_TAG_TODO)
     }
 
-    private fun insertNote(db: SupportSQLiteDatabase, id: String, title: String, body: String, ts: Long) {
-        db.execSQL(
+    // Bind indices below are 1-based, matching the `?` placeholders left to right.
+    private fun insertNote(connection: SQLiteConnection, id: String, title: String, body: String, ts: Long) {
+        connection.prepare(
             """
             INSERT INTO notes
                 (id, title, body, created_at, modified_at,
@@ -55,20 +60,33 @@ class DuckDatabaseCallback(
                  trashed_at, sync_state, remote_rev)
             VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, NULL, 'SYNCED', NULL)
             """.trimIndent(),
-            arrayOf(id, title, body, ts, ts),
-        )
+        ).use { statement ->
+            statement.bindText(1, id)
+            statement.bindText(2, title)
+            statement.bindText(3, body)
+            statement.bindLong(4, ts)
+            statement.bindLong(5, ts)
+            statement.step()
+        }
     }
 
-    private fun insertTag(db: SupportSQLiteDatabase, id: String, name: String) {
-        db.execSQL(
+    private fun insertTag(connection: SQLiteConnection, id: String, name: String) {
+        connection.prepare(
             "INSERT INTO tags (id, name, parent_id, icon_key, is_pinned, sort_order) " +
                 "VALUES (?, ?, NULL, NULL, 0, 0)",
-            arrayOf(id, name),
-        )
+        ).use { statement ->
+            statement.bindText(1, id)
+            statement.bindText(2, name)
+            statement.step()
+        }
     }
 
-    private fun linkTag(db: SupportSQLiteDatabase, noteId: String, tagId: String) {
-        db.execSQL("INSERT INTO note_tags (note_id, tag_id) VALUES (?, ?)", arrayOf(noteId, tagId))
+    private fun linkTag(connection: SQLiteConnection, noteId: String, tagId: String) {
+        connection.prepare("INSERT INTO note_tags (note_id, tag_id) VALUES (?, ?)").use { statement ->
+            statement.bindText(1, noteId)
+            statement.bindText(2, tagId)
+            statement.step()
+        }
     }
 
     private companion object {

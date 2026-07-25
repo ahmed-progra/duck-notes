@@ -1,7 +1,7 @@
 package app.duck.notes.data.local
 
 import androidx.room.migration.Migration
-import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.SQLiteConnection
 
 /**
  * Migration registry. The DB ships at version 1, so [MIGRATION_1_2] never fires yet — it exists
@@ -10,7 +10,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * migrations; [DuckDatabaseCallback] rebuilds them via `IF NOT EXISTS`.
  */
 val MIGRATION_1_2 = object : Migration(1, 2) {
-    override fun migrate(db: SupportSQLiteDatabase) {
+    override fun migrate(connection: SQLiteConnection) {
         // Stub: no schema change between v1 and v2 yet.
     }
 }

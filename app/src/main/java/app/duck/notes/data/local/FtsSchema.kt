@@ -1,6 +1,7 @@
 package app.duck.notes.data.local
 
-import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.execSQL
 
 /**
  * The FTS5 layer Room can't express itself (it only supports `@Fts3/@Fts4`).
@@ -46,15 +47,15 @@ object FtsSchema {
         """
 
     /** Create the FTS table and its sync triggers if they don't already exist. */
-    fun create(db: SupportSQLiteDatabase) {
-        db.execSQL(CREATE_TABLE.trimIndent())
-        db.execSQL(TRIGGER_INSERT.trimIndent())
-        db.execSQL(TRIGGER_DELETE.trimIndent())
-        db.execSQL(TRIGGER_UPDATE.trimIndent())
+    fun create(connection: SQLiteConnection) {
+        connection.execSQL(CREATE_TABLE.trimIndent())
+        connection.execSQL(TRIGGER_INSERT.trimIndent())
+        connection.execSQL(TRIGGER_DELETE.trimIndent())
+        connection.execSQL(TRIGGER_UPDATE.trimIndent())
     }
 
     /** Re-index every surviving `notes` row into a freshly (re)created FTS table. */
-    fun rebuild(db: SupportSQLiteDatabase) {
-        db.execSQL("INSERT INTO notes_fts(notes_fts) VALUES ('rebuild')")
+    fun rebuild(connection: SQLiteConnection) {
+        connection.execSQL("INSERT INTO notes_fts(notes_fts) VALUES ('rebuild')")
     }
 }
