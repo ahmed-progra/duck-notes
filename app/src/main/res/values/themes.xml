@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Window theme used before Compose takes over. Compose (DuckTheme + enableEdgeToEdge)
+         owns all in-app styling; this only sets the pre-draw window. -->
+    <style name="Theme.Duck" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

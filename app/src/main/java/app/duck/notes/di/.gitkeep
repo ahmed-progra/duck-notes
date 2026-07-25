@@ -1,0 +1,2 @@
+# di/ — Hilt modules. Empty in Phase 1 (no bindings needed yet; the graph resolves from @HiltAndroidApp
+# + @AndroidEntryPoint alone). Modules are added as dependencies appear.
