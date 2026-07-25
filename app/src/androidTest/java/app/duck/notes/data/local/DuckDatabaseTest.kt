@@ -129,24 +129,37 @@ class DuckDatabaseTest {
 
     @Test
     fun perf_at5000Notes() = runBlocking {
+        // A real search matches a small subset, so only every NEEDLE_EVERY-th note carries the rare
+        // token. Searching a token present in every row would time a full-table scan and sort
+        // instead of an index lookup.
         // insertAll is one Room transaction; room-ktx withTransaction can't be used here because
         // it goes through the SupportSQLite path, which a SQLiteDriver replaces.
-        notes.insertAll(List(COUNT) { i -> note("Note $i", "alpha body token$i") })
-        val bulkTagId = tags.observeAll().first().firstOrNull()?.id
-            ?: run {
-                notes.saveNoteWithTags(note("tagged", "alpha"), listOf("bulk"))
-                tags.observeAll().first().single { it.name == "bulk" }.id
-            }
+        notes.insertAll(
+            List(COUNT) { i ->
+                val body = if (i % NEEDLE_EVERY == 0) "needle body token$i" else "filler body token$i"
+                note("Note $i", body)
+            },
+        )
+        notes.saveNoteWithTags(note("tagged", "filler body"), listOf("bulk"))
+        val bulkTagId = tags.observeAll().first().single { it.name == "bulk" }.id
 
-        val ftsMs = measureTimeMillis { notes.search("alpha") }
+        val ftsMs = measureTimeMillis { notes.search("needle") }
         val tagMs = measureTimeMillis { notes.notesByTag(bulkTagId).first() }
 
-        Log.i(TAG, "FTS query over $COUNT notes = $ftsMs ms (target < 50); tag filter = $tagMs ms (target < 30)")
-        assertTrue(notes.search("alpha").isNotEmpty())
+        val matches = notes.search("needle").size
+        Log.i(
+            TAG,
+            "FTS query over $COUNT notes matched $matches rows = $ftsMs ms (target < 50); " +
+                "tag filter = $tagMs ms (target < 30)",
+        )
+        assertEquals("fixture must be selective", COUNT / NEEDLE_EVERY, matches)
     }
 
     private companion object {
         const val COUNT = 5000
+
+        /** Every Nth note carries the searched token, keeping the perf query selective. */
+        const val NEEDLE_EVERY = 1000
         const val TAG = "DuckDatabaseTest"
     }
 }
