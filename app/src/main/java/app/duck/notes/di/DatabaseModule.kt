@@ -7,6 +7,7 @@ import app.duck.notes.data.local.DUCK_MIGRATIONS
 import app.duck.notes.data.local.DuckDatabase
 import app.duck.notes.data.local.DuckDatabaseCallback
 import app.duck.notes.data.local.dao.NoteDao
+import app.duck.notes.data.local.dao.NoteLinkDao
 import app.duck.notes.data.local.dao.TagDao
 import dagger.Module
 import dagger.Provides
@@ -41,4 +42,7 @@ object DatabaseModule {
 
     @Provides
     fun provideTagDao(db: DuckDatabase): TagDao = db.tagDao()
+
+    @Provides
+    fun provideNoteLinkDao(db: DuckDatabase): NoteLinkDao = db.noteLinkDao()
 }

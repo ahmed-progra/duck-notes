@@ -4,6 +4,7 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import app.duck.notes.data.local.dao.NoteDao
+import app.duck.notes.data.local.dao.NoteLinkDao
 import app.duck.notes.data.local.dao.TagDao
 import app.duck.notes.data.local.entity.AttachmentEntity
 import app.duck.notes.data.local.entity.NoteEntity
@@ -31,6 +32,7 @@ import app.duck.notes.data.local.entity.TagEntity
 abstract class DuckDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
     abstract fun tagDao(): TagDao
+    abstract fun noteLinkDao(): NoteLinkDao
 
     companion object {
         const val NAME = "duck.db"
