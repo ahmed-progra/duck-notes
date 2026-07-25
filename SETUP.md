@@ -136,6 +136,34 @@ adb shell am instrument -w -r -e class app.duck.notes.markdown.OutputTransformat
 
 Android Studio's own test runner also reports correctly — use it for interactive runs.
 
+### Screenshots — use `exec-out`, never `shell` with `>`
+
+Capturing a screenshot the obvious way produces a **corrupt file, silently**:
+
+```
+# WRONG — especially from PowerShell. Produces unopenable garbage, exit code 0.
+adb shell screencap -p > shot.png
+```
+
+PowerShell's `>` re-encodes the stream as UTF-16LE, which destroys binary data. The file is written,
+the command succeeds, and nothing warns you. A corrupt capture starts with `ff fe` (a UTF-16LE BOM);
+a valid PNG starts with `89 50 4e 47 0d 0a 1a 0a`.
+
+```
+# RIGHT — from bash (Git Bash), binary-safe:
+adb exec-out screencap -p > shot.png
+
+# Verify before trusting it:
+file shot.png                      # must say "PNG image data"
+head -c 8 shot.png | od -An -tx1   # must be 89 50 4e 47 0d 0a 1a 0a
+```
+
+This bit us in Phase 4: three capture files in the repo root were UTF-16-mangled and unopenable, so
+any visual verification based on them was not actually looking at anything. **Check the magic bytes
+before reporting on a screenshot.** The same trap applies to `adb pull` of binaries, `bugreport`, and
+anything else streaming bytes through a redirect — it will produce silent garbage again during
+Phase 8's editor work and Phase 16's screenshot testing.
+
 ### Emulator instability — class-level instrumented runs dying
 
 **Symptom, precisely:** a *class-level* instrumented run dies partway through or reports
