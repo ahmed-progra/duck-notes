@@ -28,13 +28,29 @@ requires. Keep it.
   `sourceCompatibility`/`targetCompatibility = VERSION_21`, matching the JDK 21 on this machine.
   - Android Studio: its embedded JDK (21+) satisfies this — nothing to do.
   - Command line / fully offline: JDK 21 must already be installed and auto-detectable by Gradle.
-- **Network:** the following hosts must be reachable. On this machine they are blocked (an Avast SSL
-  filter is present) — whitelist them in Avast Web Shield **and** the firewall, or build on a network
-  that allows them:
+- **Network:** the following hosts must be reachable:
   - `dl.google.com` (Android SDK + Google Maven)
   - `repo1.maven.org` / `repo.maven.apache.org` (Maven Central)
   - `services.gradle.org` (Gradle distribution)
   - `github.com` / `objects.githubusercontent.com`
+
+- **TLS interception (this machine).** The Avast Web/Mail Shield intercepts TLS and presents its own
+  root CA. Windows trusts that CA; the Temurin JDK ships its own `cacerts` and does not — so without
+  a fix Gradle cannot resolve a single dependency and fails with
+  `PKIX path building failed … unable to find valid certification path`.
+
+  **Fix (already applied):** `C:\Users\zconsumers\.gradle\gradle.properties` contains
+  ```
+  org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8 -Djavax.net.ssl.trustStoreType=Windows-ROOT
+  ```
+  This points the build JVM at the Windows certificate store, so it trusts exactly what Windows
+  already trusts — no new trust, no admin rights, and it survives JDK updates.
+
+  It lives in the **user-level** Gradle home, deliberately **not** in the repo: `Windows-ROOT` is a
+  Windows-only trust store type and would break the build on any other platform. `GRADLE_USER_HOME`
+  wins over the project file for `org.gradle.jvmargs`, so the repo's value is overridden, not edited.
+
+  Do **not** "fix" this by importing the CA into the JDK's `cacerts` or by disabling the shield.
 
 ---
 
@@ -94,6 +110,34 @@ This mints `gradlew`, `gradlew.bat`, and `gradle/wrapper/gradle-wrapper.jar`.
 adb shell am start -n app.duck.notes/app.duck.notes.presentation.MainActivity
 ```
 
+### Instrumented tests — do not use `connectedAndroidTest`
+
+`./gradlew connectedAndroidTest` **reports failure even when every test passes** on this machine.
+AGP runs instrumented tests through Unified Test Platform, which streams results back to Gradle over
+gRPC/TLS; the Avast shield intercepts that channel too, so UTP logs
+`recordTestResultEvent failed … UNAVAILABLE: io exception` and Gradle reports
+`Failed to receive the UTP test results`. The result proto says `test_status: PASSED` while the build
+says `BUILD FAILED`. UTP runs in its own JVM, so the trust-store setting above does not reach it, and
+AGP 8 has no non-UTP path to fall back to.
+
+Use either of these instead — both report correctly:
+
+```
+# CLI: build the APKs once, then drive the runner directly
+gradle assembleDebug assembleDebugAndroidTest
+adb install -r -t app/build/outputs/apk/debug/app-debug.apk
+adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb shell am instrument -w -r app.duck.notes.test/androidx.test.runner.AndroidJUnitRunner
+
+# ...or one class:
+adb shell am instrument -w -r -e class app.duck.notes.markdown.OutputTransformationCaretSpikeTest \
+  app.duck.notes.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+Android Studio's own test runner also reports correctly — use it for interactive runs.
+
+Unit tests are unaffected: `gradle testDebugUnitTest` works normally.
+
 To create an emulator via command line:
 ```
 sdkmanager --install "system-images;android-35;google_apis;x86_64"
@@ -119,4 +163,9 @@ package boundaries and the Hilt app scaffold created here already exist.
 ## Pinned versions (from `gradle/libs.versions.toml`)
 
 AGP 8.13.2 · Gradle 8.13 · Kotlin 2.0.21 · KSP 2.0.21-1.0.28 · Hilt 2.52 ·
-Compose BOM 2024.09.03 · compileSdk 35 · targetSdk 35 · minSdk 26 · JVM target 21.
+Compose BOM 2025.10.01 (foundation/ui 1.9.4, material3 1.4.0) · commonmark 0.29.0 ·
+compileSdk 35 · targetSdk 35 · minSdk 26 · JVM target 21.
+
+The Compose BOM was raised in Phase 4: `TextFieldBuffer.addStyle` — the styled `OutputTransformation`
+the markdown editor is built on — first ships in Compose Foundation 1.9.0. Newer BOMs (2026.x,
+foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.

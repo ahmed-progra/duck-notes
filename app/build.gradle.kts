@@ -42,6 +42,10 @@ android {
 
 kotlin {
     jvmToolchain(21)
+    compilerOptions {
+        // TextFieldBuffer.addStyle — the styled OutputTransformation the editor is built on.
+        freeCompilerArgs.add("-opt-in=androidx.compose.foundation.ExperimentalFoundationApi")
+    }
 }
 
 ksp {
@@ -55,6 +59,7 @@ dependencies {
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
+    implementation(libs.androidx.foundation)
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
@@ -70,6 +75,15 @@ dependencies {
     // androidTestImplementation extends implementation, so the test source set gets this too.
     implementation(libs.androidx.sqlite.bundled)
 
+    // Cold path only — export and AST queries. The editor's per-keystroke path never calls these.
+    implementation(libs.commonmark)
+    implementation(libs.commonmark.ext.gfm.tables)
+    implementation(libs.commonmark.ext.gfm.strikethrough)
+    implementation(libs.commonmark.ext.task.list.items)
+    implementation(libs.commonmark.ext.autolink)
+    implementation(libs.commonmark.ext.footnotes)
+    implementation(libs.commonmark.ext.yaml.front.matter)
+
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
 
@@ -82,4 +96,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.room.testing)
     androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.test.manifest)
 }
