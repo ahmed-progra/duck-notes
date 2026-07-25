@@ -247,7 +247,39 @@ tag tree (nested, collapsible)
 - Info panel (bottom sheet / side pane): word count, char count, created, modified, table of contents from headings, backlinks list, unlinked mentions (title appears as plain text elsewhere).
 - ToC tap scrolls to heading.
 
+**Known defect carried from Phase 4 — fix before writing `note_links` rows**
+
+`[[WikiLink]]` has two implementations that disagree, which is the exact failure `TagScanner` was
+extracted to prevent — in the other syntax.
+
+- `ResolveWikiLinks` is a bare `Regex("\\[\\[([^\\[\\]]+)]]")` over the whole body. **No code
+  masking, no fence tracking.** It resolves `` `[[X]]` `` and a fenced `[[X]]` as real links.
+- `MarkdownScanner` correctly refuses both: a fenced line yields only a `FENCE_BODY` token and never
+  reaches inline scanning, and `scanInline` skips offsets masked by `TagScanner.codeSpanMask`.
+
+So a link written inside a code sample will be painted as plain text but still written to
+`note_links`, producing a backlink the user cannot see or click.
+
+**This is currently failing by omission, not by test.** `TagAgreementTest.
+theEditorPaintsTheWikiLinksResolveWikiLinksFinds` passes only because no `MarkdownCorpus` sample
+contains a `[[...]]` inside a code span or fence. Adding one is the first step — it should go red.
+
+**Fix:** extract a `WikiLinkScanner` beside `TagScanner` in `domain/markdown/`, owning the bracket
+rule and reusing `codeSpanMask` plus the fence carry. `ResolveWikiLinks` becomes a thin view over it,
+exactly as `ParseTags` is over `TagScanner`, and `MarkdownScanner` calls it instead of reimplementing
+the rule. One implementation, three views. Do this **before** `note_links` rows are written, or the
+bad rows outlive the fix.
+
+**Also from Phase 4 — the CommonMark side.** `[[WikiLink]]` is deliberately absent from
+`DuckSyntaxExtension`. A `customInlineContentParserFactory` triggered on `[` never fires: `[` is
+CommonMark's own bracket machinery and is resolved before custom inline parsers run. Changing what
+brackets mean requires `Parser.Builder.linkProcessor(...)` with the beta
+`LinkProcessor`/`LinkInfo`/`LinkResult` API. That was left undone because nothing read the resulting
+AST node yet — Phase 9 is the first consumer, so build it here and have it delegate to
+`WikiLinkScanner` too.
+
 **Success:** Backlinks correct after rename. Unlinked-mention query under 100ms at 5000 notes.
+A `[[link]]` inside a code fence produces no `note_links` row.
 
 ---
 
