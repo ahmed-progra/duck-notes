@@ -12,3 +12,5 @@ app/build/
 local.properties
 *.apk
 *.aab
+.claude/
+graphify-out/
