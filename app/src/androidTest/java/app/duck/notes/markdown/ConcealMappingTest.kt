@@ -11,6 +11,10 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextRange
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.core.markdown.MarkdownOutputTransformation
+import app.duck.notes.core.markdown.MarkdownStyles
+import app.duck.notes.core.theme.DuckThemeSpec
+import app.duck.notes.core.theme.duckType
+import app.duck.notes.domain.markdown.MarkdownTextCache
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -39,7 +43,11 @@ class ConcealMappingTest {
         rule.setContent {
             BasicTextField(
                 state = state,
-                outputTransformation = MarkdownOutputTransformation(),
+                // Any palette will do — these tests assert on raw offsets, never on colour.
+                outputTransformation = MarkdownOutputTransformation(
+                    MarkdownTextCache(),
+                    MarkdownStyles(DuckThemeSpec.DuckRed.colors(isDark = false), duckType()),
+                ),
                 modifier = Modifier.testTag(TAG),
             )
         }

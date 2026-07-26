@@ -2,7 +2,16 @@ package app.duck.notes.core.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Duck brand tokens (see GLOBAL CONTRACT). Full palette + named themes land in Phase 5.
+/**
+ * The GLOBAL CONTRACT's brand tokens, verbatim.
+ *
+ * This file and [DuckPalettes] are the only places a colour literal may be written — `TokenSourceTest`
+ * fails the build on any other. Everything else in the app reads a [DuckColors] slot.
+ *
+ * These keep the contract's own names. The *slots* built from them carry role names instead
+ * (`DuckTextMuted` becomes `DuckColors.chromeMuted`), so that a slot rename can never be mistaken for
+ * a change to the brand.
+ */
 val DuckAccent = Color(0xFFD7494C)
 val DuckAccentPress = Color(0xFFB93C3F)
 val DuckSurface = Color(0xFFFFFFFF)

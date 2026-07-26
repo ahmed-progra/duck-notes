@@ -7,19 +7,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.duck.notes.core.markdown.MarkdownOutputTransformation
-import app.duck.notes.core.theme.DuckAccent
+import app.duck.notes.core.markdown.MarkdownStyles
 import app.duck.notes.core.theme.DuckTheme
+import app.duck.notes.domain.markdown.MarkdownTextCache
 
 /**
  * Phase 4's prototype editor — the markdown engine, on screen, and nothing else.
@@ -31,9 +29,21 @@ import app.duck.notes.core.theme.DuckTheme
 @Composable
 fun MarkdownEditorScreen(modifier: Modifier = Modifier) {
     val state = rememberTextFieldState(SAMPLE_NOTE)
-    // Remembered so the scan cache inside it survives recomposition — a fresh transformation each
-    // frame would throw away the incremental scan and re-parse the whole note on every keystroke.
-    val transformation = remember { MarkdownOutputTransformation() }
+
+    // Three remembers with three different lifetimes, and the split is the point.
+    //
+    // The cache is unkeyed, so the incremental scan survives everything — a fresh one per frame
+    // would re-parse the whole note on every keystroke. The styles are a thin lookup table, rebuilt
+    // only when the theme moves. The transformation is keyed on the styles, so a theme change
+    // produces a new instance while the cache it was handed carries straight over.
+    //
+    // That a new instance is enough to repaint with no keystroke is not assumed: a theme switch is
+    // not a buffer change, and ThemeRepaintTest is what settled it.
+    val cache = remember { MarkdownTextCache() }
+    val colors = DuckTheme.colors
+    val type = DuckTheme.type
+    val styles = remember(colors, type) { MarkdownStyles(colors, type) }
+    val transformation = remember(styles) { MarkdownOutputTransformation(cache, styles) }
 
     Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
         Column(
@@ -47,12 +57,11 @@ fun MarkdownEditorScreen(modifier: Modifier = Modifier) {
                 state = state,
                 modifier = Modifier.fillMaxSize(),
                 outputTransformation = transformation,
-                textStyle = TextStyle(
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 16.sp,
-                    lineHeight = 24.sp,
-                ),
-                cursorBrush = SolidColor(DuckAccent),
+                // noteBody carries the serif reading font and the size the engine's `em` heading
+                // multiples resolve against.
+                textStyle = type.noteBody.copy(color = colors.onSurface),
+                // accent, not accentText: a caret is a fill, not a glyph.
+                cursorBrush = SolidColor(colors.accent),
             )
         }
     }

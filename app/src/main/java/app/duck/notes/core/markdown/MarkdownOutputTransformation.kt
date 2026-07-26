@@ -15,9 +15,15 @@ import app.duck.notes.domain.markdown.SpanPlanner
  * Compose derives the offset mapping between raw and rendered text from the deletions made here.
  * That is the whole reason this API was chosen over `VisualTransformation`, and
  * `ConcealMappingTest` verifies it end to end by editing through a concealed region.
+ *
+ * [cache] is passed in rather than owned so that a theme change — which produces a new [styles] and
+ * therefore a new instance of this class — does not throw away the incremental scan. The caller
+ * remembers the cache unkeyed and this keyed on the styles; `ThemeRepaintTest` is what established
+ * that a new instance is sufficient to force a repaint with no keystroke.
  */
 class MarkdownOutputTransformation(
-    private val cache: MarkdownTextCache = MarkdownTextCache(),
+    private val cache: MarkdownTextCache,
+    private val styles: MarkdownStyles,
 ) : OutputTransformation {
 
     override fun TextFieldBuffer.transformOutput() {
@@ -36,7 +42,7 @@ class MarkdownOutputTransformation(
         // style added before an edit survives it, so we never find out: by the time these are
         // applied the buffer is already in its final shape.
         SpanPlanner.renderedStyles(plan).forEach {
-            addStyle(MarkdownStyles.spanStyle(it.style, it.level), it.start, it.end)
+            addStyle(styles.spanStyle(it.style, it.level), it.start, it.end)
         }
     }
 }

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-only additions. Merged into the debug variant's manifest and never into release.
+
+    DuckGalleryActivity is exported so `adb shell am start` can reach it, and carries no LAUNCHER
+    intent filter on purpose — a second home-screen icon for a harness would be worse than typing the
+    command.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name=".gallery.DuckGalleryActivity"
+            android:exported="true"
+            android:label="Duck Gallery"
+            android:theme="@style/Theme.Duck" />
+    </application>
+
+</manifest>

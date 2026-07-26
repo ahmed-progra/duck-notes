@@ -163,7 +163,12 @@ notes_fts USING fts5(title, body, content='notes', content_rowid=...)
 **Goal:** Duck visual language. One source of truth.
 
 **Build**
-- `DuckTheme`: light, dark, plus 4 named themes (Duck Red default, Graphite, Solarized, Dieci).
+- `DuckTheme`: light, dark, plus 4 named themes (Duck Red default, Graphite, Sepia, Midnight).
+  *Was "Solarized, Dieci". Renamed in Phase 5a: Solarized's published values do not clear WCAG AA for
+  body text, and a Solarized retuned until they do is not Solarized. Dieci's would have been invented
+  outright. Both slots are now palettes we authored, named for what they are — Sepia keeps the warm
+  cream / cold slate character, Midnight the dark blue-grey. Renaming avoids a per-theme AA exemption,
+  which would have made the contrast criterion mean less than it appears to.*
 - Typography: serif reading font + mono for code. User-swappable font family later.
 - Spacing scale 4/8/12/16/24/32. Corner radius 8/12/16.
 - Components: `DuckTagChip`, `DuckCheckbox`, `DuckDivider`, `DuckSearchField`, `DuckIconButton`, `DuckEmptyState` (duck illustration), `DuckBottomSheet`.
@@ -172,6 +177,78 @@ notes_fts USING fts5(title, body, content='notes', content_rowid=...)
 **Success:** Theme switch with no recomposition jank. Contrast passes WCAG AA on both modes.
 
 **Do not:** Hardcode a color anywhere outside the theme file.
+
+*Split into **5a** (token layer — shipped) and **5b** (icons + components — below), so the riskiest
+change, threading the theme through the markdown engine, landed in a commit by itself. 4a/4b precedent.*
+
+---
+
+## PHASE 5b — DuckIcons + COMPONENTS
+
+**Goal:** The components, on top of 5a's finished token contract.
+
+**Build**
+- `DuckIcons`: tag icon set. Curated keyword table, resolver set-size-independent. **8 drawables to
+  start**, growing toward ~60 without logic change. Rename `DuckCons` → `DuckIcons` at lines 170 and
+  214 in this file, in the 5b commit.
+- Components: `DuckTagChip`, `DuckCheckbox`, `DuckDivider`, `DuckIconButton`, `DuckEmptyState`.
+  Deferred to their consumers: `DuckSearchField` (Phase 10 owns debounce, operators, `snippet()`
+  highlighting), `DuckBottomSheet` (Phase 9 owns the info-panel contents that drive sheet behaviour).
+- Duck mascot for empty states — an acknowledged placeholder, same terms as the launcher icon.
+
+### Blocking prerequisite — the label-on-fill floor is missing
+
+**Do this before building any component.** 5a's Duck floor table asserts `accent on surface` at
+**3:1** — a fill on a page. It never assigns the **4.5** floor to that same pair used as *a label on
+that fill*. Contrast is symmetric, so the number is already computed; it is filed under the wrong
+rule. This is a missing **floor assignment**, not a missing measurement.
+
+`DuckGalleryScreen`'s `Pill` in `src/debug` does exactly the unasserted thing — `background =
+colors.accent`, `color = colors.surface`, `uiLabel`. Harmless there, but `DuckTagChip` is specced as
+accent fill + label. If it copies the gallery, the defect Blocker 1 took three rounds to remove ships
+into `src/main`, and **neither test can see it**: `ContrastTest` does not know component pairs, and
+`TokenSourceTest` does not scan `src/debug`.
+
+Measured, so 5b starts from data:
+
+| palette | `surface` on `accent` | `surface` on `accentPress` | `accentText` on `tagSurface` |
+|---|---|---|---|
+| DuckRedLight | **4.25 FAIL** | 5.55 | 4.53 |
+| DuckRedDark | **4.01 FAIL** | **3.06 FAIL** | 5.46 |
+| GraphiteLight | 6.15 | 8.66 | 6.59 |
+| GraphiteDark | 5.63 | **3.87 FAIL** | 6.31 |
+| SepiaLight | **3.35 FAIL** | 4.77 | 4.55 |
+| SepiaDark | 5.46 | **3.71 FAIL** | 6.05 |
+| MidnightLight | 5.19 | 7.36 | 6.03 |
+| MidnightDark | 5.20 | **3.55 FAIL** | 6.28 |
+| **failures at 4.5** | **3 of 8** | **4 of 8** | **0 of 8** |
+
+**`accentPress` is not the escape hatch.** It clears 4.5 in DuckRedLight (5.55), which is what makes it
+look like one, but it is *worse overall* — **4 of 8** fail against accent's 3 of 8. In dark mode
+`accentPress` is darker than `accent`, so the dark `surface` label collapses onto it. Swapping the chip
+fill to `accentPress` trades three failures for four.
+
+**The safe pattern already exists and is already asserted.** `accentText` on `tagSurface` passes
+**8 of 8**, and it is exactly what `MarkdownStyles` already paints for an inline `#tag`
+(`StyleKey.TAG → color = accentText, background = tagSurface`). The editor has been right all along;
+the gallery `Pill` invented a pattern nothing checks. Making the chip match the editor is the right
+answer for product consistency as much as for contrast.
+
+**So, in order:**
+1. `DuckTagChip` uses tint + `accentText`, matching `StyleKey.TAG`.
+2. Fix the gallery `Pill` in the same change, so the reference implementation stops being the bad one.
+3. Add `surface on accent` at 4.5 to the Duck floor table **only if** some component genuinely needs a
+   solid accent fill under a text label, and re-tune the three failing palettes — a palette input,
+   same class as 5a's `proseMuted`/`codeSurface` coupling. Worked, not discovered.
+4. **Tune `DuckRedLight.tagSurface`/`accentText` first.** That pair is 4.53 — a 0.03 margin.
+   Numerically fine, but it is about to become load-bearing for every chip, and 0.03 leaves no design
+   room if 5b wants `tagSurface` lighter for a border or hover state.
+5. The checkbox tick is a **meaningful graphic under WCAG 1.4.11 — 3:1, not 4.5.** All eight palettes
+   already clear 3:1 on `surface`/`accent`, so the tick is fine as an accent fill. Do not over-tune it
+   into a floor it does not owe.
+
+**Success:** Every component pair asserted at its correct floor. Icon resolver total — unmatched tag
+falls back to the generic glyph, `#a/b/c` resolves leaf-first with walk-up.
 
 ---
 

@@ -1,52 +1,74 @@
 package app.duck.notes.core.markdown
 
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.em
-import app.duck.notes.core.theme.DuckAccent
-import app.duck.notes.core.theme.DuckDivider
-import app.duck.notes.core.theme.DuckTextMuted
+import app.duck.notes.core.theme.DuckColors
+import app.duck.notes.core.theme.DuckType
 import app.duck.notes.domain.markdown.StyleKey
 
 /**
  * The only place a [StyleKey] becomes a real colour or weight.
  *
- * Sizes are relative (`em`), not absolute, so the editor inherits whatever body size the user picks
- * in Phase 14 rather than pinning headings to a fixed sp. Colours come from the brand tokens; no
- * literal is written here.
+ * Holds no colour of its own — it is a view over [DuckColors] and [DuckType], rebuilt when the theme
+ * changes and never otherwise. Phase 4 made this an `object` reading top-level `val`s, which pinned
+ * the editor to Duck Red under every theme; three of its private tints were also wrong in ways only
+ * a contrast test would find:
  *
- * Tag chips are a flat background rectangle for now — `SpanStyle.background` cannot round its
- * corners, and Bear's pill needs custom drawing. That lands with the design system in Phase 5.
+ * - `CodeTint = Color(0x14000000)` was an 8% **black** overlay. On `#1C1C1E` it composites to
+ *   `#1A1A1C` — **1.03:1** — so dark-mode code blocks had no visible background at all.
+ * - `TagTint` and `HighlightTint` were `DuckAccent.copy(alpha = …)` evaluated at class-init, so they
+ *   stayed red under Graphite, Sepia and Midnight.
+ *
+ * All three are now opaque, pre-composited palette slots, which is what makes them measurable.
+ *
+ * Sizes stay relative (`em`), not absolute, so headings scale with whatever body size the user picks
+ * in Phase 14 rather than being pinned to `sp` here.
+ *
+ * Tag chips remain a flat background rectangle in the editor: `SpanStyle.background` cannot round its
+ * corners, and a real pill inside `BasicTextField` needs custom drawing that `OutputTransformation`
+ * cannot express. `DuckTagChip` — the sidebar and filter-row chip — is Phase 5b; the **in-editor**
+ * pill is Phase 8, where the editor gains a draw layer.
  */
-object MarkdownStyles {
+class MarkdownStyles(
+    private val colors: DuckColors,
+    private val type: DuckType,
+) {
 
     fun spanStyle(key: StyleKey, level: Int): SpanStyle = when (key) {
         StyleKey.HEADING -> SpanStyle(fontWeight = FontWeight.Bold, fontSize = headingSize(level))
-        StyleKey.QUOTE -> SpanStyle(color = DuckTextMuted, fontStyle = FontStyle.Italic)
+        StyleKey.QUOTE -> SpanStyle(color = colors.proseMuted, fontStyle = FontStyle.Italic)
         StyleKey.BULLET, StyleKey.ORDERED -> SpanStyle()
         StyleKey.TASK_OPEN -> SpanStyle()
-        StyleKey.TASK_DONE -> SpanStyle(color = DuckTextMuted, textDecoration = TextDecoration.LineThrough)
-        StyleKey.DIVIDER -> SpanStyle(color = DuckDivider)
+        StyleKey.TASK_DONE ->
+            SpanStyle(color = colors.proseMuted, textDecoration = TextDecoration.LineThrough)
+        StyleKey.DIVIDER -> SpanStyle(color = colors.divider)
         StyleKey.CODE_BLOCK, StyleKey.CODE_SPAN ->
-            SpanStyle(fontFamily = FontFamily.Monospace, background = CodeTint)
+            SpanStyle(
+                color = colors.codeOnSurface,
+                fontFamily = type.mono,
+                background = colors.codeSurface,
+            )
         StyleKey.BOLD -> SpanStyle(fontWeight = FontWeight.Bold)
         StyleKey.ITALIC -> SpanStyle(fontStyle = FontStyle.Italic)
         StyleKey.STRIKE -> SpanStyle(textDecoration = TextDecoration.LineThrough)
-        StyleKey.HIGHLIGHT -> SpanStyle(background = HighlightTint)
+        StyleKey.HIGHLIGHT -> SpanStyle(background = colors.highlight)
+        // accentText, not accent: links are prose, and the brand red is 4.25:1 on white.
         StyleKey.LINK, StyleKey.WIKI_LINK ->
-            SpanStyle(color = DuckAccent, textDecoration = TextDecoration.Underline)
-        StyleKey.IMAGE -> SpanStyle(color = DuckTextMuted, fontFamily = FontFamily.Monospace)
-        StyleKey.TAG -> SpanStyle(color = DuckAccent, background = TagTint)
+            SpanStyle(color = colors.accentText, textDecoration = TextDecoration.Underline)
+        StyleKey.IMAGE -> SpanStyle(color = colors.proseMuted, fontFamily = type.mono)
+        StyleKey.TAG -> SpanStyle(color = colors.accentText, background = colors.tagSurface)
         // Revealed syntax is de-emphasised so the prose still reads as the content. Note this does
         // NOT avoid reflow: revealing re-inserts the marker characters, so the line rewraps as the
         // caret enters a node. Avoiding that would mean rendering markers at zero width rather than
         // deleting them, which OutputTransformation cannot express.
-        StyleKey.MARKER -> SpanStyle(color = DuckTextMuted, fontWeight = FontWeight.Normal)
+        //
+        // proseMuted, not chromeMuted: a revealed backtick sits on codeSurface, which is why
+        // proseMuted is tuned against codeSurface rather than against the page.
+        StyleKey.MARKER -> SpanStyle(color = colors.proseMuted, fontWeight = FontWeight.Normal)
     }
 
     private fun headingSize(level: Int): TextUnit = when (level) {
@@ -55,8 +77,4 @@ object MarkdownStyles {
         3 -> 1.2.em
         else -> 1.1.em
     }
-
-    private val TagTint = DuckAccent.copy(alpha = 0.12f)
-    private val HighlightTint = DuckAccent.copy(alpha = 0.22f)
-    private val CodeTint = Color(0x14000000)
 }
