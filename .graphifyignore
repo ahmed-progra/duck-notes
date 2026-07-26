@@ -1,0 +1,27 @@
+# Gradle build output. Already in .gitignore, but graphify walks it anyway and drags the
+# packaged launcher PNGs from app/build/intermediates into semantic extraction, where they cost
+# an LLM call each and contribute nothing.
+app/build/
+build/
+**/build/**
+.gradle/
+.kotlin/
+
+# Directory patterns above do not reliably exclude the packaged launcher icons, so exclude the
+# raster assets by extension too. Duck's real launcher and mascot art is vector XML.
+*.png
+**/*.png
+
+# Agent + IDE config, not project code.
+.claude/
+.idea/
+
+# Room's generated schema snapshot — committed, but it is a data dump, not source.
+app/schemas/
+
+# Markdown is excluded ONLY because semantic extraction needs a reachable model API and this
+# machine's backend connection fails ("all semantic chunks failed for backend 'claude'"), which
+# aborts the whole build before graph.json is written. Kotlin is unaffected: tree-sitter AST
+# extraction is 100% local. Delete these three lines on a machine with a working backend to pull
+# CLAUDE.md, DUCK_NOTES_BUILD_PROMPT.md and SETUP.md into the graph.
+*.md
