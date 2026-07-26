@@ -255,6 +255,49 @@ falls back to the generic glyph, `#a/b/c` resolves leaf-first with walk-up.
 
 ---
 
+## PHASE 5 — CLOSED
+
+Token layer, icons and components shipped across `bb2ec56` (5a) and `e4fcbfd` (5b), with four
+follow-up corrections. 205 unit tests, 21 instrumented, release APK proven free of the debug gallery.
+**No open visual items.**
+
+**Criterion 6 is met.** All eight glyphs were named correctly **blind** on device at high confidence —
+checkmark, briefcase, house, lightbulb, book, brackets, people, tag. No drawable needs cutting. They
+remain acknowledged placeholders in craft terms, but legibility at 20dp is verified, not assumed.
+
+### What is deferred, and on what ground
+
+**Disabled + checked on `DuckCheckbox`** fails the 1.2 distinguishability rule in 4 of 8 palettes. The
+fix is measured and sits in the Phase 6 prerequisite above. The tier table there is a real trade —
+**tier 1 buys correctness with a hand-tuned hex, tier 2 buys it with a permanent slot and no new hexes
+at all** — but the tiers are not why it is deferred. **Tier 0 stands on there being no caller, and it
+would stand at any price.** Do not re-open this as a cost question.
+
+### Two limits on the device check — read these before trusting a screenshot
+
+1. **It was run under DuckRed light, which is a *passing* palette for disabled-checked** (1.3020). The
+   run therefore neither confirms nor refutes the deferred `SepiaLight` case at 1.0024. **The first
+   person to look at SepiaLight should expect to see the defect**, and should not treat it as a
+   regression introduced since.
+2. **The disabled checkbox was distinguished by *hue*, not luminance.** That is exactly what the 1.2
+   rule declines to measure, and the omission is deliberate: hue is what a greyscale display, a
+   monochrome screenshot, and an achromatopsic user all lose. A control that separates only by hue
+   reads as fine to most sighted reviewers and vanishes for the people the rule exists to protect.
+   **Do not let "looks fine to me" on a screenshot override a measured 1.00.** The measurement is not a
+   proxy for the look; it is the part of the look that the reviewer cannot see.
+
+### The harness gap this closed
+
+The gallery rendered three checkbox states and omitted **disabled-unchecked** — the exact state
+`ce559b4` fixed. A disabled control is judged against the **enabled** one, not against the page, so a
+single instance can never show whether the two differ: the defect was invisible in the harness before
+the fix and would have stayed invisible after it. Both empty boxes are now adjacent and labelled.
+
+Generalised: **a harness that shows one of a pair cannot verify a pair.** Same shape as the
+distinguishability list itself — every entry that existed passed, and the missing one was missing.
+
+---
+
 ## PHASE 6 — NAVIGATION SHELL
 
 **Goal:** Three-pane on tablet, stacked on phone. Matches the reference layout.

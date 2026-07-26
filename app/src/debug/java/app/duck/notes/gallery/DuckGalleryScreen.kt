@@ -161,16 +161,28 @@ private fun TokenSheet() {
             }
         }
         item {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(spacing.sm),
-            ) {
-                var checked by remember { mutableStateOf(true) }
-                DuckCheckbox(checked = checked, onCheckedChange = { checked = it })
-                DuckCheckbox(checked = false, onCheckedChange = {})
-                DuckCheckbox(checked = true, onCheckedChange = {}, enabled = false)
-                DuckIconButton(DuckIcon.Idea, "idea", onClick = {})
-                DuckIconButton(DuckIcon.Code, "code", onClick = {}, enabled = false)
+            Column(verticalArrangement = Arrangement.spacedBy(spacing.xs)) {
+                // Unchecked first, and both boxes adjacent, because that is the pair ce559b4 fixed:
+                // disabledUncheckedColor was the same token as uncheckedColor, so a disabled box
+                // rendered pixel-identically to a live one. The harness showed only one empty box, so
+                // the defect was invisible here and stayed invisible after the fix. ContrastTest
+                // asserts the repair at 2.60, but a number is not a look.
+                StatePair("unchecked", checked = false)
+                StatePair("checked", checked = true)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(spacing.sm),
+                ) {
+                    var checked by remember { mutableStateOf(true) }
+                    DuckCheckbox(checked = checked, onCheckedChange = { checked = it })
+                    DuckIconButton(DuckIcon.Idea, "idea", onClick = {})
+                    DuckIconButton(DuckIcon.Code, "code", onClick = {}, enabled = false)
+                    Text(
+                        "tappable · icon enabled, disabled",
+                        style = type.uiLabel,
+                        color = colors.proseMuted,
+                    )
+                }
             }
         }
         item { DuckDivider() }
@@ -227,6 +239,29 @@ private fun SectionHeader(text: String) {
         color = DuckTheme.colors.onSurface,
         modifier = Modifier.padding(top = DuckTheme.spacing.lg, bottom = DuckTheme.spacing.xs),
     )
+}
+
+/**
+ * One checkbox state, enabled and disabled, adjacent.
+ *
+ * Adjacency is the whole point: a disabled control is checked against the *enabled* one, not against
+ * the page, so a single instance can never show whether the states differ. That is the harness gap
+ * that let the disabled-unchecked defect ship.
+ */
+@Composable
+private fun StatePair(label: String, checked: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(DuckTheme.spacing.sm),
+    ) {
+        DuckCheckbox(checked = checked, onCheckedChange = {})
+        DuckCheckbox(checked = checked, onCheckedChange = {}, enabled = false)
+        Text(
+            text = "$label · enabled, disabled",
+            style = DuckTheme.type.uiLabel,
+            color = DuckTheme.colors.proseMuted,
+        )
+    }
 }
 
 @Composable
