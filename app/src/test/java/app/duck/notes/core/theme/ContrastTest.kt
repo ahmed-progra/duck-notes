@@ -105,6 +105,16 @@ class ContrastTest {
     /**
      * element, enabled colour, disabled colour. See
      * [everyDisabledStateIsDistinguishableFromEnabled] — this axis is foreground-vs-foreground.
+     *
+     * **Adding `enabled` to a component means adding a row here for every element it paints, in the
+     * same change** — the enumeration duty [duckPairs] already carries. `DuckTagChip` will owe four
+     * (label, leading icon, border, selected fill), not one representative row. Move
+     * [theDistinguishabilityListIsNotSilentlyEmpty]'s pinned count with it.
+     *
+     * The pin stops silent deletion; nothing stops silent non-addition. That is exactly how the
+     * disabled-unchecked checkbox reached `src/main` — every pair that existed passed, and the missing
+     * one was missing. This list is hand-picked, so it is only ever as complete as the last person made
+     * it.
      */
     private val distinguishability: List<Triple<String, String, String>> = listOf(
         Triple("icon button glyph", "onSurface", "chromeMuted"),
@@ -409,8 +419,10 @@ class ContrastTest {
      * | light ×3 | already correct: `chromeMuted` is *lighter* than `accent` and recedes |
      * | SepiaLight | window empty by 0.0241; needs an `onAccent` tick, feasible on existing values |
      *
-     * One new slot fixes seven palettes, two fix all eight. Deferred until something disables a checked
-     * box — see the Phase 6 prerequisite in `DUCK_NOTES_BUILD_PROMPT.md`.
+     * One new slot fixes seven palettes, two fix all eight — and all sixteen two-slot assignments alias
+     * slots that already exist, so the fix needs **zero new hexes**. Deferred because nothing disables a
+     * checked box, **not because it is expensive**; see the Phase 6 prerequisite in
+     * `DUCK_NOTES_BUILD_PROMPT.md`.
      *
      * **The lesson is worth more than the checkbox.** The first search called this structurally
      * impossible, because it minimised each constraint across all eight palettes at once. "Recedes"

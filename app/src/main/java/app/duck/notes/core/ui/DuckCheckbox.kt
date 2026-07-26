@@ -37,11 +37,12 @@ import app.duck.notes.core.theme.DuckTheme
  *   A dedicated `onAccent` tick closes it on existing values — `onSurface` is 3.61 on `accent`, with
  *   `divider` as the lighter fill at 2.67.
  *
- * So the fix costs one new slot for seven palettes, or two for all eight. It is **not built** because
- * nothing disables a checked box yet, and a state with no caller does not justify a 17th slot and eight
- * hand-tuned values. See the Phase 6 prerequisite in `DUCK_NOTES_BUILD_PROMPT.md` for the trigger that
- * changes that answer, and `ContrastTest.theDisabledCheckedFillIsRecordedPendingACaller` for the
- * numbers.
+ * So the fix costs one new slot for seven palettes, or two for all eight — and it is **cheaper than it
+ * looks**: every one of the sixteen two-slot assignments aliases a slot that already exists, so it needs
+ * zero new hexes. It is not built because nothing disables a checked box yet. **The reason is no caller,
+ * not cost** — do not re-defer this on price. See the Phase 6 prerequisite in
+ * `DUCK_NOTES_BUILD_PROMPT.md` for the trigger, and
+ * `ContrastTest.theDisabledCheckedFillIsRecordedPendingACaller` for the numbers.
  */
 @Composable
 fun DuckCheckbox(

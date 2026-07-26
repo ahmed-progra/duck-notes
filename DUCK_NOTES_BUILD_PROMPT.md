@@ -350,12 +350,16 @@ enabled colour vs disabled colour for the same element — is now
   | tier | cost | result |
   |---|---|---|
   | 0 — today | none | 4 of 8 fail |
-  | 1 | one slot, 8 values | 8 of 8 clear 1.2; direction right in 7 |
-  | 2 | two slots, 16 values | 8 of 8 clear **and** recede; SepiaLight becomes the only theme with a dark tick |
+  | 1 | one slot; **7 of 8 values are aliases** (`accentPress` ×4 dark, `chromeMuted` ×3 light). SepiaLight is the only palette needing a genuinely new value | 8 of 8 clear 1.2; direction right in 7 |
+  | 2 | two slots; **all 16 values are aliases — zero new hexes**. `onAccent` = each palette's `surface`, except SepiaLight's `onSurface`; the fill as tier 1 with SepiaLight taking `divider` | 8 of 8 clear **and** recede; SepiaLight becomes the only theme with a dark tick |
 
-  **Tier 0 is the current decision**, on the ground that nothing disables a checked box, so a 17th slot
-  and eight hand-tuned values would be paid for a state that may never ship — Phase 12 may render a
-  locked note without checkboxes at all.
+  Verified: that tier-2 assignment satisfies distinguishability, tick-on-fill, tick-on-accent and
+  direction in all eight palettes, with SepiaLight at 2.6743 / 9.6541 / 3.6099.
+
+  **Tier 0 is the current decision, and the reason is no caller — not cost.** Nothing disables a checked
+  box, and Phase 12 may render a locked note without checkboxes at all. Do not re-defer this on price:
+  the slots are cheap and mostly aliasing, and a future reader talking themselves out of it because
+  "sixteen values" sounds expensive would be deferring on a number that was never real.
 
   **Trigger:** the first screen that disables a checked checkbox must either apply tier 1 or 2, or
   record why the state does not arise there. Do not let it ship on tier 0 by default — that is the
@@ -389,11 +393,21 @@ At 0.12 the selected fill and the unselected border are all but gone — and the
    owes none — but so the colour on screen is a palette value that `ContrastTest` can see at all. A
    0.12 composite is unmeasurable by construction, so "is this still visible?" becomes unanswerable
    rather than merely unanswered.
-2. **Add the enabled/disabled pair to `distinguishability`.** This is the assertion that carries the
-   real requirement, and it is the one that catches the failure the alpha check cannot: two colours that
-   both pass against their background and are identical to each other. Note the failure direction — the
-   0.12 composites make the chip *too faint*, while the defects actually found in 5b made controls *not
-   faint enough*. Assert the pair, do not reason about which risk applies.
+2. **Add *every* enabled/disabled pair to `distinguishability`, in the same change.** This is the
+   assertion that carries the real requirement, and the one that catches what the alpha check cannot:
+   two colours that both pass against their background and are identical to each other. Note the failure
+   direction — the 0.12 composites make the chip *too faint*, while the defects actually found in 5b made
+   controls *not faint enough*. Assert the pair, do not reason about which risk applies.
+
+   **This is an enumeration duty, the same one the floor table earned in 5b.** Enumerate the component's
+   painted elements first, then add a pair for each, then build. For `DuckTagChip` that is four —
+   label, leading icon, border and selected fill — not one representative pair. Move
+   `theDistinguishabilityListIsNotSilentlyEmpty`'s pinned count in the same commit.
+
+   The pin stops silent *deletion*. Nothing stops silent *non-addition*, which is how the
+   disabled-unchecked checkbox reached `src/main`: every pair that existed passed, and the missing one
+   was missing. A list of hand-picked entries is only as good as the last person's memory, so the duty
+   is written here rather than left to it.
 
 The exemption question is already settled and does not need re-deciding: WCAG owes nothing here. What
 needs deciding each time is whether the control still reads as inactive, and that is a number.
