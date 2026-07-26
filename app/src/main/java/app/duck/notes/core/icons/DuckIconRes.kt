@@ -31,9 +31,20 @@ fun DuckIcon.drawable(): Int = when (this) {
 /**
  * Paints a [DuckIcon] in [tint].
  *
- * [tint] is required, not defaulted: an icon is a WCAG 1.4.11 graphic owing 3:1 against whatever it
- * sits on, and that pair depends on the container. Making the caller name the token keeps the
- * decision where `ContrastTest` can be told about it, instead of hiding a default here.
+ * [tint] is required, not defaulted, and **that is load-bearing — do not give it a default.** Two
+ * things depend on it:
+ *
+ * 1. An icon is a WCAG 1.4.11 graphic owing 3:1 against whatever it sits on, and that pair depends on
+ *    the container. Making the caller name the token keeps the decision where `ContrastTest` can be
+ *    told about it, instead of hiding a default here.
+ * 2. It is the only reason Material's disabled path cannot reach a Duck glyph. `IconButton` provides
+ *    `LocalContentColor` composited at **0.38** to its content, and this function never reads it: it
+ *    paints through foundation's `Image` with an unconditional `ColorFilter.tint`, not material3's
+ *    `Icon`. `DuckIconButton` supplies its own opaque disabled tint instead. A default here — and
+ *    `Color.Unspecified` is the natural one to reach for — would tint with a sentinel and remove the
+ *    forcing function that keeps every glyph colour a measured token.
+ *
+ * Compiler-enforced is not the same as understood, which is why this is written down.
  */
 @Composable
 fun DuckIconImage(

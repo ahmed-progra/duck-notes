@@ -102,6 +102,15 @@ class ContrastTest {
         Triple("accent", "surfaceElevated", 3.0),
     )
 
+    /**
+     * element, enabled colour, disabled colour. See
+     * [everyDisabledStateIsDistinguishableFromEnabled] — this axis is foreground-vs-foreground.
+     */
+    private val distinguishability: List<Triple<String, String, String>> = listOf(
+        Triple("icon button glyph", "onSurface", "chromeMuted"),
+        Triple("checkbox border", "chromeMuted", "divider"),
+    )
+
     private fun DuckColors.slot(name: String): Color = when (name) {
         "accent" -> accent
         "accentPress" -> accentPress
@@ -324,6 +333,95 @@ class ContrastTest {
             Sepia dark       tagSurface 1.123  surface 1.130  divider 1.220
             Midnight light   tagSurface 1.137  surface 1.073  divider 1.177
             Midnight dark    tagSurface 1.155  surface 1.157  divider 1.250
+            """.trimIndent(),
+            recorded,
+        )
+    }
+
+    /**
+     * A disabled control must be distinguishable from an enabled one.
+     *
+     * **This is a Duck design rule, not a WCAG one.** WCAG 1.4.11 exempts *"inactive user interface
+     * components"* outright and 1.4.3 exempts incidental text, so a disabled control owes no contrast
+     * floor at all — nothing below is an accessibility floor, and nothing above should be read as one.
+     * The requirement is affordance: a control that looks live and does nothing invites a tap. A dim
+     * control still reads as disabled; an identical one does not, which makes "no dimming" *worse* than
+     * poor dimming rather than better.
+     *
+     * Every pair here is **foreground against foreground** — the enabled colour against the disabled
+     * one for the same painted element. That is a different axis from the rest of this file, and it is
+     * why none of these were caught by pairing against a background: both states passed their own
+     * background check, then rendered the same.
+     *
+     * 1.2 is borrowed from the visibly-distinct rule the tints use, since it is the same question.
+     */
+    @Test
+    fun everyDisabledStateIsDistinguishableFromEnabled() {
+        val failures = palettes().flatMap { p ->
+            distinguishability.mapNotNull { (element, enabled, disabled) ->
+                val r = contrast(p.colors.slot(enabled), p.colors.slot(disabled))
+                if (r < 1.2) "${p.name}: $element $enabled vs $disabled = %.4f < 1.2".format(r) else null
+            }
+        }
+        assertEquals(emptyList<String>(), failures)
+    }
+
+    /**
+     * Positive control: this list is iterated, so emptying it reports green.
+     *
+     * The checkbox border pair is the one that must never be lost. It read `chromeMuted` vs
+     * `chromeMuted` — exactly 1.0000 in all eight palettes — because `uncheckedColor` and
+     * `disabledUncheckedColor` were the same token and an unchecked box has no fill, only a border.
+     */
+    @Test
+    fun theDistinguishabilityListIsNotSilentlyEmpty() {
+        assertEquals(2, distinguishability.size)
+        assertTrue(
+            "the checkbox border pair is the regression this list exists for",
+            Triple("checkbox border", "chromeMuted", "divider") in distinguishability,
+        )
+        // And the regression itself, planted: the pair this replaced was a token against itself. If
+        // 1.2 were a number nothing could fail, the rule above would be decoration.
+        palettes().forEach { p ->
+            assertTrue(
+                "${p.name}: a token against itself must fail the 1.2 rule",
+                contrast(p.colors.chromeMuted, p.colors.chromeMuted) < 1.2,
+            )
+        }
+    }
+
+    /**
+     * The one disabled state that fails the rule above, recorded with why it is not fixable here.
+     *
+     * `DuckCheckbox`'s disabled **checked** fill is `chromeMuted` against an enabled `accent`, and that
+     * is 1.0024 in SepiaLight — hue differs, luminance does not. It is excluded from
+     * [distinguishability] rather than floored because the constraint is structural, not a bad token
+     * choice: M3 1.4 exposes no `disabledCheckedCheckmarkColor`, so the tick stays `surface`. Keeping
+     * the tick legible forces the fill dark; looking inactive forces it light. All 16 slots were
+     * searched — `accentPress`, `accentText`, `onSurface` and `codeOnSurface` clear both numbers, and
+     * every one is darker than `accent`, i.e. reads as *more* prominent.
+     *
+     * Recorded so the next person sees a number instead of rediscovering it, and so a palette edit that
+     * happens to fix it shows up as a diff.
+     */
+    @Test
+    fun theDisabledCheckedFillIsRecordedAsUnfixableHere() {
+        val recorded = palettes().joinToString("\n") { p ->
+            "%-16s accent vs chromeMuted %.4f".format(
+                p.name,
+                contrast(p.colors.accent, p.colors.chromeMuted),
+            )
+        }
+        assertEquals(
+            """
+            DuckRed light    accent vs chromeMuted 1.3020
+            DuckRed dark     accent vs chromeMuted 1.3020
+            Graphite light   accent vs chromeMuted 1.8479
+            Graphite dark    accent vs chromeMuted 1.0872
+            Sepia light      accent vs chromeMuted 1.0024
+            Sepia dark       accent vs chromeMuted 1.1014
+            Midnight light   accent vs chromeMuted 1.5538
+            Midnight dark    accent vs chromeMuted 1.0051
             """.trimIndent(),
             recorded,
         )

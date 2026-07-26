@@ -19,6 +19,16 @@ import app.duck.notes.core.theme.DuckTheme
  *
  * Material's `Checkbox` supplies the ripple, the animation and the 48dp target; only the three colours
  * are ours. Indeterminate state is skipped — nothing needs it.
+ *
+ * **Disabled + checked is a known open defect, not an oversight.** M3 1.4 has no
+ * `disabledCheckedCheckmarkColor`, so the tick stays `surface` whatever `enabled` says. Keeping the
+ * tick readable therefore forces the disabled fill to stay dark, while looking inactive requires it to
+ * go light — directly opposed, so no token satisfies both. All 16 slots were searched: only
+ * `accentPress`, `accentText`, `onSurface` and `codeOnSurface` clear both numerically, and every one of
+ * them is *darker* than `accent`, which reads as more prominent rather than less. `chromeMuted` is kept
+ * because it at least keeps the tick legible (3.26 worst), leaving the state distinguished by hue alone
+ * — 1.00 luminance ratio in SepiaLight. Escaping it means dropping M3's `Checkbox` or not disabling
+ * checked boxes at all; see the Phase 6 prerequisite in `DUCK_NOTES_BUILD_PROMPT.md`.
  */
 @Composable
 fun DuckCheckbox(
@@ -40,7 +50,13 @@ fun DuckCheckbox(
             checkmarkColor = colors.surface,
             // chromeMuted is the one legitimate text-free use of the slot: a disabled control.
             disabledCheckedColor = colors.chromeMuted,
-            disabledUncheckedColor = colors.chromeMuted,
+            // divider, NOT chromeMuted. An unchecked box is a border and nothing else, so
+            // disabledUncheckedColor == uncheckedColor made the disabled control render *identically*
+            // to the enabled one — 1.0000 in all eight palettes, no signal at all. WCAG exempts an
+            // inactive component from contrast, but it still has to look inactive: a control that
+            // looks live and does nothing is worse than a dim one. divider is 2.60 from chromeMuted at
+            // worst, and recedes, which is the direction a disabled control should move.
+            disabledUncheckedColor = colors.divider,
         ),
     )
 }
