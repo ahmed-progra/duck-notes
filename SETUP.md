@@ -164,6 +164,36 @@ before reporting on a screenshot.** The same trap applies to `adb pull` of binar
 anything else streaming bytes through a redirect — it will produce silent garbage again during
 Phase 8's editor work and Phase 16's screenshot testing.
 
+### `strings` does not exist here — dex membership checks use Python
+
+`strings` is not on this machine (Git Bash ships no binutils). A dex-membership check written as
+`unzip -p app-release.apk classes.dex | strings | grep -c DuckGallery` therefore prints
+`strings: command not found` on stderr and **`0`** on stdout — which reads exactly like "the class is
+absent." It is the same class of trap as the screencap one above: a check that reports success while
+measuring nothing. It has now bitten once per phase — Phase 4's corrupt captures, Phase 5b's release
+absence check — so assume it will bite again.
+
+Sanctioned form. Scan **`classes*.dex`**, not `classes.dex`: minSdk 26 has native multidex, and the
+release APK has two. Every probe must come with a **positive control** — a class that must be present —
+because a zero from a broken pipeline is indistinguishable from a zero that means what you want:
+
+```bash
+python -c "
+import zipfile, sys
+apk = 'app/build/outputs/apk/release/app-release-unsigned.apk'
+z = zipfile.ZipFile(apk)
+dex = [n for n in z.namelist() if n.startswith('classes') and n.endswith('.dex')]
+blob = b''.join(z.read(n) for n in dex)
+print(len(dex), 'dex files:', dex)
+for probe in ['DuckGallery', 'DuckTagChip', 'DuckIcon', 'MarkdownStyles']:
+    print(f'{probe}: {blob.count(probe.encode())}')
+"
+```
+
+**Reject the run unless the controls are non-zero.** Phase 5b's real output was 2 dex files,
+`DuckGallery` 0 with `DuckTagChip` 24 / `DuckIcon` 48 / `MarkdownStyles` 4 — the absence means something
+only because the other three do not.
+
 ### Emulator instability — class-level instrumented runs dying
 
 **Symptom, precisely:** a *class-level* instrumented run dies partway through or reports
