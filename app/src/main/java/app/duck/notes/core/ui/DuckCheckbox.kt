@@ -20,15 +20,28 @@ import app.duck.notes.core.theme.DuckTheme
  * Material's `Checkbox` supplies the ripple, the animation and the 48dp target; only the three colours
  * are ours. Indeterminate state is skipped — nothing needs it.
  *
- * **Disabled + checked is a known open defect, not an oversight.** M3 1.4 has no
- * `disabledCheckedCheckmarkColor`, so the tick stays `surface` whatever `enabled` says. Keeping the
- * tick readable therefore forces the disabled fill to stay dark, while looking inactive requires it to
- * go light — directly opposed, so no token satisfies both. All 16 slots were searched: only
- * `accentPress`, `accentText`, `onSurface` and `codeOnSurface` clear both numerically, and every one of
- * them is *darker* than `accent`, which reads as more prominent rather than less. `chromeMuted` is kept
- * because it at least keeps the tick legible (3.26 worst), leaving the state distinguished by hue alone
- * — 1.00 luminance ratio in SepiaLight. Escaping it means dropping M3's `Checkbox` or not disabling
- * checked boxes at all; see the Phase 6 prerequisite in `DUCK_NOTES_BUILD_PROMPT.md`.
+ * **Disabled + checked is deferred, not impossible — and it already works in half the palettes.**
+ * `chromeMuted` against an enabled `accent` clears the 1.2 distinguishability rule in four of eight and
+ * fails in `SepiaLight` (1.0024), `GraphiteDark` (1.0872), `SepiaDark` (1.1014) and `MidnightDark`
+ * (1.0051). M3 1.4 has no `disabledCheckedCheckmarkColor`, so the tick stays `checkmarkColor` whatever
+ * `enabled` says, and the disabled fill must both recede toward the page and keep that tick legible.
+ * **Those pull in opposite directions per mode, not absolutely** — on a dark page receding means
+ * darker, on a light page lighter:
+ *
+ * - **Dark mode is solved by `accentPress`**, which is the only palette slot inside the window in all
+ *   four dark palettes (1.31–1.47 from accent, tick 3.06–3.87).
+ * - **Three light palettes are already correct.** `chromeMuted` is *lighter* than `accent` in
+ *   DuckRedLight, GraphiteLight and MidnightLight, so it recedes and clears both constraints today.
+ * - **`SepiaLight` alone has an empty window**, by 0.0241, because its `surface` is cream `#FBF5E6`
+ *   rather than white: the tick ceiling (lum 0.2718) falls below the distinguishability floor (0.2959).
+ *   A dedicated `onAccent` tick closes it on existing values — `onSurface` is 3.61 on `accent`, with
+ *   `divider` as the lighter fill at 2.67.
+ *
+ * So the fix costs one new slot for seven palettes, or two for all eight. It is **not built** because
+ * nothing disables a checked box yet, and a state with no caller does not justify a 17th slot and eight
+ * hand-tuned values. See the Phase 6 prerequisite in `DUCK_NOTES_BUILD_PROMPT.md` for the trigger that
+ * changes that answer, and `ContrastTest.theDisabledCheckedFillIsRecordedPendingACaller` for the
+ * numbers.
  */
 @Composable
 fun DuckCheckbox(

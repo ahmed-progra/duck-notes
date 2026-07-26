@@ -391,21 +391,35 @@ class ContrastTest {
     }
 
     /**
-     * The one disabled state that fails the rule above, recorded with why it is not fixable here.
+     * The one disabled state that fails the rule above, recorded with its measured fix and why that fix
+     * is not built.
      *
-     * `DuckCheckbox`'s disabled **checked** fill is `chromeMuted` against an enabled `accent`, and that
-     * is 1.0024 in SepiaLight — hue differs, luminance does not. It is excluded from
-     * [distinguishability] rather than floored because the constraint is structural, not a bad token
-     * choice: M3 1.4 exposes no `disabledCheckedCheckmarkColor`, so the tick stays `surface`. Keeping
-     * the tick legible forces the fill dark; looking inactive forces it light. All 16 slots were
-     * searched — `accentPress`, `accentText`, `onSurface` and `codeOnSurface` clear both numbers, and
-     * every one is darker than `accent`, i.e. reads as *more* prominent.
+     * `DuckCheckbox`'s disabled **checked** fill is `chromeMuted` against an enabled `accent`. It clears
+     * 1.2 in four palettes and fails in four: SepiaLight 1.0024, GraphiteDark 1.0872, SepiaDark 1.1014,
+     * MidnightDark 1.0051. Excluded from [distinguishability] rather than floored, because a floor here
+     * would be red until a slot is added for a state that has no caller.
      *
-     * Recorded so the next person sees a number instead of rediscovering it, and so a palette edit that
-     * happens to fix it shows up as a diff.
+     * **The fix is known and cheap; only the slot budget is not.** M3 1.4 exposes no
+     * `disabledCheckedCheckmarkColor`, so the tick is shared by both states and the disabled fill must
+     * recede toward the page *and* keep that tick legible. Per mode:
+     *
+     * | mode | answer |
+     * |---|---|
+     * | dark ×4 | `accentPress` — the only palette slot inside the window, 1.31–1.47 / tick 3.06–3.87 |
+     * | light ×3 | already correct: `chromeMuted` is *lighter* than `accent` and recedes |
+     * | SepiaLight | window empty by 0.0241; needs an `onAccent` tick, feasible on existing values |
+     *
+     * One new slot fixes seven palettes, two fix all eight. Deferred until something disables a checked
+     * box — see the Phase 6 prerequisite in `DUCK_NOTES_BUILD_PROMPT.md`.
+     *
+     * **The lesson is worth more than the checkbox.** The first search called this structurally
+     * impossible, because it minimised each constraint across all eight palettes at once. "Recedes"
+     * inverts with mode — darker on a dark page, lighter on a light one — so a single minimum collapsed
+     * two opposite requirements into one unsatisfiable constraint and hid an answer that was already
+     * sitting in three palettes. Palettes are per-mode data; solve per-mode constraints per mode.
      */
     @Test
-    fun theDisabledCheckedFillIsRecordedAsUnfixableHere() {
+    fun theDisabledCheckedFillIsRecordedPendingACaller() {
         val recorded = palettes().joinToString("\n") { p ->
             "%-16s accent vs chromeMuted %.4f".format(
                 p.name,

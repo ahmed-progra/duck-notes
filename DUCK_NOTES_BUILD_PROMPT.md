@@ -334,13 +334,38 @@ enabled colour vs disabled colour for the same element — is now
   `disabledUncheckedColor` were the same token, so a disabled checkbox was pixel-identical to a live
   one. `disabledUncheckedColor` is now `divider`: 2.60 from `chromeMuted` at worst, and it recedes,
   which is the direction a disabled control should move.
-- **Open, and not fixable by a token swap:** disabled + checked is `chromeMuted` against an enabled
-  `accent` — **1.0024 in SepiaLight**, hue differs and luminance does not. M3 1.4 exposes no
-  `disabledCheckedCheckmarkColor`, so the tick stays `surface`; keeping it legible forces the fill dark
-  while looking inactive forces it light. All 16 slots were searched: only `accentPress`, `accentText`,
-  `onSurface` and `codeOnSurface` clear both constraints, and every one is *darker* than `accent`, which
-  reads as more prominent rather than less. Escaping it means dropping M3's `Checkbox`, or rendering
-  read-only task rows without a checkbox at all. **Decide this before Phase 12 shows a locked note.**
+- **Open, deferred, and measured:** disabled + checked is `chromeMuted` against an enabled `accent`,
+  which clears 1.2 in four palettes and fails in four — SepiaLight 1.0024, GraphiteDark 1.0872,
+  SepiaDark 1.1014, MidnightDark 1.0051. M3 1.4 exposes no `disabledCheckedCheckmarkColor`, so the tick
+  is shared by both states and the disabled fill must recede toward the page *and* keep that tick
+  legible. **Those oppose each other per mode, not absolutely** — receding means darker on a dark page
+  and lighter on a light one:
+
+  | mode | answer |
+  |---|---|
+  | dark ×4 | `accentPress`, the only palette slot inside the window (1.31–1.47, tick 3.06–3.87) |
+  | light ×3 | **already correct** — `chromeMuted` is lighter than `accent` and recedes |
+  | SepiaLight | empty by 0.0241, because `surface` is cream `#FBF5E6` not white; needs an `onAccent` tick, which `onSurface` satisfies at 3.61 with `divider` as the fill at 2.67 |
+
+  | tier | cost | result |
+  |---|---|---|
+  | 0 — today | none | 4 of 8 fail |
+  | 1 | one slot, 8 values | 8 of 8 clear 1.2; direction right in 7 |
+  | 2 | two slots, 16 values | 8 of 8 clear **and** recede; SepiaLight becomes the only theme with a dark tick |
+
+  **Tier 0 is the current decision**, on the ground that nothing disables a checked box, so a 17th slot
+  and eight hand-tuned values would be paid for a state that may never ship — Phase 12 may render a
+  locked note without checkboxes at all.
+
+  **Trigger:** the first screen that disables a checked checkbox must either apply tier 1 or 2, or
+  record why the state does not arise there. Do not let it ship on tier 0 by default — that is the
+  decision expiring silently, which is the failure mode this whole section exists to prevent.
+
+  An earlier version of this section called the state *structurally impossible*. It is not, and the
+  error is worth keeping: that verdict came from minimising each constraint across all eight palettes at
+  once, which collapsed two opposite directions into one unsatisfiable constraint and hid an answer that
+  was already sitting in three palettes. **Palettes are per-mode data. A constraint that inverts with
+  mode must be solved per mode.**
 
 #### 3. The prerequisite proper — `DuckTagChip`
 
