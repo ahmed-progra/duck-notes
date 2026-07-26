@@ -279,6 +279,100 @@ tag tree (nested, collapsible)
 
 **Success:** Rotation and split-screen preserve state. Back stack correct on both form factors.
 
+### Blocking prerequisite — disabled states
+
+Two things go wrong at the first disabled state, and only one of them is about contrast.
+
+**A disabled control owes no contrast floor.** WCAG 1.4.11 exempts *"inactive user interface
+components"* outright, and 1.4.3 exempts incidental text including inactive controls. Nothing below is
+an accessibility floor and nothing here should be read as one. `ContrastTest` does assert 3:1 on the
+disabled checkbox tick, via `chromeMuted on surface` — that is **over-assertion**. Harmless, it passes,
+and it is not a precedent.
+
+**The real requirement is a Duck design rule: a disabled control must be *distinguishable* from an
+enabled one.** A control that looks live and does nothing invites a tap. A dim control still reads as
+disabled, so *no* dimming is worse than poor dimming — which makes the alpha problem below and the
+affordance problem here pull in opposite directions, and is why both need stating.
+
+#### 1. Material's disabled path reintroduces alpha
+
+Phase 5a stores every tint **pre-composited and opaque** because `ContrastTest` measures two opaque
+colours; an alpha tint has no measurable colour until it is drawn over something. Material composites a
+colour that is on screen and in no palette — structurally the same hole as `surfaceTint` reaching
+elevated surfaces through an unmeasured blend, and just as invisible to the suite.
+
+**State of play at the end of 5b** (read from the `material3 1.4.0` bytecode, not from memory):
+
+| component | `enabled`? | composite on screen? | distinguishable? |
+|---|---|---|---|
+| `DuckIconButton` | yes | no | yes — 2.56 worst |
+| `DuckCheckbox`, unchecked | yes | no | yes, **after a 5b fix** — was 1.0000 |
+| `DuckCheckbox`, checked | yes | no | **no — open defect, 1.0024** |
+| `DuckTagChip` | **no** | unreachable, and this is the one that bites | n/a |
+| `DuckDivider`, `DuckEmptyState` | no | n/a | n/a |
+
+- **`DuckIconButton` is clean, and one decision is why.** `IconButton` computes
+  `disabledContentColor = LocalContentColor × 0.38` and provides it to its content. Nothing reads it:
+  `DuckIconImage` paints through foundation's `Image` with an unconditional `ColorFilter.tint`, not
+  material3's `Icon`, so `LocalContentColor` is unreachable rather than merely unused — and the required
+  `tint` parameter is what forces `DuckIconButton` to name its own opaque disabled colour. Container is
+  `Transparent` in both states. **Do not give that parameter a default.**
+- **`DuckCheckbox` is clean on purpose.** `CheckboxColors` has **12** colour fields; the
+  `CheckboxDefaults.colors(...)` convenience overload accepts 6 and fills the rest from tokens at
+  `0.38`. Our five arguments populate seven fields; three more are literal `Transparent`. The two left
+  at `0.38` are `disabledIndeterminateBoxColor` and `disabledIndeterminateBorderColor`, reachable only
+  from `ToggleableState.Indeterminate`, which a `Boolean` checkbox cannot produce.
+
+#### 2. Two affordance defects, found by measuring foreground against foreground
+
+Both states passed their own background check and then rendered the same. That axis —
+enabled colour vs disabled colour for the same element — is now
+`ContrastTest.everyDisabledStateIsDistinguishableFromEnabled`.
+
+- **Fixed in 5b:** disabled + unchecked was `chromeMuted` vs `chromeMuted`, **exactly 1.0000 in all
+  eight palettes**. An unchecked box is a border and nothing else, and `uncheckedColor` and
+  `disabledUncheckedColor` were the same token, so a disabled checkbox was pixel-identical to a live
+  one. `disabledUncheckedColor` is now `divider`: 2.60 from `chromeMuted` at worst, and it recedes,
+  which is the direction a disabled control should move.
+- **Open, and not fixable by a token swap:** disabled + checked is `chromeMuted` against an enabled
+  `accent` — **1.0024 in SepiaLight**, hue differs and luminance does not. M3 1.4 exposes no
+  `disabledCheckedCheckmarkColor`, so the tick stays `surface`; keeping it legible forces the fill dark
+  while looking inactive forces it light. All 16 slots were searched: only `accentPress`, `accentText`,
+  `onSurface` and `codeOnSurface` clear both constraints, and every one is *darker* than `accent`, which
+  reads as more prominent rather than less. Escaping it means dropping M3's `Checkbox`, or rendering
+  read-only task rows without a checkbox at all. **Decide this before Phase 12 shows a locked note.**
+
+#### 3. The prerequisite proper — `DuckTagChip`
+
+It has no `enabled` today, which is the only reason it is safe. `SelectableChipColors` has **13** fields
+and `FilterChipDefaults.filterChipColors(...)` sets four of ours; the day a chip greys out, these go
+live from `FilterChipTokens`:
+
+| field | alpha |
+|---|---|
+| `disabledLabelColor` | **0.38** |
+| `disabledLeadingIconColor` | **0.38** |
+| `disabledSelectedContainerColor` | **0.12** |
+| `disabledUnselectedOutlineColor` | **0.12** |
+
+At 0.12 the selected fill and the unselected border are all but gone — and the border is what carries
+1.4.11 for this component, because the fill itself is only 1.04–1.16 against an elevated container.
+
+**Before adding `enabled` to any component, both of these — not one:**
+
+1. **Pass the disabled colours in explicitly, opaque.** Not to hit a contrast floor — a disabled control
+   owes none — but so the colour on screen is a palette value that `ContrastTest` can see at all. A
+   0.12 composite is unmeasurable by construction, so "is this still visible?" becomes unanswerable
+   rather than merely unanswered.
+2. **Add the enabled/disabled pair to `distinguishability`.** This is the assertion that carries the
+   real requirement, and it is the one that catches the failure the alpha check cannot: two colours that
+   both pass against their background and are identical to each other. Note the failure direction — the
+   0.12 composites make the chip *too faint*, while the defects actually found in 5b made controls *not
+   faint enough*. Assert the pair, do not reason about which risk applies.
+
+The exemption question is already settled and does not need re-deciding: WCAG owes nothing here. What
+needs deciding each time is whether the control still reads as inactive, and that is a number.
+
 ---
 
 ## PHASE 7 — TAGS
