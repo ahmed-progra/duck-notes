@@ -14,7 +14,7 @@ import java.io.File
  * | banned | why |
  * |---|---|
  * | a colour literal | the Do-not, verbatim |
- * | a raw brand token (`DuckAccent` …) | not a literal, but it pins the caller to Duck Red under every theme — the same defect wearing a name |
+ * | a raw brand token (`BrandAccent` …) | not a literal, but it pins the caller to Duck Red under every theme — the same defect wearing a name |
  * | `FontFamily.` | Phase 14 swaps [DuckFonts]; a call site naming a family opts itself out of the swap |
  * | an absolute `.sp` | likewise for the font-size setting. `.em` stays legal — relative is the point |
  *
@@ -52,8 +52,8 @@ class TokenSourceTest {
 
             import androidx.compose.ui.text.font.FontFamily
             val a = Color(0xFF123456)
-            val b = SolidColor(DuckAccent)
-            val c = SpanStyle(color = DuckTextMuted)
+            val b = SolidColor(BrandAccent)
+            val c = SpanStyle(color = BrandTextMuted)
             val d = TextStyle(fontSize = 16.sp, fontFamily = FontFamily.Monospace)
             val e = Color.White
             """.trimIndent()
@@ -61,8 +61,8 @@ class TokenSourceTest {
         assertEquals(
             listOf(
                 "Color(0xFF123456)",
-                "DuckAccent",
-                "DuckTextMuted",
+                "BrandAccent",
+                "BrandTextMuted",
                 "16.sp",
                 "FontFamily.Monospace",
                 "Color.White",
@@ -157,21 +157,67 @@ class TokenSourceTest {
         )
     }
 
+    /**
+     * The gallery gets the same scan, because it is the file people copy from.
+     *
+     * **This is worth doing and is not the fix.** It found zero violations when it was added: both of
+     * the gallery's contrast defects — a `surface` label on an `accent` fill at 4.25:1, and
+     * `chromeMuted` used for 12sp `uiLabel` text at 3.26:1 — used entirely legitimate tokens. This
+     * test checks **provenance** (did the colour come from the token layer?) and cannot check
+     * **fitness** (is it the right token for this role?). What closed that hole was `ContrastTest`'s
+     * component pairs and the gallery calling `DuckTagChip` instead of owning a copy of it.
+     *
+     * It stays because a literal creeping into `src/debug` would be copied outward from there.
+     */
+    @Test
+    fun debugSourceGoesThroughTheTokenLayerToo() {
+        assertTrue(
+            "no sources at ${DEBUG_DIR.absolutePath} — a wrong path here reports clean forever",
+            DEBUG_DIR.isDirectory,
+        )
+        val scanned = debugSources().size
+        assertTrue(
+            "scanned $scanned debug files, expected at least $MIN_DEBUG_SOURCES",
+            scanned >= MIN_DEBUG_SOURCES,
+        )
+        assertEquals(
+            emptyList<String>(),
+            debugSources().flatMap { f -> offenders(f.readText()).map { "${f.name}: $it" } },
+        )
+    }
+
     private companion object {
         val MAIN_DIR = File("src/main/java/app/duck/notes")
         val THEME_DIR = File(MAIN_DIR, "core/theme")
+        val DEBUG_DIR = File("src/debug/java/app/duck/notes")
 
         /** Well under the real count; catches a broken path rather than tracking the codebase. */
         const val MIN_SOURCES = 40
 
-        /** The seven raw brand tokens. `\b` at the end keeps `DuckText` off `DuckTextMuted`. */
+        /** The gallery is three files. Two would mean the path is wrong. */
+        const val MIN_DEBUG_SOURCES = 2
+
+        /**
+         * The seven raw brand hexes. `\b` at the end keeps `BrandText` off `BrandTextMuted`.
+         *
+         * They are prefixed `Brand`, not `Duck`, specifically so this detector cannot collide with a
+         * component name. Phase 5b caught that the hard way: `DuckDivider` was simultaneously the raw
+         * divider hex and the new divider composable, so the scan flagged the component as a raw-token
+         * use. `DuckText` would have done the same to a `DuckText` composable in Phase 6. Renaming the
+         * hexes retired the whole collision class instead of teaching the regex to guess.
+         */
         val RAW_TOKEN = Regex(
-            "\\b(DuckAccentPress|DuckAccent|DuckSurfaceDark|DuckSurface|DuckTextMuted|DuckText|DuckDivider)\\b"
+            "\\b(BrandAccentPress|BrandAccent|BrandSurfaceDark|BrandSurface|BrandTextMuted|BrandText|BrandDivider)\\b"
         )
         val COLOR_LITERAL = Regex("\\bColor\\(0[xX][0-9A-Fa-f]+\\)")
 
-        /** `Color.Unspecified` is the absence of a colour, not a colour, so it stays legal. */
-        val NAMED_COLOR = Regex("\\bColor\\.(?!Unspecified\\b)[A-Z]\\w*")
+        /**
+         * `Color.Unspecified` and `Color.Transparent` are the *absence* of a colour rather than a
+         * colour, so they stay legal. `DuckTagChip`'s unselected state has no fill at all — drawing
+         * `surface` there measured 1.06 against an elevated container, i.e. invisible, so transparent
+         * is both simpler and more honest. Every other named constant is a hardcoded colour.
+         */
+        val NAMED_COLOR = Regex("\\bColor\\.(?!Unspecified\\b|Transparent\\b)[A-Z]\\w*")
 
         /** Member access only — declaring `val mono: FontFamily` is how the token layer is consumed. */
         val FONT_FAMILY = Regex("\\bFontFamily[.(]\\w*")
@@ -183,6 +229,9 @@ class TokenSourceTest {
             .filter { it.isFile && it.extension == "kt" }
             .filterNot { it.absolutePath.startsWith(THEME_DIR.absolutePath) }
             .toList()
+
+        fun debugSources(): List<File> =
+            DEBUG_DIR.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
 
         /**
          * String literals and comments, in **one** alternation.

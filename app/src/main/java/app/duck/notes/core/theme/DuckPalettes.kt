@@ -26,19 +26,19 @@ import androidx.compose.ui.graphics.Color
 // --- DuckRed — the brand. Every contract hex appears here unmodified. --------------------------
 
 internal val DuckRedLight = DuckColors(
-    accent = DuckAccent,
-    accentPress = DuckAccentPress,
-    accentText = DuckAccentPress, // see DuckColors KDoc — intentional, not duplication
-    surface = DuckSurface,
+    accent = BrandAccent,
+    accentPress = BrandAccentPress,
+    accentText = BrandAccentPress, // see DuckColors KDoc — intentional, not duplication
+    surface = BrandSurface,
     surfaceElevated = Color(0xFFF7F7F8),
-    onSurface = DuckText,
+    onSurface = BrandText,
     // #6A6A6A measured 4.5019 against the 4.5 floor on codeSurface — one float op from red, and
     // Kotlin and Python do not share a pow implementation. #686868 is 4.6380.
     proseMuted = Color(0xFF686868),
-    chromeMuted = DuckTextMuted,
-    divider = DuckDivider,
+    chromeMuted = BrandTextMuted,
+    divider = BrandDivider,
     codeSurface = Color(0xFFEAEAEC),
-    codeOnSurface = DuckText,
+    codeOnSurface = BrandText,
     tagSurface = Color(0xFFF5E4E5),
     highlight = Color(0xFFF8E9A3),
     selection = Color(0xFFF7D9DA),
@@ -47,14 +47,14 @@ internal val DuckRedLight = DuckColors(
 )
 
 internal val DuckRedDark = DuckColors(
-    accent = DuckAccent,
-    accentPress = DuckAccentPress,
+    accent = BrandAccent,
+    accentPress = BrandAccentPress,
     accentText = Color(0xFFF08386), // lighter than accent, the opposite direction from light mode
-    surface = DuckSurfaceDark,
+    surface = BrandSurfaceDark,
     surfaceElevated = Color(0xFF2A2A2D),
     onSurface = Color(0xFFF2F2F5),
     proseMuted = Color(0xFFA3A3A9),
-    chromeMuted = DuckTextMuted,
+    chromeMuted = BrandTextMuted,
     divider = Color(0xFF3A3A3D),
     codeSurface = Color(0xFF2B2B2E),
     codeOnSurface = Color(0xFFF2F2F5),

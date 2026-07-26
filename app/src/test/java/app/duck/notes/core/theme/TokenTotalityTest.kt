@@ -82,7 +82,7 @@ class TokenTotalityTest {
     @Test
     fun accentReachesNoMaterialSlot() {
         val scheme = duckColorScheme(DuckThemeSpec.DuckRed, dark = false)
-        val offenders = schemeSlots(scheme).filterValues { it == DuckAccent }.keys
+        val offenders = schemeSlots(scheme).filterValues { it == BrandAccent }.keys
         assertEquals(
             "accent is 4.25:1 on white — it paints Duck fills, never a Material slot",
             emptySet<String>(),

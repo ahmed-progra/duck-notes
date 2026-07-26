@@ -78,11 +78,28 @@ class ContrastTest {
         Triple("onSurface", "selection", 4.5),
         Triple("error", "errorSurface", 4.5),
         Triple("error", "surface", 4.5),
-        // Duck rule: visibly distinct from the page.
+        // Duck rule: visibly distinct from the page. Applies to fills that ARE their own boundary —
+        // a code block, a highlight, a selection. A fill inside a bordered component does not owe it;
+        // see [componentFillsOnElevatedContainersAreRecorded].
         Triple("codeSurface", "surface", 1.2),
         Triple("highlight", "surface", 1.2),
         Triple("tagSurface", "surface", 1.2),
         Triple("selection", "surface", 1.2),
+
+        // --- Phase 5b component pairs ------------------------------------
+        // Every component introduces (foreground, background) pairs, and an unenumerated one is how
+        // the gallery's Pill shipped a 4.25:1 label. These are the pairs the five components create.
+        //
+        // Most were already covered above; the ones here are the additions. Note that all of them
+        // appear TWICE in effect — once against `surface` (the page) and once against
+        // `surfaceElevated` — because Phase 6 puts the chip, checkbox and icon button in the sidebar,
+        // which is an elevated container. Measuring only against the page is the same class of miss
+        // as not measuring at all.
+        //
+        // Boundaries are 1.4.11 at 3:1. `accentText`/`chromeMuted` are the chip's two border states;
+        // `accent` is the checkbox's checked fill, whose edge has to be perceivable against whatever
+        // it sits on.
+        Triple("accent", "surfaceElevated", 3.0),
     )
 
     private fun DuckColors.slot(name: String): Color = when (name) {
@@ -114,6 +131,30 @@ class ContrastTest {
             }
         }
         assertEquals(emptyList<String>(), failures)
+    }
+
+    /**
+     * Positive control for [everyDuckPairMeetsItsFloor], which is an absence assertion: delete every
+     * entry from [duckPairs] and it reports green over an empty list.
+     *
+     * Pinned by count, and by the presence of the pairs that are easiest to lose — the two that were
+     * discovered rather than designed. `proseMuted`/`codeSurface` came from revealed backticks;
+     * `accent`/`surfaceElevated` came from noticing that Phase 6 puts the checkbox in a sidebar.
+     */
+    @Test
+    fun theDuckPairListIsNotSilentlyEmpty() {
+        assertEquals(
+            "duckPairs changed size — add the pair and update this count, or explain the removal",
+            22,
+            duckPairs.size,
+        )
+        listOf(
+            Triple("proseMuted", "codeSurface", 4.5),
+            Triple("accent", "surfaceElevated", 3.0),
+            Triple("accentText", "tagSurface", 4.5),
+        ).forEach {
+            assertTrue("duckPairs must still contain $it", it in duckPairs)
+        }
     }
 
     // --- derived ColorScheme ------------------------------------------------
@@ -241,6 +282,50 @@ class ContrastTest {
                 "add the pair that actually paints them",
             emptySet<String>(),
             slots.keys - covered - allowlist,
+        )
+    }
+
+    /**
+     * Component fills measured against an **elevated** container, recorded rather than floored.
+     *
+     * Phase 6 puts `DuckTagChip` in the sidebar, which is `surfaceElevated`, and the selected chip's
+     * `tagSurface` fill is 1.04–1.16 against it — under the 1.2 visibly-distinct rule in all eight
+     * palettes. That rule is deliberately **not** applied here, for three reasons:
+     *
+     * 1. WCAG 1.4.11 requires 3:1 for a component's *boundary*, not for its fill against the
+     *    container. The selected chip carries an `accentText` border at 5.19 min on `surfaceElevated`.
+     * 2. The 1.2 rule was authored for fills that ARE their own boundary — a code block, a highlight.
+     *    A bordered component does not owe it.
+     * 3. It is unsatisfiable in two palettes. DuckRedLight's `tagSurface` would need luminance
+     *    <= 0.7673 to clear 1.2 against its own `surfaceElevated`, and >= 0.8007 to keep `accentText`
+     *    at 4.5 — empty by 0.033. SepiaLight is empty by 0.019. Closing the gap means moving
+     *    `accentText`, which `TokenTotalityTest` pins to `accentPress`.
+     *
+     * So the numbers are recorded, not enforced: the chip's perceivability comes from its border, and
+     * a future change to either fill shows up here as a diff instead of passing silently.
+     */
+    @Test
+    fun componentFillsOnElevatedContainersAreRecorded() {
+        val recorded = palettes().joinToString("\n") { p ->
+            "%-16s tagSurface %.3f  surface %.3f  divider %.3f".format(
+                p.name,
+                contrast(p.colors.tagSurface, p.colors.surfaceElevated),
+                contrast(p.colors.surface, p.colors.surfaceElevated),
+                contrast(p.colors.divider, p.colors.surfaceElevated),
+            )
+        }
+        assertEquals(
+            """
+            DuckRed light    tagSurface 1.146  surface 1.071  divider 1.173
+            DuckRed dark     tagSurface 1.036  surface 1.189  divider 1.262
+            Graphite light   tagSurface 1.125  surface 1.080  divider 1.177
+            Graphite dark    tagSurface 1.144  surface 1.169  divider 1.259
+            Sepia light      tagSurface 1.157  surface 1.064  divider 1.177
+            Sepia dark       tagSurface 1.123  surface 1.130  divider 1.220
+            Midnight light   tagSurface 1.137  surface 1.073  divider 1.177
+            Midnight dark    tagSurface 1.155  surface 1.157  divider 1.250
+            """.trimIndent(),
+            recorded,
         )
     }
 

@@ -172,7 +172,9 @@ notes_fts USING fts5(title, body, content='notes', content_rowid=...)
 - Typography: serif reading font + mono for code. User-swappable font family later.
 - Spacing scale 4/8/12/16/24/32. Corner radius 8/12/16.
 - Components: `DuckTagChip`, `DuckCheckbox`, `DuckDivider`, `DuckSearchField`, `DuckIconButton`, `DuckEmptyState` (duck illustration), `DuckBottomSheet`.
-- **DuckCons**: tag icon set. ~60 vectors mapped by tag name keyword. Sidebar and inline in editor.
+- **DuckIcons**: tag icon set. Curated keyword table, exact-match after canonicalization — no fuzzy
+  matching. **8 vectors shipped in Phase 5b**, growing toward ~60 with no logic change, since the
+  resolver is set-size-independent. Sidebar and inline in editor.
 
 **Success:** Theme switch with no recomposition jank. Contrast passes WCAG AA on both modes.
 
@@ -189,8 +191,9 @@ change, threading the theme through the markdown engine, landed in a commit by i
 
 **Build**
 - `DuckIcons`: tag icon set. Curated keyword table, resolver set-size-independent. **8 drawables to
-  start**, growing toward ~60 without logic change. Rename `DuckCons` → `DuckIcons` at lines 170 and
-  214 in this file, in the 5b commit.
+  start**, growing toward ~60 without logic change. The eight are `Tag` (the mandatory fallback),
+  `Todo`, `Work`, `Home`, `Idea`, `Book`, `Code`, `People` — the widest keyword families in personal
+  note-taking, and the ones drawable as legible 20dp single-tint glyphs offline.
 - Components: `DuckTagChip`, `DuckCheckbox`, `DuckDivider`, `DuckIconButton`, `DuckEmptyState`.
   Deferred to their consumers: `DuckSearchField` (Phase 10 owns debounce, operators, `snippet()`
   highlighting), `DuckBottomSheet` (Phase 9 owns the info-panel contents that drive sheet behaviour).
@@ -288,7 +291,7 @@ tag tree (nested, collapsible)
 - Parse tags on every save. Diff against `note_tags`. Delete orphan tags.
 - Sidebar tree: expand/collapse, counts, pinned section on top.
 - Tag chip inline in editor, tappable → filter list.
-- Actions: pin, rename (rewrites bodies), change DuckCon, delete (untag, keep notes).
+- Actions: pin, rename (rewrites bodies), change DuckIcon, delete (untag, keep notes).
 - Drag note onto tag = append tag to body.
 
 **Success:** Rename `#work` → `#job` updates 200 notes in one transaction, undoable.

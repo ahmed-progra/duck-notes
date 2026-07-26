@@ -46,7 +46,20 @@ data class DuckColors(
     val onSurface: Color,
     /** Muted *prose*: quotes, revealed markers, completed tasks, image placeholders. Clears 4.5:1. */
     val proseMuted: Color,
-    /** Muted *chrome*: timestamps, counts, placeholders, and M3's `outline`. Clears 3:1, not 4.5:1. */
+    /**
+     * Borders, outlines, and genuinely **disabled** controls. **Never text, at any size.**
+     *
+     * Clears 3:1, not 4.5:1 — enough for a WCAG 1.4.11 boundary, not for 1.4.3 text. An earlier
+     * version of this comment listed "timestamps, counts, placeholders", which was wrong: 1.4.3's
+     * large-text exemption starts at 18pt (or 14pt bold), so a 12sp `uiLabel` timestamp is *normal*
+     * text and owes 4.5. This slot measures 3.26–3.36 on the four light surfaces. Placeholder text in
+     * an **active** field is meaningful content and owes 4.5 too — 1.4.3 exempts only inactive
+     * components. All of those go to [proseMuted].
+     *
+     * `src/main` was never affected: the only consumer here is Material's `outline`, which is exactly
+     * a boundary. The correction narrowed this documentation and two debug call sites, not shipped
+     * behaviour.
+     */
     val chromeMuted: Color,
     /** Decorative separators. Exempt from a contrast floor under WCAG 1.4.11; measured and recorded. */
     val divider: Color,

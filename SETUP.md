@@ -15,7 +15,7 @@ is also given.
 |---|---|---|
 | `gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar` | You asked to own wrapper generation | Android Studio creates them on first open, or run `gradle wrapper` (step 3) |
 | `local.properties` | Machine-specific, git-ignored | Android Studio writes it on open, or create it by hand (step 2) |
-| Real duck launcher icon | Design work is Phase 5 | Placeholder accent icon ships now |
+| Real duck launcher icon | Design work is **Phase 14**, with the icon variants and activity-alias set. Phase 5b ships a placeholder mascot for empty states only, and does not own the launcher. | Placeholder accent icon ships now |
 
 `gradle/wrapper/gradle-wrapper.properties` **is** present and pins **Gradle 8.13** — the version AGP 8.13.2
 requires. Keep it.
