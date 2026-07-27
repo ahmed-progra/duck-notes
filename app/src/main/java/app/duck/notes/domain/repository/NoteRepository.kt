@@ -12,6 +12,12 @@ interface NoteRepository {
     /** Active (non-trashed) notes, newest first. [tagId] null means "all". */
     fun observeNotes(tagId: String? = null): Flow<List<Note>>
 
+    /** Trashed notes, most recently trashed first. The one view [observeNotes] excludes. */
+    fun observeTrashed(): Flow<List<Note>>
+
+    /** Active notes carrying no tag at all, newest first. */
+    fun observeUntagged(): Flow<List<Note>>
+
     fun observeNote(id: String): Flow<Note?>
 
     suspend fun getNote(id: String): Note?

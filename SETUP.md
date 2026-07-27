@@ -164,35 +164,36 @@ before reporting on a screenshot.** The same trap applies to `adb pull` of binar
 anything else streaming bytes through a redirect — it will produce silent garbage again during
 Phase 8's editor work and Phase 16's screenshot testing.
 
-### `strings` does not exist here — dex membership checks use Python
+### Dex membership: run `scripts/dex_probe.py`. Do not hand-write it.
 
-`strings` is not on this machine (Git Bash ships no binutils). A dex-membership check written as
-`unzip -p app-release.apk classes.dex | strings | grep -c DuckGallery` therefore prints
-`strings: command not found` on stderr and **`0`** on stdout — which reads exactly like "the class is
-absent." It is the same class of trap as the screencap one above: a check that reports success while
-measuring nothing. It has now bitten once per phase — Phase 4's corrupt captures, Phase 5b's release
-absence check — so assume it will bite again.
-
-Sanctioned form. Scan **`classes*.dex`**, not `classes.dex`: minSdk 26 has native multidex, and the
-release APK has two. Every probe must come with a **positive control** — a class that must be present —
-because a zero from a broken pipeline is indistinguishable from a zero that means what you want:
-
-```bash
-python -c "
-import zipfile, sys
-apk = 'app/build/outputs/apk/release/app-release-unsigned.apk'
-z = zipfile.ZipFile(apk)
-dex = [n for n in z.namelist() if n.startswith('classes') and n.endswith('.dex')]
-blob = b''.join(z.read(n) for n in dex)
-print(len(dex), 'dex files:', dex)
-for probe in ['DuckGallery', 'DuckTagChip', 'DuckIcon', 'MarkdownStyles']:
-    print(f'{probe}: {blob.count(probe.encode())}')
-"
+```
+gradle -p . assembleRelease
+python scripts/dex_probe.py
 ```
 
-**Reject the run unless the controls are non-zero.** Phase 5b's real output was 2 dex files,
-`DuckGallery` 0 with `DuckTagChip` 24 / `DuckIcon` 48 / `MarkdownStyles` 4 — the absence means something
-only because the other three do not.
+Exits non-zero and prints `FAIL` on any violation. Nothing to remember, nothing to retype.
+
+**Why this is a file and not a snippet.** `strings` is not on this machine (Git Bash ships no
+binutils), so `unzip -p app.apk classes.dex | strings | grep -c DuckGallery` prints
+`strings: command not found` to stderr and **`0`** to stdout — indistinguishable from "the class is
+absent". This section previously described the correct Python form in prose. **It did not work:** the
+check was hand-written a third time in Phase 6, `strings` was reached for again, and the fix was a
+*fourth* ad-hoc form (`grep -a -o`). A doc that has to be remembered before it helps is not a control.
+So the prose is gone and the executable stays.
+
+The three properties the ad-hoc versions kept losing, all now enforced by the script:
+
+- **`classes*.dex`, not `classes.dex`** — minSdk 26 has native multidex; the release APK has two.
+- **Positive controls** — a zero from a broken pipeline looks exactly like the zero you wanted. The
+  script asserts five classes are *present* and fails if any is not.
+- **A non-zero exit** — printing counts for a human to eyeball is how the last two slipped through.
+
+It also enforces CLAUDE.md's no-bear rule against the shipped bytes, filtering `android.location`'s
+`bearingAccuracy`. That check is what found `"syntax, like Bear"` inside `SAMPLE_NOTE` in Phase 6 — a
+string that had been shipping in the release APK since Phase 4.
+
+Add probes for a phase's new classes as arguments: `python scripts/dex_probe.py DuckShell MyNewThing`.
+Permanent ones belong in `MUST_BE_PRESENT` / `MUST_BE_ABSENT` at the top of the file.
 
 ### Emulator instability — class-level instrumented runs dying
 
@@ -252,3 +253,37 @@ compileSdk 35 · targetSdk 35 · minSdk 26 · JVM target 21.
 The Compose BOM was raised in Phase 4: `TextFieldBuffer.addStyle` — the styled `OutputTransformation`
 the markdown editor is built on — first ships in Compose Foundation 1.9.0. Newer BOMs (2026.x,
 foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
+
+---
+
+## Build environment traps on this machine
+
+Three things cost time in Phase 6. None is a project defect; all are easy to hit again.
+
+**1. There is no `gradle` on `PATH` and no wrapper in the repo.** The distribution Gradle already
+downloaded lives under the wrapper cache, and that is what to invoke:
+
+```
+~/.gradle/wrapper/dists/gradle-8.13-bin/5xuhj0ry160q40clulazy9h7d/gradle-8.13/bin/gradle.bat
+```
+
+Pass `-p "<repo root>"` rather than relying on the working directory — a tool that has `cd`'d
+elsewhere will otherwise fail with *"not part of the build defined by settings file"*.
+
+**2. Do not point `JAVA_HOME` at Android Studio's JBR.** `JAVA_HOME` is already set correctly to
+Temurin 21. The JBR lacks the `SunMSCAPI` security provider, so the `javax.net.ssl.trustStoreType=Windows-ROOT`
+setting in the user `gradle.properties` — the fix for TLS interception on this network — fails with
+`SSLInitializationException: Windows-ROOT not found` and every dependency download dies. Symptom looks
+like a network outage; cause is the JDK.
+
+**3. The Gradle module cache holds stale versions alongside the resolved one.** `material3-android`
+has both `1.3.0` and `1.4.0` in `modules-2/files-2.1`, and a `find | head -1` picks the wrong one.
+When reading library bytecode to justify a decision — which `ContrastTest` and `DuckShell` both do for
+Material's alpha values — confirm the version first:
+
+```
+gradle -p <root> -q app:dependencyInsight --configuration debugRuntimeClasspath --dependency material3
+```
+
+**PowerShell note:** `adb exec-out screencap -p > file.png` corrupts the PNG (a BOM and text encoding
+are prepended). Use `adb shell screencap -p /sdcard/x.png` followed by `adb pull`.

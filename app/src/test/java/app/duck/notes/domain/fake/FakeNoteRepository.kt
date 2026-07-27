@@ -24,9 +24,31 @@ class FakeNoteRepository : NoteRepository {
 
     fun current(id: String) = notes.value.find { it.id == id }
 
+    /**
+     * Removes the row outright, so [observeNote] emits null.
+     *
+     * Not the same as trashing: `DeleteNote` is a soft delete and the note stays observable. This is
+     * the purge case — Phase 14's 30-day sweep, or a sync deletion arriving — which is what makes
+     * `observeNote`'s null emission reachable at all.
+     */
+    fun hardDelete(id: String) {
+        notes.value = notes.value.filterNot { it.id == id }
+        savedTags -= id
+    }
+
     override fun observeNotes(tagId: String?): Flow<List<Note>> = notes.map { all ->
         all.filterNot { it.isTrashed }
             .filter { tagId == null || tagId in savedTags[it.id].orEmpty() }
+            .sortedByDescending { it.modifiedAt }
+    }
+
+    override fun observeTrashed(): Flow<List<Note>> = notes.map { all ->
+        all.filter { it.isTrashed }.sortedByDescending { it.trashedAt ?: 0L }
+    }
+
+    override fun observeUntagged(): Flow<List<Note>> = notes.map { all ->
+        all.filterNot { it.isTrashed }
+            .filter { savedTags[it.id].isNullOrEmpty() }
             .sortedByDescending { it.modifiedAt }
     }
 

@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +39,10 @@ import app.duck.notes.core.ui.DuckEmptyState
 import app.duck.notes.core.ui.DuckIconButton
 import app.duck.notes.core.ui.DuckTagChip
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
+import app.duck.notes.presentation.markdown.SAMPLE_NOTE
+import app.duck.notes.presentation.shell.DuckShell
+import app.duck.notes.presentation.shell.ShellActions
+import app.duck.notes.presentation.shell.flatten
 
 /**
  * The Phase 5a verification harness. **Debug source set only — never in a release APK.**
@@ -53,9 +58,14 @@ import app.duck.notes.presentation.markdown.MarkdownEditorScreen
  */
 @Composable
 fun DuckGalleryScreen() {
-    var spec by remember { mutableStateOf(DuckThemeSpec.DuckRed) }
-    var dark by remember { mutableStateOf(false) }
-    var showEditor by remember { mutableStateOf(false) }
+    // rememberSaveable, not remember: verifying the shell means checking each palette at BOTH pane
+    // modes, and the only way to change pane mode is to rotate — which recreates the activity. With
+    // plain `remember` every rotation snapped back to DuckRed/light/Tokens, so the Expanded half of
+    // the sweep could not be reached at all. Persisting across launches is still Phase 14's DataStore
+    // work; this only has to survive a configuration change.
+    var spec by rememberSaveable { mutableStateOf(DuckThemeSpec.DuckRed) }
+    var dark by rememberSaveable { mutableStateOf(false) }
+    var page by rememberSaveable { mutableStateOf(GalleryPage.Tokens) }
 
     DuckTheme(spec = spec, dark = dark) {
         Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
@@ -68,25 +78,59 @@ fun DuckGalleryScreen() {
                 Controls(
                     spec = spec,
                     dark = dark,
-                    showEditor = showEditor,
+                    page = page,
                     onSpec = { spec = it },
                     onDark = { dark = it },
-                    onShowEditor = { showEditor = it },
+                    onPage = { page = it },
                 )
-                if (showEditor) MarkdownEditorScreen() else TokenSheet()
+                when (page) {
+                    GalleryPage.Tokens -> TokenSheet()
+                    GalleryPage.Editor -> MarkdownEditorScreen(SAMPLE_NOTE)
+                    GalleryPage.Shell -> ShellPage()
+                }
             }
         }
     }
+}
+
+/** Three pages, one toggle row. A page exists when a criterion needs eyes rather than an assertion. */
+private enum class GalleryPage { Tokens, Editor, Shell }
+
+/**
+ * The shell on a fixture rather than on Room.
+ *
+ * Phase 6's palette work is checked by looking at a *populated* sidebar and note list across all
+ * eight themes, and the database on a fresh install is empty — so the page that verifies the colours
+ * would render two empty states. The fixture also keeps the harness from depending on Hilt, which
+ * the stateless `DuckShell` overload exists for.
+ *
+ * Interactive, not static: selecting a note and expanding a tag are the two things the accent bar
+ * and the chevron are for, and neither can be judged from a screenshot of one state.
+ */
+@Composable
+private fun ShellPage() {
+    var state by remember { mutableStateOf(ShellFixture.state) }
+    var expanded by remember { mutableStateOf(ShellFixture.initiallyExpanded) }
+
+    DuckShell(
+        state = state.copy(tagRows = ShellFixture.tree.flatten(expanded)),
+        actions = ShellActions(
+            onFilter = { state = ShellFixture.apply(state, it) },
+            onSelectNote = { id -> state = state.copy(selectedNoteId = id, selectedNoteBody = ShellFixture.bodyOf(id)) },
+            onClearSelection = { state = state.copy(selectedNoteId = null, selectedNoteBody = "") },
+            onToggleTag = { path -> expanded = if (path in expanded) expanded - path else expanded + path },
+        ),
+    )
 }
 
 @Composable
 private fun Controls(
     spec: DuckThemeSpec,
     dark: Boolean,
-    showEditor: Boolean,
+    page: GalleryPage,
     onSpec: (DuckThemeSpec) -> Unit,
     onDark: (Boolean) -> Unit,
-    onShowEditor: (Boolean) -> Unit,
+    onPage: (GalleryPage) -> Unit,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -103,11 +147,16 @@ private fun Controls(
                 DuckTagChip(entry.label, selected = entry == spec, onClick = { onSpec(entry) })
             }
         }
+        // Light/dark and the page selector on separate rows: five chips do not fit a portrait phone,
+        // and the overflowing one rendered as a single letter per line rather than clipping.
         Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
             DuckTagChip("Light", selected = !dark, onClick = { onDark(false) })
             DuckTagChip("Dark", selected = dark, onClick = { onDark(true) })
-            DuckTagChip("Tokens", selected = !showEditor, onClick = { onShowEditor(false) })
-            DuckTagChip("Editor", selected = showEditor, onClick = { onShowEditor(true) })
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
+            GalleryPage.entries.forEach { entry ->
+                DuckTagChip(entry.name, selected = entry == page, onClick = { onPage(entry) })
+            }
         }
     }
 }

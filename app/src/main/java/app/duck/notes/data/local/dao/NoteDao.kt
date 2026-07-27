@@ -50,6 +50,30 @@ abstract class NoteDao {
     )
     abstract fun notesByTag(tagId: String): Flow<List<NoteEntity>>
 
+    /**
+     * The sidebar's Trash row. Ordered by [NoteEntity.trashedAt], not `modified_at`: the useful
+     * order in a trash view is when it was thrown away, and Phase 14's 30-day purge counts from the
+     * same column. Trashed rows are the one case `observeNotes` deliberately hides.
+     */
+    @Query("SELECT * FROM notes WHERE is_trashed = 1 ORDER BY trashed_at DESC")
+    abstract fun observeTrashed(): Flow<List<NoteEntity>>
+
+    /**
+     * The sidebar's Untagged row — a note with no `note_tags` row at all.
+     *
+     * A query rather than scanning bodies with `TagScanner`: `note_tags` is already the parsed
+     * result of every save, so re-deriving it per emission would both cost more and risk
+     * disagreeing with what the tag tree shows.
+     */
+    @Query(
+        """
+        SELECT * FROM notes
+        WHERE is_trashed = 0 AND id NOT IN (SELECT note_id FROM note_tags)
+        ORDER BY modified_at DESC
+        """,
+    )
+    abstract fun observeUntagged(): Flow<List<NoteEntity>>
+
     // --- Search -------------------------------------------------------------
 
     /**

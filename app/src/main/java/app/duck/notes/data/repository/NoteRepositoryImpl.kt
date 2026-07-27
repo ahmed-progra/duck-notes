@@ -17,6 +17,12 @@ class NoteRepositoryImpl @Inject constructor(
         (if (tagId == null) notes.observeNotes() else notes.notesByTag(tagId))
             .map { rows -> rows.map { it.toDomain() } }
 
+    override fun observeTrashed(): Flow<List<Note>> =
+        notes.observeTrashed().map { rows -> rows.map { it.toDomain() } }
+
+    override fun observeUntagged(): Flow<List<Note>> =
+        notes.observeUntagged().map { rows -> rows.map { it.toDomain() } }
+
     override fun observeNote(id: String): Flow<Note?> =
         notes.observeNote(id).map { it?.toDomain() }
 

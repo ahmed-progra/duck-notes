@@ -100,6 +100,38 @@ class ContrastTest {
         // `accent` is the checkbox's checked fill, whose edge has to be perceivable against whatever
         // it sits on.
         Triple("accent", "surfaceElevated", 3.0),
+
+        // --- Phase 6 shell ------------------------------------------------
+        // The shell paints 21 (foreground, background) pairs across the sidebar, note list and
+        // editor, and enumerating them added NOTHING to this list — every one was already here.
+        // That is the Phase 5/5b foresight paying off rather than luck: `onSurface`, `proseMuted`,
+        // `chromeMuted` and `accent` were all floored against `surfaceElevated` specifically because
+        // "Phase 6 puts this in the sidebar", and the shell then only ever paints on `surface` or
+        // `surfaceElevated`.
+        //
+        // Two pairs it would have added were designed out instead of floored — see
+        // [tintedActiveRowsAreRecordedPendingAPaletteInput], which is why the active row is a bar
+        // and a font weight rather than a `tagSurface` fill.
+        //
+        // Two Material alpha composites do reach the screen and are exempt rather than absent. Both
+        // were read out of the material3 1.4.0 bytecode — the version the build actually resolves,
+        // confirmed with `dependencyInsight`, since the Gradle cache also holds a stale 1.3.0 AAR
+        // that a `find` picks up first. The values are identical in both, but the habit matters.
+        //
+        // - The drawer scrim. `DrawerDefaults.getScrimColor` reads `ScrimTokens.ContainerColor` and
+        //   applies `Color.copy(alpha = 0.32f)`; our projection pins that token to black. Exempt:
+        //   occlusion is its function, and 1.4.3 governs text meant to be perceived. What must stay
+        //   legible is the sheet in front, an opaque `surfaceElevated` whose pairs are floored above.
+        // - The ripple. `RippleDefaults.RippleAlpha` (in `androidx.compose.material3`) is
+        //   `RippleAlpha(0.16f, 0.10f, 0.08f, 0.10f)`; `material-ripple`'s field order is dragged,
+        //   focused, hovered, pressed, so pressed is 0.10f. It resolves against `LocalContentColor`
+        //   because the default `RippleConfiguration` leaves colour Unspecified — a pressed sidebar
+        //   row is `onSurface` at 10% over `surfaceElevated`. Exempt: transient feedback, not a
+        //   state. It says nothing the accent bar and the SemiBold weight do not, and both of those
+        //   survive the finger lifting.
+        //
+        // Neither can be asserted here: this suite compares two OPAQUE colours, which is exactly the
+        // property both lack. Recorded because the prerequisite forbids silence, not alpha.
     )
 
     /**
@@ -473,6 +505,52 @@ class ContrastTest {
             Sepia dark       divider 1.38  surfaceElevated 1.13
             Midnight light   divider 1.26  surfaceElevated 1.07
             Midnight dark    divider 1.45  surfaceElevated 1.16
+            """.trimIndent(),
+            recorded,
+        )
+    }
+
+    /**
+     * Why the shell's active row is a bar and a font weight rather than a tint. Phase 6.
+     *
+     * The obvious build for "this note is open" / "this sidebar row is selected" is to fill the row
+     * with `tagSurface`. Enumerating that fill's pairs before writing it — the duty [duckPairs]
+     * carries — is what rejected it, on two counts measured below:
+     *
+     * - **`proseMuted` on `tagSurface`** is a note card's preview (14sp) and timestamp (12sp). Both
+     *   are normal text under WCAG 1.4.3 and owe 4.5; the large-text exemption starts at 18pt, or
+     *   14pt bold. Three light palettes land under or within a rounding error of the floor.
+     * - **`accent` on `tagSurface`** is the active bar, a 1.4.11 graphic owing 3.0. SepiaLight is the
+     *   worst, and it is the same failure `DuckTagChip` already records for its leading icon.
+     *
+     * `onSurface` on `tagSurface` is fine everywhere — the title alone would have survived the tint.
+     * It is the quiet text and the bar that do not, which is exactly the pair a "looks fine to me"
+     * review misses.
+     *
+     * Recorded rather than floored, because nothing in `src/main` paints this combination: the rows
+     * sit on `surface` and `surfaceElevated`, whose pairs are all already floored above. If a later
+     * phase wants a tinted row, these are the numbers it has to move first.
+     */
+    @Test
+    fun tintedActiveRowsAreRecordedPendingAPaletteInput() {
+        val recorded = palettes().joinToString("\n") { p ->
+            "%-16s proseMuted %.4f  accent %.4f  onSurface %.4f".format(
+                p.name,
+                contrast(p.colors.proseMuted, p.colors.tagSurface),
+                contrast(p.colors.accent, p.colors.tagSurface),
+                contrast(p.colors.onSurface, p.colors.tagSurface),
+            )
+        }
+        assertEquals(
+            """
+            DuckRed light    proseMuted 4.5404  accent 3.4591  onSurface 11.3559
+            DuckRed dark     proseMuted 5.5036  accent 3.2531  onSurface 12.3598
+            Graphite light   proseMuted 4.4751  accent 5.0578  onSurface 12.4014
+            Graphite dark    proseMuted 5.2741  accent 4.2115  onSurface 11.2084
+            Sepia light      proseMuted 4.5148  accent 2.7201  onSurface 9.8193
+            Sepia dark       proseMuted 5.0415  accent 4.2968  onSurface 9.9878
+            Midnight light   proseMuted 4.7403  accent 4.2551  onSurface 12.4270
+            Midnight dark    proseMuted 5.2325  accent 3.8914  onSurface 11.2198
             """.trimIndent(),
             recorded,
         )

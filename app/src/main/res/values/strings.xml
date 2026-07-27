@@ -1,3 +1,22 @@
 <resources>
     <string name="app_name">Duck Notes</string>
+
+    <!-- Phase 6 navigation shell. Sidebar rows, pane titles, empty states. -->
+    <string name="shell_notes">Notes</string>
+    <string name="shell_untagged">Untagged</string>
+    <string name="shell_todo">Todo</string>
+    <string name="shell_today">Today</string>
+    <string name="shell_locked">Locked</string>
+    <string name="shell_archive">Archive</string>
+    <string name="shell_trash">Trash</string>
+    <string name="shell_pinned">Pinned</string>
+    <string name="shell_tags">Tags</string>
+
+    <string name="shell_open_sidebar">Open sidebar</string>
+    <string name="shell_expand_tag">Show tags under %1$s</string>
+    <string name="shell_collapse_tag">Hide tags under %1$s</string>
+
+    <string name="shell_empty_notes">Nothing here yet</string>
+    <string name="shell_empty_tags">No tags yet — write #a/tag in a note</string>
+    <string name="shell_no_note_selected">Pick a note</string>
 </resources>

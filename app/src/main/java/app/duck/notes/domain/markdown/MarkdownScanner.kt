@@ -23,6 +23,30 @@ data class LineCarry(val fenceChar: Char? = null, val fenceLength: Int = 0) {
  */
 object MarkdownScanner {
 
+    /**
+     * Does [body] contain at least one **open** task line? The sidebar's Todo filter, Phase 6.
+     *
+     * A third view over [scanLine] rather than a `- [ ]` regex beside it. The regex would be shorter
+     * and would be a second implementation of one syntax — which is the defect Phase 9 documents for
+     * `[[WikiLink]]`, where `ResolveWikiLinks` and this scanner disagree about fences. Going through
+     * [scanLine] means the filter is fence-correct for free: a `- [ ]` inside a fenced block yields
+     * `FENCE_BODY` and never reaches the block prefix, so it does not count. It also means the rule
+     * can only ever change in one place.
+     *
+     * Short-circuits on the first hit, so the common case reads a few lines rather than the note.
+     */
+    fun hasOpenTask(body: String): Boolean {
+        var carry = LineCarry()
+        var base = 0
+        for (line in body.lineSequence()) {
+            val (tokens, next) = scanLine(line, base, carry)
+            if (tokens.any { it.kind == TokenKind.TASK_OPEN }) return true
+            carry = next
+            base += line.length + 1
+        }
+        return false
+    }
+
     /** Scans [line], which starts at absolute [base], under [carry]. Returns its tokens and the next carry. */
     fun scanLine(line: String, base: Int, carry: LineCarry): Pair<List<Token>, LineCarry> {
         val tokens = mutableListOf<Token>()

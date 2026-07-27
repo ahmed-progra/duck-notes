@@ -55,6 +55,8 @@ ksp {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    // collectAsStateWithLifecycle — the shell must stop collecting Room flows when backgrounded.
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)
 
     implementation(platform(libs.androidx.compose.bom))
@@ -63,8 +65,12 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    // Disclosure chevrons for the sidebar tag tree. material3 pulls this at runtime only.
+    implementation(libs.androidx.material.icons.core)
 
     implementation(libs.hilt.android)
+    // hiltViewModel() only. No NavHost — Phase 6 derives panes from state, not from routes.
+    implementation(libs.hilt.navigation.compose)
     ksp(libs.hilt.compiler)
 
     implementation(libs.room.runtime)

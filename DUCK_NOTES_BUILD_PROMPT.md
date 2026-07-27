@@ -322,6 +322,191 @@ tag tree (nested, collapsible)
 
 **Success:** Rotation and split-screen preserve state. Back stack correct on both form factors.
 
+### Two deviations from the spec above, and why
+
+Both were taken deliberately. Neither is a shortcut — each *removes* work the spec's version creates.
+
+**1. No Navigation Compose. Panes are derived from state.** A list-detail layout that also has a
+`NavHost` stores `selectedNoteId` twice — once in a route argument, once in the ViewModel — and every
+Expanded↔Compact resize then has to reconcile a back stack against pane state. Deriving the panes from
+one piece of state deletes the reconciliation instead of implementing it, and back becomes a four-line
+`BackHandler` that is enabled only on Compact, because that is the only mode where anything is stacked.
+The type-safety the spec wants from routes is a `ShellFilter` sealed interface, checked by the compiler
+rather than by a serialiser. Revisit if a phase introduces a genuinely new destination — settings,
+Phase 12's lock screen — rather than a pane.
+
+**2. No `WindowSizeClass`. `paneModeFor(Dp)` is a pure function.** `calculateWindowSizeClass` is
+experimental, soft-deprecated in favour of the adaptive libraries, needs an `Activity` handle and
+another dependency, and **cannot be tested off-device** — the only way to check its breakpoints is to
+drag a window. A size class *is* a width threshold, so `paneModeFor` is the whole of it, and
+`ShellStateTest.paneBreakpointsAreMaterialsOwn` asserts 599/600/839/840 on the JVM in milliseconds.
+Material's own numbers, kept.
+
+There is a third, smaller one: **Medium (600–839dp) shows list + editor with the sidebar still in the
+drawer**, not three panes. Three panes at that width leave the editor too narrow to read a serif body
+in, which is the one thing the editor exists to do.
+
+### Sidebar rows: all seven filter, and two needed a query
+
+Five are fields `Note` already carries and cost nothing (`All` = not archived, `Today` via the injected
+`Clock`, `Locked`, `Archive`, and `Todo`). `Untagged` and `Trash` each needed one `NoteDao` query,
+because `observeNotes` hides trashed rows by contract and knows nothing about tag membership.
+
+**`Todo` goes through `MarkdownScanner.scanLine`, not a `- [ ]` regex.** The regex is shorter and is a
+second implementation of one syntax — the defect Phase 9 documents for `[[WikiLink]]`, where
+`ResolveWikiLinks` and the scanner disagree about fences. Reusing the scanner makes the filter
+fence-correct for free (a task inside a code block yields `FENCE_BODY` and never reaches the block
+prefix) and means the rule can only ever change in one place.
+
+**`Locked` is empty until Phase 12** and that is the honest result, not a stub: the row filters
+`isLocked` correctly and finds nothing, which is what "no locked notes" means today.
+`DuckShellViewModelTest.lockedIsEmptyUntilPhase12ButFiltersCorrectly` proves it is a real filter by
+seeding a locked note and watching the same row find it.
+
+**No search field.** The spec's layout puts one in the note-list header. A field that accepts text and
+does nothing is not a stub, it is a lie in the UI, and making it true is Phase 10's entire Build list —
+debounce, operators, `snippet()` highlighting. Phase 5b deferred `DuckSearchField` on the same ground.
+The slot is there and empty on purpose.
+
+### What the token layer's foresight bought
+
+The shell paints 21 (foreground, background) pairs and **added nothing to `ContrastTest.duckPairs`** —
+every one was already floored. That is not luck: Phase 5 and 5b floored `onSurface`, `proseMuted`,
+`chromeMuted` and `accent` against `surfaceElevated` specifically because "Phase 6 puts this in the
+sidebar", and the shell only ever paints on `surface` or `surfaceElevated`.
+
+Two pairs it *would* have added were designed out instead. The obvious active-row treatment is a
+`tagSurface` fill, and enumerating that fill's pairs before writing it rejected it twice over:
+`proseMuted` on `tagSurface` is **4.4751 in GraphiteLight** — under the 4.5 a 12sp timestamp owes as
+normal text, with 4.5404 and 4.5148 in two more palettes — and `accent` on `tagSurface` is **2.7201 in
+SepiaLight**, under the 3:1 a graphic owes, the same number `DuckTagChip` already records for its
+leading icon. `onSurface` on `tagSurface` is fine everywhere; it is the quiet text and the bar that
+fail, which is exactly what a "looks fine to me" review misses.
+
+So the active row is an **`accent` bar plus a SemiBold weight** — two signals, never colour alone, both
+sitting on surfaces already floored. `ContrastTest.tintedActiveRowsAreRecordedPendingAPaletteInput`
+records all three columns across all eight palettes, so a future phase that wants a tinted row knows
+which numbers it has to move first.
+
+**Rows are `Modifier.selectable`, not `NavigationDrawerItem`,** for the same reason: M3 defaults
+`selectedContainerColor` to `secondaryContainer`, which our projection maps to `tagSurface` — 1.04–1.16
+on `surfaceElevated`, already recorded as a ghost tint. Overriding it in both states leaves the
+component supplying only a touch target, a ripple and selected semantics, all of which `selectable`
+gives directly with fewer defaults to fight. The one M3 container that does reach the screen is
+`ModalDrawerSheet`'s, which defaults to `surfaceContainerLow` → our `surface`; `DuckShell` passes
+`surfaceElevated` explicitly, or the sidebar would render on the page colour **only on phones**.
+
+### Two Material alpha composites reach the screen, and both are exempt
+
+The Phase 5 prerequisite forbids silence about a colour on screen that is in no palette. No component
+here gains `enabled`, but two arrive anyway. Read from the `material3 1.4.0` bytecode — the version the
+build resolves, confirmed with `dependencyInsight`, since the cache also holds a stale 1.3.0 AAR:
+
+- **Drawer scrim.** `DrawerDefaults.getScrimColor` reads `ScrimTokens.ContainerColor` and applies
+  `copy(alpha = 0.32f)`. **Exempt: occlusion is its function.** 1.4.3 governs text meant to be
+  perceived; what must stay legible is the opaque sheet in front, whose pairs are all floored.
+- **Ripple.** `RippleDefaults.RippleAlpha` is `RippleAlpha(0.16f, 0.10f, 0.08f, 0.10f)` —
+  `material-ripple`'s field order is dragged, focused, hovered, pressed, so pressed is 0.10f — resolved
+  against `LocalContentColor`. A pressed sidebar row is `onSurface` at 10% over `surfaceElevated`.
+  **Exempt: transient feedback, not a state.** It says nothing the bar and the weight do not, and both
+  of those survive the finger lifting.
+
+Neither can live in `ContrastTest`: that suite compares two **opaque** colours, which is precisely the
+property both lack. Recorded in `duckPairs`' KDoc and in `DuckShell`'s.
+
+### State survives via `SavedStateHandle` only — no `rememberSaveable`
+
+Every piece of shell state (filter, selection, expanded tag paths) lives in `SavedStateHandle`. This is
+not belt-and-braces; it fixes a specific bug. On Compact the sidebar composes inside a
+`ModalDrawerSheet` and on Expanded inside a `Row`, so **crossing 600dp changes the composition position
+`rememberSaveable` keys on** — the saver finds no entry and the expanded set silently resets. A resize
+would lose state that a rotation preserves, which is the confusing direction. A `SavedStateHandle` entry
+has no composition key at all. `ShellStateRestorationTest` simulates process death by rebuilding the
+ViewModel from a handle seeded with the first one's contents.
+
+The editor takes a `String` and deliberately **not** a ViewModel: autosave, the note id and the save
+path are Phase 8's Build list. The consequence is that edits die on rotation while the *selection*
+survives, and its buffer is `remember`ed keyed on the text so selecting a different note replaces it —
+an unkeyed `rememberTextFieldState` would ignore the new argument, and the failure would look like
+"tapping a note does nothing".
+
+### Two defects that 234 green unit tests did not catch
+
+Both were found by installing the APK and looking at it, and both are recorded because the lesson is
+the same one Phase 5 wrote down about the harness: **a check that cannot see the failure mode cannot
+find it.**
+
+1. **Crash on first launch: `Key "todo" was already used`.** The sidebar is one `LazyColumn` holding
+   the fixed rows *and* the tag tree. The seed data contains a `#todo` note, so a tag row's `path` was
+   `"todo"` — the same string as `ShellFilter.Todo.key`, and Compose throws on a duplicate key. Every
+   unit test passed, because the collision lived in the composable's `items(key = …)` and not in the
+   state. `ShellFilter.Tag` already namespaces with a `tag:` prefix; the sidebar simply was not using
+   it. Fixed, and `ShellStateTest.noTagPathCanCollideWithAFixedRowKey` now asserts the property for
+   adversarial paths rather than the one path that happened to be seeded.
+2. **Content under the status bar, on wide screens only.** `Scaffold`'s `topBar` slot does *not* apply
+   window insets to arbitrary content — only its own `TopAppBar` does — and Expanded/Medium lay panes
+   out in a bare `Row` with no `Scaffold` and no `ModalDrawerSheet` to supply them. So the Compact
+   sidebar button drew over the clock, and in Expanded the sidebar's first row did too. Compact was
+   fixed with `statusBarsPadding()` on the button, Expanded and Medium with the same on their pane
+   `Row`. **The Expanded case is only visible above 840dp**, which a phone-only check never reaches.
+
+**Known ceiling, not fixed:** in Expanded and Medium the note list and sidebar can scroll their last
+row under the gesture pill, because only the Compact path routes through a `Scaffold` that supplies
+bottom insets. Cosmetic, and the fix is a `contentPadding` on both `LazyColumn`s that must not
+double-count Compact's `Scaffold` padding — worth doing when Phase 8 adds the editor's bottom toolbar
+and has to solve the same problem properly.
+
+### The four gallery-only criteria, checked across palettes
+
+These four cannot be asserted on the JVM and `MainActivity` has no theme switcher, so they were
+checked on the gallery's Shell page. **DuckRed light alone is not a check** — Phase 5 CLOSED says so
+about the disabled-checked case, and it applies here for the same reason: DuckRed light is the
+palette *least* likely to expose a weak tint or a flat plane.
+
+Checked in Compact (drawer open) and Expanded, across DuckRed light, Sepia light, Sepia dark and
+Midnight dark:
+
+1. **Active-row accent bar — passes everywhere.** Both the sidebar row and the note card show a bar
+   plus a SemiBold label in every palette. **Sepia light is visibly the weakest** — a muted tan bar on
+   cream — which is what `accent` sitting near its 3.0 floor looks like. The weight is doing real work
+   there, which is the argument for two signals rather than one.
+2. **Sidebar plane separation — passes on dark, effectively fails on Sepia light.** On Midnight dark
+   the sidebar is obviously a different plane. On **SepiaLight the sidebar and the note list read as
+   one continuous cream sheet**; the only thing marking the boundary is the 1px divider. This is not a
+   regression — `dividerAndElevationAreRecorded` already pins `surfaceElevated on surface` at **1.06
+   in SepiaLight**, the lowest of eight, against 1.13–1.19 on the darks — but it does mean
+   **`VerticalDivider` is load-bearing on the light palettes, not decorative.** Noted in `DuckShell`
+   so nobody deletes it after looking at one dark theme.
+3. **The `NavigationDrawerItem` ghost tint (build risk #2) — cannot occur.** The predicted failure was
+   M3 defaulting `selectedContainerColor` to `secondaryContainer` → our `tagSurface`, at 1.04–1.16 on
+   `surfaceElevated`. Rows are `Modifier.selectable`, so there is no `selectedContainerColor` to
+   inherit. Confirmed by eye in the drawer in all four palettes: the selected row's background is
+   **identical to its neighbours** — the bar and the weight are the entire difference. The risk was
+   designed out rather than tuned down.
+4. **Tag tree at three levels — passes.** `projects` › `duck` › `ui`/`sync` renders with correct depth
+   indentation and chevrons, `personal` shows as the expandable-but-not-selectable intermediate, and
+   both pinned tags appear in the pinned section with `personal/recipes` showing its full path.
+
+Three harness defects were fixed to make this checkable at all, and each is the same lesson as Phase
+5's missing checkbox state — **a harness that cannot show the state cannot verify it**:
+
+- The fixture opened with **nothing selected**, so the active-row states the page exists to verify
+  were invisible until someone thought to tap. It now opens with the first note selected.
+- Gallery state was plain `remember`, so **every rotation reset it to DuckRed/light/Tokens** — and
+  rotation is the only way to reach Expanded. Now `rememberSaveable`.
+- The page chips **overflowed a portrait phone**, rendering "Shell" one letter per line.
+
+### Verification
+
+234 JVM unit tests, 21 instrumented on a Pixel 7 API 35 emulator, lint clean. Release APK dex-probed:
+`DuckShellViewModel` / `DuckSidebar` / `DuckNoteCard` present, `ShellFixture` / `DuckGallery` /
+`GalleryPage` absent. Checked on device in Compact (drawer, back, note selection) and Expanded (three
+panes, active bar, editor rendering a real note body).
+
+Both remaining `bear` strings in the tree were removed under the global contract — one was in
+`SAMPLE_NOTE`, which **ships in the release APK**, and one in a `GoldenSpanTest` comment. The only
+`bear` bytes left in release are `bearingAccuracy` from the `android.location` framework stubs.
+
 ### Blocking prerequisite — disabled states
 
 Two things go wrong at the first disabled state, and only one of them is about contrast.

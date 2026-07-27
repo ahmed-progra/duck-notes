@@ -78,7 +78,7 @@ class GoldenSpanTest {
 
     @Test
     fun tagStaysFullyVisible() =
-        // The `#` is the tag, not syntax around it — Bear shows it and so do we.
+        // The `#` is part of the tag, not syntax wrapped around it, so nothing is concealed.
         assertConceals("filed under #projects/duck today", "filed under #projects/duck today")
 
     @Test
