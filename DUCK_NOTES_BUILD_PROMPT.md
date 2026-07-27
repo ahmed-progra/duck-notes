@@ -471,12 +471,18 @@ Midnight dark:
    cream — which is what `accent` sitting near its 3.0 floor looks like. The weight is doing real work
    there, which is the argument for two signals rather than one.
 2. **Sidebar plane separation — passes on dark, effectively fails on Sepia light.** On Midnight dark
-   the sidebar is obviously a different plane. On **SepiaLight the sidebar and the note list read as
-   one continuous cream sheet**; the only thing marking the boundary is the 1px divider. This is not a
+   the sidebar is obviously a different plane. On **SepiaLight the panes do not separate as planes at
+   all**: the elevated fill contributes nothing and the 1px rule is what marks the boundary. Not a
    regression — `dividerAndElevationAreRecorded` already pins `surfaceElevated on surface` at **1.06
    in SepiaLight**, the lowest of eight, against 1.13–1.19 on the darks — but it does mean
-   **`VerticalDivider` is load-bearing on the light palettes, not decorative.** Noted in `DuckShell`
-   so nobody deletes it after looking at one dark theme.
+   **`VerticalDivider` is load-bearing on the light palettes, not decorative.**
+
+   The rule marks the boundary *precisely*, **not solely** — nav rows, cards and prose differ by
+   content, and that second cue is what keeps `divider` exempt from a 1.4.11 floor. So "do not delete
+   it" is a **Duck design rule, not a WCAG one**, and is labelled that way in `ContrastTest` beside
+   the 1.2 tint floor: a rule that reads as conformance cannot be traded off, and a later phase may
+   legitimately want to trade this one. If the pane rule ever needs more weight that is a **new slot,
+   not a darker `divider`** — one hex would make every card separator heavy in all eight palettes.
 3. **The `NavigationDrawerItem` ghost tint (build risk #2) — cannot occur.** The predicted failure was
    M3 defaulting `selectedContainerColor` to `secondaryContainer` → our `tagSurface`, at 1.04–1.16 on
    `surfaceElevated`. Rows are `Modifier.selectable`, so there is no `selectedContainerColor` to
@@ -675,6 +681,22 @@ needs deciding each time is whether the control still reads as inactive, and tha
 - RTL support (Arabic). Bidi-safe markdown rendering.
 
 **Success:** Kill the app mid-typing — no data loss. 10k-word note scrolls at 60fps.
+
+**Carried from Phase 6 — drop the editor's saver when autosave lands**
+
+`MarkdownEditorScreen` holds its buffer in `rememberSaveable(text, saver = TextFieldState.Saver)`.
+That is `rememberTextFieldState` expanded by hand, and it is right for Phase 6: plain `remember`
+silently loses what was typed on a rotation, which is a regression Phase 4 did not have.
+
+But the saver serialises the **whole note body** into the saved-instance `Bundle`, so every open note
+round-trips a Binder transaction — a **1MB per-process buffer already shared with
+`DuckShellViewModel`'s `SavedStateHandle`** — and `TransactionTooLargeException` lands well below the
+nominal limit. This phase's own 10k-word note target is in range.
+
+Once autosave (400ms debounce, above) puts the body in Room, the `Bundle` only needs the **note id**.
+**Drop the saver then rather than inheriting it:** restore becomes "read the id, re-query Room", which
+is also what makes *"kill the app mid-typing — no data loss"* true for real rather than true up to a
+`Bundle` size.
 
 ---
 

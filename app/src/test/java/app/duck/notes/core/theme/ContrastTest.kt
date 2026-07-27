@@ -10,13 +10,19 @@ import kotlin.math.pow
 /**
  * The accessibility criterion, asserted rather than claimed.
  *
- * Two floors here are **Duck rules, not WCAG rules**, and are labelled as such so nobody reads them
+ * Three rules here are **Duck rules, not WCAG rules**, and are labelled as such so nobody reads them
  * as conformance:
  * - `1.2:1` "visibly distinct" for the four tints. This is what stops a code block from vanishing —
  *   Phase 4's `Color(0x14000000)` composites to `#1A1A1C` on `#1C1C1E`, a ratio of 1.03:1.
- * - `divider` and `surfaceElevated` are **recorded, not floored**. WCAG 1.4.11 exempts decorative
- *   separators, and `#E5E5EA` cannot reach 3:1 on white without becoming a heavy grey line. Their
- *   measured values are asserted so a change shows up in a diff instead of passing silently.
+ * - A disabled control must differ from an enabled one —
+ *   [everyDisabledStateIsDistinguishableFromEnabled].
+ * - **The vertical pane rule must not be deleted** — see [dividerAndElevationAreRecorded], which is
+ *   also where `divider`'s exemption is argued. Phase 6 made the old one-line reason ("1.4.11 exempts
+ *   decorative separators") wrong for one of `divider`'s two roles.
+ *
+ * `divider` and `surfaceElevated` remain **recorded, not floored**: `#E5E5EA` cannot reach 3:1 on
+ * white without becoming a heavy grey line. Their measured values are asserted so a change shows up
+ * in a diff instead of passing silently.
  *
  * The WCAG maths is implemented here rather than taken from `Color.luminance()`: this is the
  * assertion, so it should not share an implementation with anything it might be asserting about.
@@ -485,7 +491,50 @@ class ContrastTest {
         )
     }
 
-    /** No floor, but pinned: a change to either must be a visible diff, not a silent drift. */
+    /**
+     * No floor, but pinned: a change to either must be a visible diff, not a silent drift.
+     *
+     * **Read the two columns together — the elevation column is why the divider column matters.**
+     * Light palettes sit at 1.06–1.08, darks at 1.13–1.19. Checked on device in Phase 6 across all
+     * eight palettes, **at SepiaLight's 1.06 the sidebar and note list do not separate as planes at
+     * all**: the elevated fill contributes nothing, and the vertical rule is what marks the boundary.
+     *
+     * So the old one-line reason — *"WCAG 1.4.11 exempts decorative separators"* — is **false for the
+     * vertical pane rule.** That rule is information. The horizontal rules between note cards are
+     * still decorative; the cards' own rhythm carries those. One token, two roles.
+     *
+     * **The exemption survives, and the ground has to be stated precisely.** The rule marks the pane
+     * boundary *precisely*, **not solely**: a column of nav rows, a column of cards and a column of
+     * prose are distinguishable from each other by content, so a layout-region edge that already has
+     * a second cue is not what 1.4.11's 3:1 is for. That plus the fact that `divider` cannot reach
+     * 3:1 without becoming a heavy grey line in all eight palettes is what keeps this recorded rather
+     * than floored.
+     *
+     * Do **not** restate this as "the rule is the sole indicator". It is the wrong word for the
+     * conclusion and it contradicts the escape clause the exemption depends on — if the rule really
+     * were the only cue, 1.4.11 would plausibly apply at 1.25:1 and the exemption would need much
+     * weaker ground. The screenshot observation was right; that word was not.
+     *
+     * ## Duck design rule, not a WCAG one: do not delete the vertical pane rule
+     *
+     * Labelled the same way as the 1.2 tint floor and
+     * [everyDisabledStateIsDistinguishableFromEnabled], and the labelling is the point: **a rule that
+     * reads as WCAG conformance cannot be traded off, and a future phase may legitimately want to
+     * trade this one.** It is a Duck rule, so it is negotiable — deliberately, and with eyes open.
+     *
+     * The rule: removing the vertical rule after checking MidnightDark — 1.16, where the planes do
+     * separate unaided — would be a silent regression on every light palette. `DuckShell` carries the
+     * same note at the call site so the two cannot drift.
+     *
+     * ## If the pane rule ever needs more weight, that is a NEW SLOT
+     *
+     * Not a darker `divider`. The two roles have different weight requirements, and darkening the one
+     * hex would make **every card separator heavy across all eight palettes** — a change that would
+     * look free precisely because it is one hex in one place.
+     *
+     * Same shape as `chromeMuted`'s KDoc: a reason that was true when written and became false when a
+     * new caller arrived. Phase 6's three-pane layout is that caller.
+     */
     @Test
     fun dividerAndElevationAreRecorded() {
         val recorded = palettes().joinToString("\n") { p ->

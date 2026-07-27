@@ -61,7 +61,18 @@ data class DuckColors(
      * behaviour.
      */
     val chromeMuted: Color,
-    /** Decorative separators. Exempt from a contrast floor under WCAG 1.4.11; measured and recorded. */
+    /**
+     * Separator rules. Recorded, not floored — but **two roles, not one**, since Phase 6.
+     *
+     * Horizontal rules between note cards are decorative. The **vertical rule between panes is not**:
+     * `surfaceElevated on surface` is 1.06 in SepiaLight, where the panes do not separate as planes
+     * and the rule is what marks the boundary. **Duck rule, not a WCAG one: do not delete it.**
+     *
+     * If that rule ever needs more weight, **add a slot — do not darken this hex.** One hex looks
+     * like a free fix and would make every card separator heavy in all eight palettes.
+     *
+     * `ContrastTest.dividerAndElevationAreRecorded` has the numbers and the full argument.
+     */
     val divider: Color,
     /** Background of code spans and fenced blocks. */
     val codeSurface: Color,

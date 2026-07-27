@@ -144,11 +144,16 @@ fun DuckShell(
         // sidebar's first row draws under the clock — and it does so ONLY on wide screens, which is
         // the kind of defect a phone-only check never sees.
         // The VerticalDividers below are NOT decoration — do not remove them to "let the elevation do
-        // the work". `surfaceElevated on surface` is 1.06 in SepiaLight, the lowest of the eight
-        // palettes, and checked on device the sidebar and note list read as one continuous cream
-        // sheet there: the divider is the only thing marking the pane boundary. On the dark palettes
-        // (1.13-1.19, MidnightDark best) the planes do separate on their own, which is exactly why a
+        // the work". `surfaceElevated on surface` is 1.06 in SepiaLight, lowest of the eight, and
+        // checked on device the panes do not separate as planes there at all: the elevated fill
+        // contributes nothing and the rule is what marks the boundary. On the dark palettes
+        // (1.13-1.19, MidnightDark best) the planes do separate unaided, which is exactly why a
         // reviewer looking at one dark theme would conclude the lines are redundant.
+        //
+        // Not the *sole* cue — nav rows, cards and prose differ by content, and that second cue is
+        // what keeps `divider` exempt from a 1.4.11 floor at all. So "do not delete" is a Duck design
+        // rule, not a WCAG one, and is negotiable with eyes open. The numbers and the full argument
+        // live in ContrastTest.dividerAndElevationAreRecorded.
         when (mode) {
             PaneMode.Expanded -> Row(Modifier.fillMaxSize().statusBarsPadding()) {
                 androidx.compose.foundation.layout.Box(Modifier.width(SIDEBAR)) { sidebar() }
