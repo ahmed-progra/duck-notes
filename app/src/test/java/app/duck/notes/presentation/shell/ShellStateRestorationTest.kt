@@ -6,9 +6,19 @@ import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FakeTagRepository
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.Tag
+import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.DeleteTag
+import app.duck.notes.domain.usecase.DeriveTitle
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
+import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.PinTag
+import app.duck.notes.domain.usecase.RenameTag
+import app.duck.notes.domain.usecase.SaveNote
+import app.duck.notes.domain.usecase.SetTagIcon
+import app.duck.notes.domain.usecase.UndoTagChange
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -54,11 +64,25 @@ class ShellStateRestorationTest {
 
     @After fun tearDown() = Dispatchers.resetMain()
 
+    private val parseTags = ParseTags()
+
     private fun shell(handle: SavedStateHandle) = DuckShellViewModel(
         handle = handle,
         observeNotes = ObserveNotes(notes),
         observeNote = ObserveNote(notes),
         observeTagTree = ObserveTagTree(tags),
+        observeTagCounts = ObserveTagCounts(tags),
+        parseTags = parseTags,
+        pinTag = PinTag(tags),
+        renameTag = RenameTag(tags),
+        deleteTag = DeleteTag(tags),
+        setTagIcon = SetTagIcon(tags),
+        addTagToNote = AddTagToNote(
+            notes,
+            parseTags,
+            SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }),
+        ),
+        undoTagChange = UndoTagChange(tags),
         clock = Clock { 0L },
     )
 

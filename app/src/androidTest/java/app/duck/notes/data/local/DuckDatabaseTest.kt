@@ -24,6 +24,12 @@ import kotlin.system.measureTimeMillis
  * Verifies the FTS5 external-content triggers stay in sync with `notes`, that tag filtering works,
  * and logs perf at 5000 notes. Perf is measured + logged, not hard-asserted, so the suite doesn't
  * flake on slow emulators — eyeball the logged numbers against the < 50 ms / < 30 ms targets.
+ *
+ * `perf_at5000Notes` times **both** tag queries. Filtering by id uses the index on `note_tags`;
+ * filtering by path cannot, because `substr(t.name, 1, …)` is a function on the column and no index
+ * serves it. That was a deliberate trade — `tags` is the smallest table in the schema — and the
+ * by-path number is the tripwire on it. If it ever crosses 30 ms, the KDoc on `notesByTagPath` says
+ * what moving to `LIKE` would owe: an `ESCAPE` clause, because `isTagChar` permits `_`.
  */
 @RunWith(AndroidJUnit4::class)
 class DuckDatabaseTest {
@@ -167,18 +173,28 @@ class DuckDatabaseTest {
             },
         )
         notes.saveNoteWithTags(note("tagged", "filler body"), listOf("bulk"))
+        // A nested tag so the prefix query below has a descendant to find and a DISTINCT to do.
+        notes.saveNoteWithTags(note("nested", "filler body"), listOf("bulk/child"))
+        notes.saveNoteWithTags(note("both", "filler body"), listOf("bulk", "bulk/child"))
         val bulkTagId = tags.observeAll().first().single { it.name == "bulk" }.id
 
         val ftsMs = measureTimeMillis { notes.search("needle") }
         val tagMs = measureTimeMillis { notes.notesByTag(bulkTagId).first() }
+        val pathMs = measureTimeMillis { notes.notesByTagPath("bulk").first() }
 
         val matches = notes.search("needle").size
+        val pathRows = notes.notesByTagPath("bulk").first().size
         Log.i(
             TAG,
             "FTS query over $COUNT notes matched $matches rows = $ftsMs ms (target < 50); " +
-                "tag filter = $tagMs ms (target < 30)",
+                "tag filter by id = $tagMs ms (target < 30); " +
+                "tag filter by PATH matched $pathRows rows = $pathMs ms (target < 30)",
         )
         assertEquals("fixture must be selective", COUNT / NEEDLE_EVERY, matches)
+        // The note carrying both `bulk` and `bulk/child` must appear once, not twice — that is the
+        // DISTINCT, and it is the cheap-implementation bug the with-descendants count was written
+        // to avoid. Asserted; the timings above are logged only, per this file's convention.
+        assertEquals("prefix query must dedupe", 3, pathRows)
     }
 
     private companion object {

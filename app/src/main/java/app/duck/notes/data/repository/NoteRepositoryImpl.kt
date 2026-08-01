@@ -13,9 +13,11 @@ class NoteRepositoryImpl @Inject constructor(
     private val notes: NoteDao,
 ) : NoteRepository {
 
-    override fun observeNotes(tagId: String?): Flow<List<Note>> =
-        (if (tagId == null) notes.observeNotes() else notes.notesByTag(tagId))
-            .map { rows -> rows.map { it.toDomain() } }
+    override fun observeNotes(): Flow<List<Note>> =
+        notes.observeNotes().map { rows -> rows.map { it.toDomain() } }
+
+    override fun observeNotesByTagPath(path: String): Flow<List<Note>> =
+        notes.notesByTagPath(path).map { rows -> rows.map { it.toDomain() } }
 
     override fun observeTrashed(): Flow<List<Note>> =
         notes.observeTrashed().map { rows -> rows.map { it.toDomain() } }

@@ -2,6 +2,7 @@ package app.duck.notes.presentation.shell
 
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -16,10 +17,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.duck.notes.R
 import app.duck.notes.core.theme.DuckTheme
 
 /**
@@ -49,15 +54,36 @@ fun DuckNoteCard(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onAddTag: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
+    val addTagLabel = stringResource(R.string.tag_add_to_note)
 
     Row(
         modifier = modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
-            .selectable(selected = selected, role = Role.Tab, onClick = onClick),
+            .then(
+                if (onAddTag == null) {
+                    Modifier.selectable(selected = selected, role = Role.Tab, onClick = onClick)
+                } else {
+                    // Long-press adds a tag. This is where "drag note onto tag" landed: on Compact
+                    // the sidebar lives inside a ModalNavigationDrawer, so the drop target is not
+                    // on screen while the drag source is — a real drag would be a tablet-only
+                    // gesture that still needs this menu as its phone fallback, i.e. this plus a
+                    // second implementation. Same append-to-body outcome, through the same SaveNote
+                    // write path. onLongClickLabel is what puts it in TalkBack's action list.
+                    Modifier
+                        .combinedClickable(
+                            onClick = onClick,
+                            onLongClick = onAddTag,
+                            onLongClickLabel = addTagLabel,
+                            role = Role.Tab,
+                        )
+                        .semantics { this.selected = selected }
+                },
+            ),
     ) {
         // Flush to the leading edge and outside the text block. Transparent rather than absent when
         // inactive, so an inactive row's text does not shift sideways by 3dp.

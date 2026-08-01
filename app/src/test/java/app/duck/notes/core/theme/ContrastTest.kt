@@ -138,6 +138,30 @@ class ContrastTest {
         //
         // Neither can be asserted here: this suite compares two OPAQUE colours, which is exactly the
         // property both lack. Recorded because the prerequisite forbids silence, not alpha.
+
+        // --- Phase 7 tags -------------------------------------------------
+        // Phase 7 paints two new Material containers — a DropdownMenu (MenuDefaults.containerColor
+        // = surfaceContainer) and an AlertDialog (surfaceContainerHigh). `duckColorScheme` maps
+        // BOTH to `surfaceElevated`, and `surfaceTint = surface` keeps `surfaceColorAtElevation` an
+        // identity operation, so there is no tonal blend on top and every pair stays measurable.
+        //
+        // Enumerating the 20 pairs those two containers plus the icon picker and the chip row paint
+        // found exactly ONE not already floored: `error` had only ever been measured against
+        // `surface` and `errorSurface`, because until a dialog existed nothing put error text on an
+        // elevated container. The rename dialog's invalid-name message and the delete dialog's
+        // destructive button label are both this pair.
+        Triple("error", "surfaceElevated", 4.5),
+
+        // The menu border is `chromeMuted on surfaceElevated`, already floored above at 3.0, and
+        // that is why it is `chromeMuted` rather than `divider`. A DropdownMenu opens OVER the
+        // sidebar, and both are `surfaceElevated` — the menu measures 1.00:1 against what it
+        // occludes, separated by nothing but M3's elevation shadow. `divider` there is 1.17-1.26
+        // and would need the vertical-pane-rule exemption argued a second time for a case that does
+        // not deserve it; `chromeMuted` is a real 1.4.11 boundary that already clears 3:1.
+        //
+        // The dialog scrim (black at 32%) and the menu's elevation shadow are the same exempt class
+        // as Phase 6's drawer scrim: occlusion is their function, and both are alpha composites
+        // this suite cannot measure.
     )
 
     /**
@@ -157,6 +181,21 @@ class ContrastTest {
     private val distinguishability: List<Triple<String, String, String>> = listOf(
         Triple("icon button glyph", "onSurface", "chromeMuted"),
         Triple("checkbox border", "chromeMuted", "divider"),
+
+        // Phase 7. The rename dialog's confirm button is the ONE control this phase gives an
+        // `enabled` to, so this is the row the duty above demands, added in the same change.
+        //
+        // A TextButton paints one element — a label. No container (Transparent in both states), no
+        // border, so one row rather than DuckTagChip's four. `RenameTagDialog` passes
+        // `disabledContentColor` explicitly and opaque, or Material would composite
+        // `contentColor x 0.38` and put a colour on screen that is in no palette and unmeasurable.
+        //
+        // THINNEST ROW IN THIS LIST: 1.288 in DuckRedDark (#F08386 vs #8E8E93), against the icon
+        // button's 2.56 and the checkbox border's 2.60. Safe — the margin is ~47x the 0.0019 that
+        // forced proseMuted from #6A6A6A to #686868 in 5a — but it is the first thing a palette
+        // edit will squeeze, and it moves whenever EITHER `accentText` or `chromeMuted` is retuned.
+        // Neither of those edits looks like it is touching a disabled button.
+        Triple("rename confirm label", "accentText", "chromeMuted"),
     )
 
     private fun DuckColors.slot(name: String): Color = when (name) {
@@ -202,13 +241,15 @@ class ContrastTest {
     fun theDuckPairListIsNotSilentlyEmpty() {
         assertEquals(
             "duckPairs changed size — add the pair and update this count, or explain the removal",
-            22,
+            23,
             duckPairs.size,
         )
         listOf(
             Triple("proseMuted", "codeSurface", 4.5),
             Triple("accent", "surfaceElevated", 3.0),
             Triple("accentText", "tagSurface", 4.5),
+            // Phase 7's only addition: the first time error text sat on an elevated container.
+            Triple("error", "surfaceElevated", 4.5),
         ).forEach {
             assertTrue("duckPairs must still contain $it", it in duckPairs)
         }
@@ -423,10 +464,14 @@ class ContrastTest {
      */
     @Test
     fun theDistinguishabilityListIsNotSilentlyEmpty() {
-        assertEquals(2, distinguishability.size)
+        assertEquals(3, distinguishability.size)
         assertTrue(
             "the checkbox border pair is the regression this list exists for",
             Triple("checkbox border", "chromeMuted", "divider") in distinguishability,
+        )
+        assertTrue(
+            "Phase 7's rename confirm button is the only `enabled` this phase added",
+            Triple("rename confirm label", "accentText", "chromeMuted") in distinguishability,
         )
         // And the regression itself, planted: the pair this replaced was a token against itself. If
         // 1.2 were a number nothing could fail, the rule above would be decoration.
@@ -436,6 +481,41 @@ class ContrastTest {
                 contrast(p.colors.chromeMuted, p.colors.chromeMuted) < 1.2,
             )
         }
+    }
+
+    /**
+     * The thinnest [distinguishability] margin, pinned by value rather than only by its floor.
+     *
+     * `everyDisabledStateIsDistinguishableFromEnabled` asserts `> 1.2` and would stay green while a
+     * palette edit walked this pair from 1.29 down to 1.21. Phase 7's rename confirm button is the
+     * closest of the three to that floor, and the pair moves whenever **either** `accentText` or
+     * `chromeMuted` is retuned — neither of which looks like it is touching a disabled button. So the
+     * numbers are recorded: erosion shows up as a diff one edit *before* it becomes a failure.
+     *
+     * Same device as `dividerAndElevationAreRecorded`, for the same reason — a value that is safe but
+     * not roomy is exactly the one worth watching.
+     */
+    @Test
+    fun theRenameConfirmMarginIsRecorded() {
+        val recorded = palettes().joinToString("\n") { p ->
+            "%-16s accentText vs chromeMuted %.4f".format(
+                p.name,
+                contrast(p.colors.accentText, p.colors.chromeMuted),
+            )
+        }
+        assertEquals(
+            """
+            DuckRed light    accentText vs chromeMuted 1.7034
+            DuckRed dark     accentText vs chromeMuted 1.2880
+            Graphite light   accentText vs chromeMuted 2.4067
+            Graphite dark    accentText vs chromeMuted 1.6299
+            Sepia light      accentText vs chromeMuted 1.6704
+            Sepia dark       accentText vs chromeMuted 1.5513
+            Midnight light   accentText vs chromeMuted 2.2015
+            Midnight dark    accentText vs chromeMuted 1.6219
+            """.trimIndent(),
+            recorded,
+        )
     }
 
     /**

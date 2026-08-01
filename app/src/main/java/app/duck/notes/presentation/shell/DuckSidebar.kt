@@ -1,6 +1,7 @@
 package app.duck.notes.presentation.shell
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -19,11 +20,17 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,6 +73,7 @@ fun DuckSidebar(
     onFilter: (ShellFilter) -> Unit,
     onToggleTag: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onTagMenu: (TagRow, TagMenuAction) -> Unit = { _, _ -> },
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -84,7 +92,7 @@ fun DuckSidebar(
         if (pinnedTags.isNotEmpty()) {
             item { SectionHeader(stringResource(R.string.shell_pinned)) }
             items(pinnedTags, key = { "pinned:${ShellFilter.Tag(it.path).key}" }) { row ->
-                TagRowItem(row, filter, onFilter, onToggleTag)
+                TagRowItem(row, filter, onFilter, onToggleTag, onTagMenu)
             }
             item { DuckDivider(Modifier.padding(vertical = spacing.sm)) }
         }
@@ -106,7 +114,7 @@ fun DuckSidebar(
             }
         } else {
             items(tagRows, key = { ShellFilter.Tag(it.path).key }) { row ->
-                TagRowItem(row, filter, onFilter, onToggleTag)
+                TagRowItem(row, filter, onFilter, onToggleTag, onTagMenu)
             }
         }
 
@@ -121,12 +129,19 @@ fun DuckSidebar(
     }
 }
 
+/** What a tag row's long-press menu can ask for. The shell decides what each one opens. */
+enum class TagMenuAction { Pin, Rename, Icon, Delete }
+
 /**
- * One tag row: chevron, icon, label, indented by depth.
+ * One tag row: chevron, icon, label, count, indented by depth.
  *
  * An intermediate segment nobody tagged directly ([TagRow.selectable] false) can be expanded but not
  * filtered by — with only `a/b` stored there is no `a` row to select. Tapping its label toggles it
  * instead, so the row is never inert.
+ *
+ * **That same row gets no menu.** There is no `tags` row behind it to pin, rename, icon or delete,
+ * so the honest affordance is absence rather than four disabled items — which would also be the only
+ * menu in the app where every entry is dead.
  */
 @Composable
 private fun TagRowItem(
@@ -134,16 +149,38 @@ private fun TagRowItem(
     filter: ShellFilter,
     onFilter: (ShellFilter) -> Unit,
     onToggleTag: (String) -> Unit,
+    onTagMenu: (TagRow, TagMenuAction) -> Unit,
 ) {
-    SidebarRow(
-        label = row.segment,
-        selected = filter == ShellFilter.Tag(row.path),
-        onClick = { if (row.selectable) onFilter(ShellFilter.Tag(row.path)) else onToggleTag(row.path) },
-        indent = row.depth,
-        chevron = if (row.hasChildren) row else null,
-        onChevron = { onToggleTag(row.path) },
-        icon = DuckIcon.forTag(row.path),
-    )
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Box {
+        SidebarRow(
+            label = row.segment,
+            selected = filter == ShellFilter.Tag(row.path),
+            onClick = {
+                if (row.selectable) onFilter(ShellFilter.Tag(row.path)) else onToggleTag(row.path)
+            },
+            indent = row.depth,
+            chevron = if (row.hasChildren) row else null,
+            onChevron = { onToggleTag(row.path) },
+            // The row's own iconKey, or the nearest ancestor's — resolved in `flatten`, because
+            // inheriting a stored key needs the whole tree and `forTag` sees one name.
+            icon = DuckIcon.forTag(row.path, row.iconKey),
+            count = row.count,
+            onLongClick = if (row.selectable) ({ menuOpen = true }) else null,
+        )
+        if (row.selectable) {
+            TagRowMenu(
+                row = row,
+                expanded = menuOpen,
+                onDismiss = { menuOpen = false },
+                onPin = { onTagMenu(row, TagMenuAction.Pin) },
+                onRename = { onTagMenu(row, TagMenuAction.Rename) },
+                onIcon = { onTagMenu(row, TagMenuAction.Icon) },
+                onDelete = { onTagMenu(row, TagMenuAction.Delete) },
+            )
+        }
+    }
 }
 
 @Composable
@@ -175,15 +212,35 @@ private fun SidebarRow(
     chevron: TagRow? = null,
     onChevron: () -> Unit = {},
     icon: DuckIcon? = null,
+    count: Int = 0,
+    onLongClick: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
+    val menuLabel = stringResource(R.string.tag_actions, label)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = ROW_HEIGHT)
-            .selectable(selected = selected, role = Role.Tab, onClick = onClick),
+            .then(
+                if (onLongClick == null) {
+                    Modifier.selectable(selected = selected, role = Role.Tab, onClick = onClick)
+                } else {
+                    // combinedClickable rather than selectable, for the long press. The selected
+                    // state selectable would have announced is restored explicitly below, and
+                    // onLongClickLabel is what puts the menu in TalkBack's actions list — a gesture
+                    // a screen-reader user cannot perform is not an affordance.
+                    Modifier
+                        .combinedClickable(
+                            onClick = onClick,
+                            onLongClick = onLongClick,
+                            onLongClickLabel = menuLabel,
+                            role = Role.Tab,
+                        )
+                        .semantics { this.selected = selected }
+                },
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
@@ -237,8 +294,26 @@ private fun SidebarRow(
             color = colors.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = spacing.sm),
+            // weight(1f) with fill, and no Spacer after it: the label absorbs all leftover space so
+            // the count lands on the right edge. `weight(1f, fill = false)` plus a `weight(1f)`
+            // Spacer splits the remainder in half instead, which puts the count at
+            // *label width + half the rest* — visibly ragged down a column of mixed-length tags,
+            // and the one thing criterion 27 asks of the count.
+            modifier = Modifier.weight(1f).padding(horizontal = spacing.sm),
         )
+
+        if (count > 0) {
+            Text(
+                text = stringResource(R.string.tag_note_count, count),
+                style = DuckTheme.type.uiLabel,
+                // proseMuted, not chromeMuted. A 12sp count is normal text under WCAG 1.4.3 and
+                // owes 4.5 — the large-text exemption starts at 18pt. Same call DuckNoteCard makes
+                // for its timestamp, and the reason DuckColors narrowed chromeMuted out of text.
+                color = colors.proseMuted,
+                maxLines = 1,
+                modifier = Modifier.padding(end = spacing.md),
+            )
+        }
     }
 }
 

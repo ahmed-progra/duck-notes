@@ -37,15 +37,36 @@ class ObserveNotesTest {
         notes.seed(note("work-note", modifiedAt = 1L), tags = listOf("work"))
         notes.seed(note("home-note", modifiedAt = 2L), tags = listOf("home"))
 
-        assertEquals(listOf("work-note"), observeNotes("work").first().map { it.id })
+        assertEquals(listOf("work-note"), observeNotes.byTagPath("work").first().map { it.id })
+    }
+
+    /** Phase 2 owed this: a parent row that could not find its children's notes was filtering a lie. */
+    @Test
+    fun tagFilterIncludesDescendants() = runTest {
+        notes.seed(note("ui", modifiedAt = 3L), tags = listOf("projects/duck/ui"))
+        notes.seed(note("sync", modifiedAt = 2L), tags = listOf("projects/duck/sync"))
+        notes.seed(note("other", modifiedAt = 1L), tags = listOf("personal"))
+
+        assertEquals(
+            listOf("ui", "sync"),
+            observeNotes.byTagPath("projects").first().map { it.id },
+        )
+    }
+
+    /** The separator is what stops `project` from matching `projects/duck`. */
+    @Test
+    fun tagFilterDoesNotMatchASharedPrefixWithoutTheSeparator() = runTest {
+        notes.seed(note("duck", modifiedAt = 1L), tags = listOf("projects/duck"))
+
+        assertEquals(emptyList<String>(), observeNotes.byTagPath("project").first().map { it.id })
     }
 
     @Test
-    fun nullTagMeansEveryNote() = runTest {
+    fun everyNoteWhenUnfiltered() = runTest {
         notes.seed(note("a", modifiedAt = 1L), tags = listOf("work"))
         notes.seed(note("b", modifiedAt = 2L), tags = emptyList())
 
-        assertEquals(2, observeNotes(null).first().size)
+        assertEquals(2, observeNotes().first().size)
     }
 
     @Test

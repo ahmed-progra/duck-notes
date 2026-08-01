@@ -19,4 +19,52 @@
     <string name="shell_empty_notes">Nothing here yet</string>
     <string name="shell_empty_tags">No tags yet — write #a/tag in a note</string>
     <string name="shell_no_note_selected">Pick a note</string>
+
+    <!-- Phase 7 tags. Row menu, rename/delete/icon dialogs, undo. -->
+    <string name="tag_actions">Tag actions for %1$s</string>
+    <string name="tag_note_count">%1$d</string>
+    <string name="tag_pin">Pin</string>
+    <string name="tag_unpin">Unpin</string>
+    <string name="tag_rename">Rename…</string>
+    <string name="tag_change_icon">Change icon…</string>
+    <string name="tag_delete">Delete tag</string>
+
+    <string name="tag_rename_title">Rename #%1$s</string>
+    <string name="tag_rename_label">New name</string>
+    <string name="tag_rename_confirm">Rename</string>
+    <string name="tag_rename_invalid">Not a valid tag name</string>
+    <!-- Merge is named before it happens: it is what the machinery does, not an error. -->
+    <plurals name="tag_rename_merge">
+        <item quantity="one">#%1$s already exists. %2$d note will be merged into it.</item>
+        <item quantity="other">#%1$s already exists. %2$d notes will be merged into it.</item>
+    </plurals>
+    <string name="tag_rename_descendants">Tags nested under this one are renamed too.</string>
+
+    <string name="tag_delete_title">Delete #%1$s?</string>
+    <plurals name="tag_delete_body">
+        <item quantity="one">It will be removed from %1$d note. The note is kept.</item>
+        <item quantity="other">It will be removed from %1$d notes. The notes are kept.</item>
+    </plurals>
+    <string name="tag_delete_keeps_children">Tags nested under this one are kept.</string>
+    <string name="tag_delete_confirm">Delete</string>
+
+    <string name="tag_icon_title">Icon for #%1$s</string>
+    <string name="tag_icon_automatic">Automatic</string>
+    <string name="tag_icon_selected">%1$s, selected</string>
+
+    <string name="tag_add_to_note">Add tag…</string>
+    <string name="tag_add_title">Add a tag</string>
+    <string name="tag_add_new">New tag…</string>
+    <string name="tag_add_failed">Couldn\'t add #%1$s — the note ends in an unclosed code block</string>
+
+    <string name="tag_cancel">Cancel</string>
+    <string name="tag_undo">Undo</string>
+    <plurals name="tag_renamed">
+        <item quantity="one">Renamed to #%1$s in %2$d note</item>
+        <item quantity="other">Renamed to #%1$s in %2$d notes</item>
+    </plurals>
+    <plurals name="tag_deleted">
+        <item quantity="one">Deleted #%1$s from %2$d note</item>
+        <item quantity="other">Deleted #%1$s from %2$d notes</item>
+    </plurals>
 </resources>

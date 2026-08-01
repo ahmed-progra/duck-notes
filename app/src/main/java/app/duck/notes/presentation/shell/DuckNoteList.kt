@@ -39,6 +39,7 @@ fun DuckNoteList(
     selectedNoteId: String?,
     onSelectNote: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onAddTag: (noteId: String) -> Unit = {},
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -78,6 +79,7 @@ fun DuckNoteList(
                         modifiedAt = note.modifiedAt,
                         selected = note.id == selectedNoteId,
                         onClick = { onSelectNote(note.id) },
+                        onAddTag = { onAddTag(note.id) },
                     )
                     DuckDivider()
                 }

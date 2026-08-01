@@ -6,9 +6,19 @@ import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FakeTagRepository
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.Tag
+import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.DeleteTag
+import app.duck.notes.domain.usecase.DeriveTitle
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
+import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.PinTag
+import app.duck.notes.domain.usecase.RenameTag
+import app.duck.notes.domain.usecase.SaveNote
+import app.duck.notes.domain.usecase.SetTagIcon
+import app.duck.notes.domain.usecase.UndoTagChange
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -75,11 +85,21 @@ class DuckShellViewModelTest {
         trashedAt = if (trashed) modifiedAt else null,
     )
 
+    private val parseTags = ParseTags()
+
     private fun shell(handle: SavedStateHandle = SavedStateHandle()) = DuckShellViewModel(
         handle = handle,
         observeNotes = ObserveNotes(notes),
         observeNote = ObserveNote(notes),
         observeTagTree = ObserveTagTree(tags),
+        observeTagCounts = ObserveTagCounts(tags),
+        parseTags = parseTags,
+        pinTag = PinTag(tags),
+        renameTag = RenameTag(tags),
+        deleteTag = DeleteTag(tags),
+        setTagIcon = SetTagIcon(tags),
+        addTagToNote = AddTagToNote(notes, parseTags, SaveNote(notes, DeriveTitle(), parseTags, Clock { now })),
+        undoTagChange = UndoTagChange(tags),
         clock = Clock { now },
     )
 
@@ -278,5 +298,40 @@ class DuckShellViewModelTest {
         // the pinned section is derived from the tree rather than from the flattened rows.
         assertEquals(listOf("work", "projects"), vm.state.value.tagRows.map { it.path })
         assertEquals(listOf("projects/duck"), vm.state.value.pinnedTags.map { it.path })
+    }
+
+    // --- add tag -------------------------------------------------------------
+
+    /**
+     * The failure `AddTagToNote` exists to detect has to reach the user.
+     *
+     * A body ending inside an unclosed fence swallows the appended tag, so the menu item would
+     * otherwise appear to do nothing at all. The prompt is deliberately **not** undoable — nothing
+     * was written to reverse.
+     */
+    @Test
+    fun addingATagToAnUnclosedFenceReportsTheFailure() = runShell { vm, settle ->
+        notes.seed(note("n1", body = "```\nstill open"))
+        settle()
+
+        vm.onAddTagToNote("n1", "work")
+        settle()
+
+        val prompt = vm.state.value.undo
+        assertEquals(TagPrompt.Kind.AddFailed, prompt?.kind)
+        assertEquals("work", prompt?.tagName)
+        assertEquals(false, prompt?.undoable)
+    }
+
+    /** A tag that writes cleanly says nothing — a Snackbar per tag added would be noise. */
+    @Test
+    fun addingATagNormallyShowsNoPrompt() = runShell { vm, settle ->
+        notes.seed(note("n1", body = "plain body"))
+        settle()
+
+        vm.onAddTagToNote("n1", "work")
+        settle()
+
+        assertNull(vm.state.value.undo)
     }
 }

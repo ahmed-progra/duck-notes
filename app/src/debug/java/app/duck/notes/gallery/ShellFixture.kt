@@ -2,6 +2,7 @@ package app.duck.notes.gallery
 
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.Tag
+import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
 import app.duck.notes.presentation.shell.ShellFilter
 import app.duck.notes.presentation.shell.ShellUiState
@@ -69,6 +70,26 @@ internal object ShellFixture {
 
     val initiallyExpanded = setOf("projects", "projects/duck")
 
+    /**
+     * Counts where `subtree` and `own` **disagree**, which is the pair the sidebar and the delete
+     * dialog read differently.
+     *
+     * A fixture where every tag were a leaf would render `subtree == own` on every row and show
+     * nothing: the sidebar's 5 beside `projects` and the delete dialog's "1 note" for the same tag
+     * are only distinguishable when a parent actually has descendants. `personal` carries the other
+     * case worth eyes — `own = 0` on a row nobody tagged directly, so the number beside it comes
+     * entirely from its child.
+     */
+    val counts: Map<String, TagCount> = mapOf(
+        "projects" to TagCount(subtree = 5, own = 1),
+        "projects/duck" to TagCount(subtree = 4, own = 1),
+        "projects/duck/ui" to TagCount(subtree = 2, own = 2),
+        "projects/duck/sync" to TagCount(subtree = 1, own = 1),
+        "personal" to TagCount(subtree = 3, own = 0),
+        "personal/recipes" to TagCount(subtree = 3, own = 3),
+        "work" to TagCount(subtree = 2, own = 2),
+    )
+
     private val notes = listOf(
         note("n1", "Phase 6 — navigation shell", 0, "Three panes, derived from state.\n\nNo NavHost: one selectedNoteId beats a back stack plus pane state to reconcile."),
         note("n2", "A deliberately long title that has to ellipsize somewhere sensible", 1, "Testing how the card handles a title that will not fit on one line at any pane width."),
@@ -94,8 +115,8 @@ internal object ShellFixture {
         // to reach is one nobody will check.
         selectedNoteId = "n1",
         selectedNoteBody = bodyOf("n1"),
-        pinnedTags = tree.pinned(),
-        tagRows = tree.flatten(initiallyExpanded),
+        pinnedTags = tree.pinned(counts),
+        tagRows = tree.flatten(initiallyExpanded, counts),
     )
 
     fun bodyOf(id: String) = notes.find { it.id == id }?.body.orEmpty()

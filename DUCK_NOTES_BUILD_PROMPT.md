@@ -663,6 +663,84 @@ needs deciding each time is whether the control still reads as inactive, and tha
 
 **Success:** Rename `#work` → `#job` updates 200 notes in one transaction, undoable.
 
+**Success criteria, as verified**
+
+Recorded here rather than in a planning file. The list previously lived only in a session plan
+outside the repo and was lost to an overwrite; a criterion that is not under version control is a
+criterion that cannot be checked against later.
+
+*Unit-testable (JVM)*
+
+1. `TagScanner.rename` turns `#work` → `#job`, `#work/x` → `#job/x`, and leaves `#working` alone.
+2. It preserves `#multi word tag#`'s closed form, and forces closed form when the new name has a space.
+3. It does not touch `#work` inside a code span or a fenced block.
+4. Two tags on one line both rewrite correctly (offset invalidation).
+5. `isValidName` rejects `""`, `"123"`, `"Work"`, `"a/"`, `"a#b"`; accepts `"a"`, `"a/b"`, `"multi word"`.
+6. `TagScanner.remove` strips the tag and leaves no double space or trailing space.
+7. Prefix filter: filtering `projects` returns a note tagged only `projects/duck/ui`; `project` returns nothing.
+8. Counts include descendants; an intermediate reports its subtree total; a note carrying both a parent and a child counts **once** under the parent.
+9. Delete does not cascade — deleting `projects` leaves `projects/duck` intact and its notes tagged.
+10. Rename onto an existing name merges; the target ends up holding both note sets.
+11. Undo restores every body byte-for-byte and returns the tree to its pre-operation shape — for **both** rename and delete.
+12. Pin and icon survive a rename; on a merge, the target's own values win.
+13. Undo after renaming a pinned tag leaves no orphan — the `createdNames` sweep.
+14. Undo after a merge keeps the merge target's own notes, because the sweep is conditional on being orphaned.
+15. Deleting a pinned tag actually removes the row — `deleteOrphanTags` spares pinned rows, so this fails without the explicit `deleteByName`.
+16. Delete restores the row *with its pin and icon* on undo.
+17. `AddTagToNote` appends on its own line at EOF; an empty body gains no leading newline; trailing blank lines gain no ragged gap.
+18. `AddTagToNote` is a no-op when the tag is already present, **exact-name** — adding `#projects` to a note carrying `#projects/duck` is *not* a no-op.
+19. `AddTagToNote` **reports failure** when the body ends in an unclosed fence, rather than writing a tag `ParseTags` cannot see.
+20. `ContrastTest` green with `duckPairs` at 23 and `distinguishability` at 3, both pinned counts moved.
+21. Icon inheritance: a child with no `iconKey` draws its nearest ancestor's; its own key wins.
+
+*Instrumented (device — SQLite semantics a fake cannot prove)*
+
+22. Rename across **200 notes** in one transaction; all 200 bodies rewritten, one row `job`, none `work`.
+23. A forced failure mid-rename leaves **0** notes changed and both tag rows as they were.
+24. The same for delete: a forced failure mid-delete leaves **0** bodies changed and the row intact.
+25. Rename covers a **trashed** note carrying the tag; so does delete.
+26. `notesByTagPath` under 30 ms at 5000 notes — the criterion policing the deliberate trade that
+    `substr(t.name, 1, n)` is a function on the column and **cannot use the `tags.name` index**.
+
+*Visual-check-only*
+
+27. Sidebar counts legible **and aligned** in all eight palettes.
+28. The context menu separates from the sidebar behind it. Both are `surfaceElevated`, so only the
+    1dp `chromeMuted` border and the shadow do this — **SepiaLight is the case**.
+29. The disabled confirm button reads as disabled — **DuckRedDark is the case**, at 1.288, the
+    thinnest row in `distinguishability`.
+30. The delete dialog's destructive label reads as destructive — `error` on `surfaceElevated`, the
+    phase's one new pair, 5.74 at worst.
+31. The icon picker's selected cell is carried by its **border**; the fill is a hint at best.
+    `tagSurface on surfaceElevated` measures **1.036–1.157**, pinned by
+    `componentFillsOnElevatedContainersAreRecorded` and below the 1.2 this project calls visibly
+    distinct. *Reworded after the sweep:* it previously read "border plus fill, not fill alone",
+    which claimed two signals when the measurement already in the repo said one of them is
+    invisible. On device in DuckRed light the fill is not perceptible at all and the accent border
+    does the whole job. The eyes and the number agreed; only the criterion disagreed.
+32. The chip row above the editor does not crowd the body at Compact width.
+
+**Unspecified edge — renaming a pinned tag no note carries**
+
+It is **deleted, not moved**, and nothing specified that.
+
+`rename` rewrites bodies, and `carryCustomization` moves a pin onto *the row those bodies created*.
+With no note carrying `#unused`, no `renamed` row is ever minted, so
+`tags.getByName(newName) ?: return@forEach` carries nothing and `deleteByName` then drops the
+original. Such a row can only exist in the first place because `deleteOrphanTags` deliberately spares
+pinned ones.
+
+Two candidate answers, neither chosen here:
+
+- **Delete it.** Bodies are the source of truth, so a tag no body carries is not really a tag, and
+  renaming a thing with no textual existence is ill-defined.
+- **Mint the row so the pin survives.** The user pinned it deliberately, and a pin vanishing on a
+  rename is surprising.
+
+**Undo restores it either way** — the snapshot carries the old row with its pin.
+`rename_ofAPinnedTagNoNoteCarriesDeletesIt` asserts what the code does, not what anyone specified.
+An earlier version of that test asserted the opposite from imagination and failed on device.
+
 ---
 
 ## PHASE 8 — EDITOR

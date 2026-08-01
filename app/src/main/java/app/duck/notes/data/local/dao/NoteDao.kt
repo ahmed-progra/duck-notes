@@ -40,6 +40,14 @@ abstract class NoteDao {
     @Query("SELECT COUNT(*) FROM notes")
     abstract suspend fun count(): Int
 
+    /**
+     * Notes carrying **exactly** this tag row, by id. The search path's tag narrowing.
+     *
+     * Phase 7 added [notesByTagPath], which is by *name* and includes the subtree — that is what the
+     * sidebar filters by now. This one survives because `SearchQuery.tagId` is an id and search is
+     * Phase 10's. **Phase 10 has to decide whether `tag:x` means the subtree**, and if it does, this
+     * method is the thing to retire rather than a second prefix rule to write.
+     */
     @Query(
         """
         SELECT n.* FROM notes AS n
@@ -49,6 +57,83 @@ abstract class NoteDao {
         """,
     )
     abstract fun notesByTag(tagId: String): Flow<List<NoteEntity>>
+
+    /**
+     * Notes under [path] **and every descendant of it** — `projects` finds `projects/duck/ui`. The
+     * sidebar's tag filter, owed since Phase 2.
+     *
+     * ## Three things in the WHERE clause, and none is incidental
+     *
+     * - **`substr`, not `LIKE :path || '/%'`.** Tag names may contain `_` — `TagScanner.isTagChar`
+     *   permits it — and `_` is a `LIKE` single-character wildcard, so `#a_b` would prefix-match
+     *   `#axb/c`. `substr` needs no `ESCAPE` clause and no escaping helper to get right.
+     * - **`DISTINCT`.** A note carrying both `#projects/duck` and `#projects/duck/ui` matches twice.
+     * - **`|| '/'`.** Without the separator `#project` would match `#projects/duck`.
+     *
+     * ## The index trade, recorded here on purpose
+     *
+     * `LIKE 'prefix%'` **can** use the UNIQUE index `TagEntity` declares on `tags.name` — SQLite's
+     * LIKE optimization applies to a pattern with no leading wildcard. `substr(t.name, 1, n)` is a
+     * function on the column, so no index can serve it and this scans `tags` end to end.
+     *
+     * That is the correct trade at this scale, deliberately: `tags` is the **smallest** table in the
+     * schema — one row per distinct tag — while `notes` and `note_tags` are the large ones and are
+     * still reached by indexed joins. `DuckDatabaseTest` polices it at 5000 notes against Phase 2's
+     * 30ms tag-filter budget.
+     *
+     * **The temptation is real precisely because the index exists**, which is why the reason lives at
+     * the query rather than in a commit message: a future perf pass sees a table scan, "fixes" it to
+     * `LIKE`, and silently reintroduces the `_` bug above. Anyone moving to `LIKE` owes an `ESCAPE`
+     * clause and an escaping helper.
+     */
+    @Query(
+        """
+        SELECT DISTINCT n.* FROM notes AS n
+        JOIN note_tags AS nt ON nt.note_id = n.id
+        JOIN tags AS t ON t.id = nt.tag_id
+        WHERE n.is_trashed = 0
+          AND (t.name = :path OR substr(t.name, 1, length(:path) + 1) = :path || '/')
+        ORDER BY n.modified_at DESC
+        """,
+    )
+    abstract fun notesByTagPath(path: String): Flow<List<NoteEntity>>
+
+    /**
+     * One-shot subtree read for **rename**, which cascades to descendants.
+     *
+     * **Deliberately omits `is_trashed = 0`**, and that is the difference from [notesByTagPath]. A
+     * trashed note still holds `#work` in its body; skip it and restoring that note months later
+     * re-creates the old tag through `ensureTag` — the rename undoing itself, one note at a time.
+     * The filter must hide trashed notes; the rewrite must not.
+     */
+    @Query(
+        """
+        SELECT DISTINCT n.* FROM notes AS n
+        JOIN note_tags AS nt ON nt.note_id = n.id
+        JOIN tags AS t ON t.id = nt.tag_id
+        WHERE t.name = :path OR substr(t.name, 1, length(:path) + 1) = :path || '/'
+        """,
+    )
+    abstract suspend fun notesByTagPathOnce(path: String): List<NoteEntity>
+
+    /**
+     * One-shot **exact-name** read for delete, which does not cascade. Trashed included, same reason
+     * as [notesByTagPathOnce].
+     *
+     * Separate from [notesByTagPathOnce] because the two operations genuinely differ in scope: a
+     * child's name contains its parent's, so rename must cascade or the names break, while
+     * `projects/duck` stays valid after `projects` is deleted and simply becomes an intermediate
+     * segment.
+     */
+    @Query(
+        """
+        SELECT DISTINCT n.* FROM notes AS n
+        JOIN note_tags AS nt ON nt.note_id = n.id
+        JOIN tags AS t ON t.id = nt.tag_id
+        WHERE t.name = :name
+        """,
+    )
+    abstract suspend fun notesByTagNameOnce(name: String): List<NoteEntity>
 
     /**
      * The sidebar's Trash row. Ordered by [NoteEntity.trashedAt], not `modified_at`: the useful

@@ -9,8 +9,18 @@ import kotlinx.coroutines.flow.Flow
  */
 interface NoteRepository {
 
-    /** Active (non-trashed) notes, newest first. [tagId] null means "all". */
-    fun observeNotes(tagId: String? = null): Flow<List<Note>>
+    /** Active (non-trashed) notes, newest first. */
+    fun observeNotes(): Flow<List<Note>>
+
+    /**
+     * Active notes under [path] **and its descendants** — `projects` finds `projects/duck/ui`.
+     *
+     * Keyed by path rather than by tag id, which is what makes the subtree query possible at all: an
+     * id says nothing about ancestry, while the path is both what the user typed and what the
+     * sidebar row is keyed by. It also means a filter no longer has to resolve through the tag tree
+     * to reach a query.
+     */
+    fun observeNotesByTagPath(path: String): Flow<List<Note>>
 
     /** Trashed notes, most recently trashed first. The one view [observeNotes] excludes. */
     fun observeTrashed(): Flow<List<Note>>

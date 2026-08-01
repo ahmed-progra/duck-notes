@@ -5,14 +5,26 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.markdown.MarkdownScanner
+import app.duck.notes.domain.model.BodySnapshot
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
+import app.duck.notes.domain.usecase.AddTagResult
+import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.DeleteTag
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
+import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.PinTag
+import app.duck.notes.domain.usecase.RenameTag
+import app.duck.notes.domain.usecase.SetTagIcon
+import app.duck.notes.domain.usecase.UndoTagChange
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -20,6 +32,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import javax.inject.Inject
@@ -45,6 +58,14 @@ class DuckShellViewModel @Inject constructor(
     private val observeNotes: ObserveNotes,
     private val observeNote: ObserveNote,
     observeTagTree: ObserveTagTree,
+    observeTagCounts: ObserveTagCounts,
+    private val parseTags: ParseTags,
+    private val pinTag: PinTag,
+    private val renameTag: RenameTag,
+    private val deleteTag: DeleteTag,
+    private val setTagIcon: SetTagIcon,
+    private val addTagToNote: AddTagToNote,
+    private val undoTagChange: UndoTagChange,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -58,9 +79,31 @@ class DuckShellViewModel @Inject constructor(
 
     private val tree: Flow<List<TagNode>> = observeTagTree()
 
+    private val counts: Flow<Map<String, TagCount>> = observeTagCounts()
+
+    /**
+     * The undo snapshot, and **the one piece of shell state deliberately not in [handle]**.
+     *
+     * Everything else lives there so it survives process death; this cannot. A [BodySnapshot] holds
+     * N full note bodies, and `SavedStateHandle` is written to the saved-instance `Bundle`, which
+     * shares a **1MB per-process Binder buffer** — the same limit Phase 8's note on the editor's
+     * saver is about. A 200-note rename would put the whole corpus through it and land a
+     * `TransactionTooLargeException`.
+     *
+     * So undo is explicitly transient: it lives as long as the Snackbar and dies with the process.
+     * A durable undo is an operation log, which is Phase 8's undo/redo stack or nothing.
+     */
+    private var pendingUndo: BodySnapshot? = null
+
+    private val undo = MutableStateFlow<TagPrompt?>(null)
+
+    /**
+     * Notes for the current filter. **No longer joined with [tree]** — a tag filter resolves by
+     * *path* straight to a query, so the panes no longer have to wait for the tree to load before
+     * the list can populate, and the ViewModel's `findByPath` walk is gone with it.
+     */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val notes: Flow<List<Note>> =
-        combine(filter, tree) { f, t -> f to t }.flatMapLatest { (f, t) -> notesFor(f, t) }
+    private val notes: Flow<List<Note>> = filter.flatMapLatest(::notesFor)
 
     /**
      * The selected note's body, followed independently of [notes].
@@ -76,15 +119,23 @@ class DuckShellViewModel @Inject constructor(
         else observeNote(id).map { note -> note?.let { Selection(id, it.body) } ?: Selection() }
     }
 
+    /** Three flows bundled into one, because `combine` tops out at five. */
+    private val tagState: Flow<TagState> = combine(tree, counts, undo, ::TagState)
+
     val state: StateFlow<ShellUiState> =
-        combine(filter, notes, selection, expanded, tree) { f, n, sel, exp, t ->
+        combine(filter, notes, selection, expanded, tagState) { f, n, sel, exp, tg ->
             ShellUiState(
                 filter = f,
                 notes = n,
                 selectedNoteId = sel.id,
                 selectedNoteBody = sel.body,
-                pinnedTags = t.pinned(),
-                tagRows = t.flatten(exp),
+                pinnedTags = tg.tree.pinned(tg.counts),
+                tagRows = tg.tree.flatten(exp, tg.counts),
+                // Derived from the body already in hand, not queried. The chip row and the
+                // note_tags rows therefore cannot disagree — they come from one scanner.
+                selectedNoteTags = parseTags(sel.body),
+                allTagPaths = tg.tree.tagPaths(),
+                undo = tg.undo,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
 
@@ -109,6 +160,96 @@ class DuckShellViewModel @Inject constructor(
         handle[KEY_EXPANDED] = ArrayList(if (path in current) current - path else current + path)
     }
 
+    // --- tag actions ---------------------------------------------------------
+
+    fun onPinTag(tagId: String, pinned: Boolean) {
+        viewModelScope.launch { pinTag(tagId, pinned) }
+    }
+
+    fun onSetTagIcon(tagId: String, iconKey: String?) {
+        viewModelScope.launch { setTagIcon(tagId, iconKey) }
+    }
+
+    /**
+     * Renames, then offers undo.
+     *
+     * If the filter was sitting on the tag being renamed it is **moved to the new path**, not reset
+     * to All: the user is still looking at the same set of notes, and dropping them back to
+     * everything would be the shell losing their place as a side effect of a rename. A renamed
+     * descendant follows the same splice the bodies did.
+     */
+    fun onRenameTag(from: String, to: String) {
+        viewModelScope.launch {
+            val snapshot = renameTag(from, to) ?: return@launch
+            followFilter(from) { path -> to + path.removePrefix(from) }
+            offerUndo(snapshot, TagPrompt.Kind.Renamed, to)
+        }
+    }
+
+    /** Deleting the tag the list is filtered by leaves nothing to show, so the filter goes home. */
+    fun onDeleteTag(path: String) {
+        viewModelScope.launch {
+            val snapshot = deleteTag(path)
+            followFilter(path) { null }
+            offerUndo(snapshot, TagPrompt.Kind.Deleted, path)
+        }
+    }
+
+    /**
+     * The one outcome that has to be said out loud is [AddTagResult.NotWritable].
+     *
+     * `AddTagToNote` exists because a body ending in an unclosed fence swallows the appended tag and
+     * the menu item appears to do nothing. Detecting that and then discarding the result would
+     * reproduce the same silence one layer up. `AlreadyPresent` stays quiet on purpose — the note
+     * already carries the tag, which is what the user asked for.
+     */
+    fun onAddTagToNote(noteId: String, name: String) {
+        viewModelScope.launch {
+            if (addTagToNote(noteId, name) == AddTagResult.NotWritable) {
+                pendingUndo = null
+                undo.value = TagPrompt(TagPrompt.Kind.AddFailed, name)
+            }
+        }
+    }
+
+    /** The tags on a note, scanned on demand from the body already in [state]. */
+    fun tagsOfNote(noteId: String): List<String> =
+        state.value.notes.find { it.id == noteId }?.let { parseTags(it.body) }.orEmpty()
+
+    fun onUndo() {
+        viewModelScope.launch {
+            pendingUndo?.let { undoTagChange(it) }
+            pendingUndo = null
+            undo.value = null
+        }
+    }
+
+    /** The Snackbar has been shown and dismissed; drop the bodies it was holding. */
+    fun onUndoShown() {
+        pendingUndo = null
+        undo.value = null
+    }
+
+    private fun offerUndo(snapshot: BodySnapshot, kind: TagPrompt.Kind, name: String) {
+        pendingUndo = snapshot
+        undo.value = TagPrompt(kind, name, snapshot.noteCount)
+    }
+
+    /**
+     * Moves the active filter when the tag it names is renamed or deleted.
+     *
+     * Applies to descendants too — filtering `projects/duck/ui` while `projects` is renamed has to
+     * follow, or the sidebar keeps naming a path that no longer exists and the list silently empties.
+     */
+    private inline fun followFilter(path: String, next: (String) -> String?) {
+        val current = filterKeyPath() ?: return
+        if (current != path && !current.startsWith("$path/")) return
+        handle[KEY_FILTER] = next(current)?.let { ShellFilter.Tag(it).key } ?: ShellFilter.All.key
+    }
+
+    private fun filterKeyPath(): String? =
+        (ShellFilter.fromKey(handle[KEY_FILTER]) as? ShellFilter.Tag)?.path
+
     // --- filter → flow -------------------------------------------------------
 
     /**
@@ -121,7 +262,7 @@ class DuckShellViewModel @Inject constructor(
      * keyed by. An unresolvable path — the tag lost its last note while selected — yields an empty
      * list rather than falling back to All, so the sidebar keeps saying what is being filtered.
      */
-    private fun notesFor(filter: ShellFilter, tree: List<TagNode>): Flow<List<Note>> = when (filter) {
+    private fun notesFor(filter: ShellFilter): Flow<List<Note>> = when (filter) {
         ShellFilter.All -> observeNotes().map { list -> list.filterNot(Note::isArchived) }
         ShellFilter.Untagged -> observeNotes.untagged()
         ShellFilter.Todo -> observeNotes().map { list ->
@@ -133,8 +274,7 @@ class DuckShellViewModel @Inject constructor(
         ShellFilter.Locked -> observeNotes().map { list -> list.filter(Note::isLocked) }
         ShellFilter.Archive -> observeNotes().map { list -> list.filter(Note::isArchived) }
         ShellFilter.Trash -> observeNotes.trashed()
-        is ShellFilter.Tag ->
-            tree.findByPath(filter.path)?.tag?.let { observeNotes(it.id) } ?: flowOf(emptyList())
+        is ShellFilter.Tag -> observeNotes.byTagPath(filter.path)
     }
 
     /** Local midnight, from the injected [Clock] so the Today row is deterministic under test. */
@@ -145,6 +285,12 @@ class DuckShellViewModel @Inject constructor(
 
     private data class Selection(val id: String? = null, val body: String = "")
 
+    private data class TagState(
+        val tree: List<TagNode>,
+        val counts: Map<String, TagCount>,
+        val undo: TagPrompt?,
+    )
+
     private companion object {
         const val KEY_FILTER = "shell.filter"
         const val KEY_SELECTED = "shell.selectedNoteId"
@@ -153,13 +299,4 @@ class DuckShellViewModel @Inject constructor(
         /** Outlives a rotation, so Room's flows are not torn down and rebuilt for one. */
         const val STOP_TIMEOUT_MS = 5_000L
     }
-}
-
-/** Depth-first search for the node at [path]. The tree is tiny; a map would be more code than gain. */
-private fun List<TagNode>.findByPath(path: String): TagNode? {
-    for (node in this) {
-        if (node.path == path) return node
-        node.children.findByPath(path)?.let { return it }
-    }
-    return null
 }

@@ -40,9 +40,14 @@ import app.duck.notes.core.ui.DuckIconButton
 import app.duck.notes.core.ui.DuckTagChip
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
 import app.duck.notes.presentation.markdown.SAMPLE_NOTE
+import app.duck.notes.presentation.shell.AddTagDialog
+import app.duck.notes.presentation.shell.DeleteTagDialog
 import app.duck.notes.presentation.shell.DuckShell
+import app.duck.notes.presentation.shell.RenameTagDialog
 import app.duck.notes.presentation.shell.ShellActions
+import app.duck.notes.presentation.shell.TagIconDialog
 import app.duck.notes.presentation.shell.flatten
+import app.duck.notes.presentation.shell.tagPaths
 
 /**
  * The Phase 5a verification harness. **Debug source set only — never in a release APK.**
@@ -87,14 +92,15 @@ fun DuckGalleryScreen() {
                     GalleryPage.Tokens -> TokenSheet()
                     GalleryPage.Editor -> MarkdownEditorScreen(SAMPLE_NOTE)
                     GalleryPage.Shell -> ShellPage()
+                    GalleryPage.Tags -> TagsPage()
                 }
             }
         }
     }
 }
 
-/** Three pages, one toggle row. A page exists when a criterion needs eyes rather than an assertion. */
-private enum class GalleryPage { Tokens, Editor, Shell }
+/** Four pages, one toggle row. A page exists when a criterion needs eyes rather than an assertion. */
+private enum class GalleryPage { Tokens, Editor, Shell, Tags }
 
 /**
  * The shell on a fixture rather than on Room.
@@ -113,7 +119,7 @@ private fun ShellPage() {
     var expanded by remember { mutableStateOf(ShellFixture.initiallyExpanded) }
 
     DuckShell(
-        state = state.copy(tagRows = ShellFixture.tree.flatten(expanded)),
+        state = state.copy(tagRows = ShellFixture.tree.flatten(expanded, ShellFixture.counts)),
         actions = ShellActions(
             onFilter = { state = ShellFixture.apply(state, it) },
             onSelectNote = { id -> state = state.copy(selectedNoteId = id, selectedNoteBody = ShellFixture.bodyOf(id)) },
@@ -122,6 +128,82 @@ private fun ShellPage() {
         ),
     )
 }
+
+/**
+ * The four tag dialogs, each rendered **open**.
+ *
+ * Every one of them is modal and reachable only by a long-press or an overflow tap, so the `Shell`
+ * page shows none of them at rest — the same defect the fixture's already-selected note exists to
+ * avoid, one level deeper. Their surface is `surfaceElevated` over a scrim, which is the pairing
+ * `ContrastTest` gained an `error`/`surfaceElevated` row for; a scrim that reads as opaque black in
+ * Midnight and as grey in Sepia is a palette question, not an assertion.
+ *
+ * One at a time, chosen by chip: an `AlertDialog` takes the whole window, so two open at once would
+ * stack and only the last would be visible.
+ *
+ * **Dismiss must work, and the first version of this page is why it is spelled out.** It opened with
+ * a dialog up and `onDismiss = {}`, reasoning that a harness which hides the state cannot verify it.
+ * But a Compose dialog is its own window with a scrim, so a permanently-open one puts the palette
+ * chips *and the page chips* behind it forever — the sweep this page exists for became impossible,
+ * and leaving the page did too. Open at rest **and** dismissable: tap out, change palette, tap the
+ * chip to reopen.
+ *
+ * The rename dialog opens on `projects/duck`, the one path whose merge warning has something to say
+ * — `existingPaths` contains its siblings, so typing `work` shows the merge copy rather than the
+ * plain rename. Delete opens on `projects`, where `own = 1` and `subtree = 5` disagree.
+ */
+@Composable
+private fun TagsPage() {
+    var open by remember { mutableStateOf<DialogKind?>(DialogKind.Rename) }
+    val spacing = DuckTheme.spacing
+    val paths = ShellFixture.tree.tagPaths()
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(spacing.md),
+        verticalArrangement = Arrangement.spacedBy(spacing.sm),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(spacing.sm)) {
+            DialogKind.entries.forEach { entry ->
+                DuckTagChip(entry.name, selected = entry == open, onClick = { open = entry })
+            }
+        }
+    }
+
+    val dismiss = { open = null }
+    when (open) {
+        DialogKind.Rename -> RenameTagDialog(
+            path = "projects/duck",
+            existingPaths = paths,
+            counts = ShellFixture.counts.mapValues { it.value.own },
+            onConfirm = {},
+            onDismiss = dismiss,
+        )
+        DialogKind.Delete -> DeleteTagDialog(
+            path = "projects",
+            noteCount = ShellFixture.counts.getValue("projects").own,
+            hasChildren = true,
+            onConfirm = {},
+            onDismiss = dismiss,
+        )
+        DialogKind.Icon -> TagIconDialog(
+            path = "work",
+            current = null,
+            onPick = {},
+            onDismiss = dismiss,
+        )
+        DialogKind.Add -> AddTagDialog(
+            available = paths,
+            onPick = {},
+            onDismiss = dismiss,
+        )
+        null -> Unit
+    }
+}
+
+/** Named `DialogKind`, not `TagDialog`: the latter is a real sealed type in `ShellState.kt`. */
+private enum class DialogKind { Rename, Delete, Icon, Add }
 
 @Composable
 private fun Controls(

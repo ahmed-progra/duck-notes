@@ -2,9 +2,15 @@ package app.duck.notes.presentation.shell
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -13,12 +19,21 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -28,6 +43,7 @@ import app.duck.notes.core.icons.DuckIcon
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.core.ui.DuckEmptyState
 import app.duck.notes.core.ui.DuckIconButton
+import app.duck.notes.core.ui.DuckTagChip
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
 import kotlinx.coroutines.launch
 
@@ -83,6 +99,14 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
             onSelectNote = viewModel::onSelectNote,
             onClearSelection = viewModel::onClearSelection,
             onToggleTag = viewModel::onToggleTag,
+            onPinTag = viewModel::onPinTag,
+            onRenameTag = viewModel::onRenameTag,
+            onDeleteTag = viewModel::onDeleteTag,
+            onSetTagIcon = viewModel::onSetTagIcon,
+            onAddTagToNote = viewModel::onAddTagToNote,
+            onUndo = viewModel::onUndo,
+            onUndoShown = viewModel::onUndoShown,
+            tagsOfNote = viewModel::tagsOfNote,
         ),
         modifier = modifier,
     )
@@ -93,7 +117,7 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
  * the debug gallery, which drives it from a fixture so the eight palettes can be checked against a
  * populated list rather than whatever happens to be in the database.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DuckShell(
     state: ShellUiState,
@@ -106,6 +130,13 @@ fun DuckShell(
         val mode = paneModeFor(maxWidth)
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
+        val snackbars = remember { SnackbarHostState() }
+
+        // Plain `remember`, not `rememberSaveable`: making a sealed type saveable needs a
+        // hand-written Saver, and the cost of not doing it is a rotation dismissing a dialog and
+        // losing at most a half-typed tag name. Stated rather than hidden — same class of ceiling
+        // as the editor buffer's in Phase 6, and a much cheaper one.
+        var dialog by remember { mutableStateOf<TagDialog?>(null) }
 
         val sidebar: @Composable () -> Unit = {
             DuckSidebar(
@@ -117,6 +148,19 @@ fun DuckShell(
                     scope.launch { drawer.close() }
                 },
                 onToggleTag = actions.onToggleTag,
+                onTagMenu = { row, action ->
+                    val id = row.tagId ?: return@DuckSidebar
+                    when (action) {
+                        TagMenuAction.Pin -> actions.onPinTag(id, !row.pinned)
+                        TagMenuAction.Rename -> dialog = TagDialog.Rename(row.path)
+                        TagMenuAction.Icon -> dialog = TagDialog.Icon(id, row.path, row.iconKey)
+                        // ownCount, NOT count. The row shows the subtree total because tapping it
+                        // filters the subtree; delete does not cascade, so quoting the same number
+                        // here would promise to strip the tag from 12 notes and then strip it from 3.
+                        TagMenuAction.Delete ->
+                            dialog = TagDialog.Delete(row.path, row.ownCount)
+                    }
+                },
             )
         }
 
@@ -126,15 +170,39 @@ fun DuckShell(
                 notes = state.notes,
                 selectedNoteId = state.selectedNoteId,
                 onSelectNote = actions.onSelectNote,
+                onAddTag = { noteId ->
+                    dialog = TagDialog.AddTag(noteId, actions.tagsOfNote(noteId))
+                },
                 modifier = m,
             )
         }
 
+        /**
+         * The editor pane: a chip row for the open note's tags, then the editor.
+         *
+         * The chip row is where "tappable tag" landed, and it is a deviation from the phase spec's
+         * "tag chip inline in editor". Making an inline `#tag` tappable needs a tap offset mapped
+         * back through `MarkdownOutputTransformation` to a source `TagSpan` — an inverse map that
+         * does not exist, that competes with caret placement and selection, and that Phase 8 has to
+         * build anyway for the format toolbar. The inline tag is still painted accent by Phase 4's
+         * engine; what moved is only where you tap it.
+         *
+         * `MarkdownEditorScreen` itself is untouched — Phase 4's prototype stays intact for Phase 8
+         * to replace, and this composes above it.
+         */
         val editor: @Composable (Modifier) -> Unit = { m ->
             if (state.selectedNoteId == null) {
                 DuckEmptyState(stringResource(R.string.shell_no_note_selected), m)
             } else {
-                MarkdownEditorScreen(text = state.selectedNoteBody, modifier = m)
+                Column(m) {
+                    if (state.selectedNoteTags.isNotEmpty()) {
+                        EditorTagRow(
+                            tags = state.selectedNoteTags,
+                            onTagClick = { actions.onFilter(ShellFilter.Tag(it)) },
+                        )
+                    }
+                    MarkdownEditorScreen(text = state.selectedNoteBody)
+                }
             }
         }
 
@@ -201,6 +269,130 @@ fun DuckShell(
                 }
             }
         }
+
+        // Hoisted above the pane branch on purpose: only Compact routes through a `Scaffold`, so a
+        // `snackbarHost` slot would give undo to phones and silently withhold it from tablets.
+        SnackbarHost(
+            hostState = snackbars,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+        )
+
+        TagDialogHost(
+            dialog = dialog,
+            state = state,
+            actions = actions,
+            onDismiss = { dialog = null },
+        )
+
+        UndoSnackbar(state.undo, snackbars, actions)
+    }
+}
+
+/** The open note's tags, above the body. Tapping one filters the list by it. */
+@Composable
+private fun EditorTagRow(tags: List<String>, onTagClick: (String) -> Unit) {
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = DuckTheme.spacing.lg, vertical = DuckTheme.spacing.sm),
+        horizontalArrangement = Arrangement.spacedBy(DuckTheme.spacing.sm),
+        verticalArrangement = Arrangement.spacedBy(DuckTheme.spacing.xs),
+    ) {
+        tags.forEach { tag ->
+            DuckTagChip(label = tag, selected = false, onClick = { onTagClick(tag) })
+        }
+    }
+}
+
+/** One place that turns a [TagDialog] into a dialog, so the pane branch does not have to. */
+@Composable
+private fun TagDialogHost(
+    dialog: TagDialog?,
+    state: ShellUiState,
+    actions: ShellActions,
+    onDismiss: () -> Unit,
+) {
+    when (dialog) {
+        null -> Unit
+
+        is TagDialog.Rename -> RenameTagDialog(
+            path = dialog.path,
+            existingPaths = state.allTagPaths,
+            counts = state.tagRows.plus(state.pinnedTags).associate { it.path to it.count },
+            onConfirm = {
+                actions.onRenameTag(dialog.path, it)
+                onDismiss()
+            },
+            onDismiss = onDismiss,
+        )
+
+        is TagDialog.Delete -> DeleteTagDialog(
+            path = dialog.path,
+            noteCount = dialog.noteCount,
+            hasChildren = state.allTagPaths.any { it.startsWith("${dialog.path}/") },
+            onConfirm = {
+                actions.onDeleteTag(dialog.path)
+                onDismiss()
+            },
+            onDismiss = onDismiss,
+        )
+
+        is TagDialog.Icon -> TagIconDialog(
+            path = dialog.path,
+            current = dialog.current,
+            onPick = {
+                actions.onSetTagIcon(dialog.tagId, it)
+                onDismiss()
+            },
+            onDismiss = onDismiss,
+        )
+
+        is TagDialog.AddTag -> AddTagDialog(
+            // Tags the note already carries are absent rather than inert: adding one twice writes
+            // `#work` into the body a second time while ParseTags dedupes the row, so the database
+            // cannot see the duplicate and the user cannot miss it.
+            available = state.allTagPaths - dialog.tagsPresent.toSet(),
+            onPick = {
+                actions.onAddTagToNote(dialog.noteId, it)
+                onDismiss()
+            },
+            onDismiss = onDismiss,
+        )
+    }
+}
+
+/**
+ * Shows the undo prompt once, then tells the ViewModel to drop the snapshot it is holding.
+ *
+ * The snapshot is N full note bodies in memory, so it is released as soon as the Snackbar goes —
+ * whether the user pressed Undo, dismissed it, or let it time out.
+ */
+@Composable
+private fun UndoSnackbar(
+    prompt: TagPrompt?,
+    host: SnackbarHostState,
+    actions: ShellActions,
+) {
+    if (prompt == null) return
+    val message = when (prompt.kind) {
+        TagPrompt.Kind.AddFailed -> stringResource(R.string.tag_add_failed, prompt.tagName)
+        else -> pluralStringResource(
+            if (prompt.kind == TagPrompt.Kind.Renamed) R.plurals.tag_renamed else R.plurals.tag_deleted,
+            prompt.noteCount,
+            prompt.tagName,
+            prompt.noteCount,
+        )
+    }
+    // Null for a failure: an action labelled Undo, over a write that never landed, would undo nothing.
+    val undoLabel = stringResource(R.string.tag_undo).takeIf { prompt.undoable }
+
+    LaunchedEffect(prompt) {
+        val result = host.showSnackbar(
+            message = message,
+            actionLabel = undoLabel,
+            withDismissAction = true,
+        )
+        if (result == SnackbarResult.ActionPerformed) actions.onUndo() else actions.onUndoShown()
     }
 }
 

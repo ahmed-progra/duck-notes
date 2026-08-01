@@ -36,9 +36,22 @@ class FakeNoteRepository : NoteRepository {
         savedTags -= id
     }
 
-    override fun observeNotes(tagId: String?): Flow<List<Note>> = notes.map { all ->
+    override fun observeNotes(): Flow<List<Note>> = notes.map { all ->
+        all.filterNot { it.isTrashed }.sortedByDescending { it.modifiedAt }
+    }
+
+    /**
+     * Mirrors `NoteDao.notesByTagPath`: the exact tag **or any descendant of it**, so `projects`
+     * finds a note tagged only `projects/duck/ui`.
+     *
+     * The `/` matters — without it `project` would match `projects/duck`, which is the bug the real
+     * query's `|| '/'` exists to prevent.
+     */
+    override fun observeNotesByTagPath(path: String): Flow<List<Note>> = notes.map { all ->
         all.filterNot { it.isTrashed }
-            .filter { tagId == null || tagId in savedTags[it.id].orEmpty() }
+            .filter { note ->
+                savedTags[note.id].orEmpty().any { it == path || it.startsWith("$path/") }
+            }
             .sortedByDescending { it.modifiedAt }
     }
 
