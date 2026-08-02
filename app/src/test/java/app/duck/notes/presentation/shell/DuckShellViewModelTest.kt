@@ -91,6 +91,7 @@ class DuckShellViewModelTest {
         handle = handle,
         observeNotes = ObserveNotes(notes),
         observeNote = ObserveNote(notes),
+        saveNote = SaveNote(notes, DeriveTitle(), parseTags, Clock { now }),
         observeTagTree = ObserveTagTree(tags),
         observeTagCounts = ObserveTagCounts(tags),
         parseTags = parseTags,

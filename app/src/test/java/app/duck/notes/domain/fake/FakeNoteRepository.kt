@@ -20,9 +20,26 @@ class FakeNoteRepository : NoteRepository {
     /** Tag names recorded by the most recent [save] of each note — what the tests assert against. */
     val savedTags = mutableMapOf<String, List<String>>()
 
+    /**
+     * Every [Note] [save] was called with, in order, including seeds.
+     *
+     * Phase 8a asserts on write *counts*, not just final state: "opening a note writes nothing" and
+     * "N keystrokes inside the idle window produce one save" are both invisible to a final-state
+     * check, because the end result is identical either way.
+     *
+     * The whole `Note` rather than `(id, body)`, because **two different writers reach this method
+     * and only one of them restamps**. `SaveNote` sets `modifiedAt` to the clock; a tag rewrite
+     * copies the note and changes only the body. A test that counts writes alone cannot tell them
+     * apart, and reads as though it proved something about `modifiedAt` when it did not.
+     */
+    val writes = mutableListOf<Note>()
+
     suspend fun seed(note: Note, tags: List<String> = emptyList()) = save(note, tags)
 
     fun current(id: String) = notes.value.find { it.id == id }
+
+    /** Every note, for [FakeTagRepository]'s optional body rewriting. */
+    fun all(): List<Note> = notes.value
 
     /**
      * Removes the row outright, so [observeNote] emits null.
@@ -71,6 +88,7 @@ class FakeNoteRepository : NoteRepository {
 
     override suspend fun save(note: Note, tagNames: List<String>) {
         savedTags[note.id] = tagNames
+        writes += note
         notes.value = notes.value.filterNot { it.id == note.id } + note
     }
 }

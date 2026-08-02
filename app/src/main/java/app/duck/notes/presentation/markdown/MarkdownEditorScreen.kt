@@ -10,7 +10,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.tooling.preview.Preview
@@ -21,36 +20,28 @@ import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.domain.markdown.MarkdownTextCache
 
 /**
- * Phase 4's prototype editor — the markdown engine, on screen, and nothing else.
+ * The editor — the markdown engine over a buffer someone else owns.
  *
- * No autosave, no toolbar, no repository, no note id. The build spec asks for the editor to be
- * prototyped alone before anything is wired to it, and Phase 8 is where this becomes the real
- * screen. State lives in memory and dies with the composable, on purpose.
+ * **Phase 8a took the buffer away and it is not coming back.** Until then this held its own state in
+ * `rememberSaveable(text, saver = TextFieldState.Saver)`, which was right for Phase 6 and wrong for
+ * a real editor in two ways:
  *
- * **Phase 6 gave it [text] and deliberately not a ViewModel.** The shell hands it the selected
- * note's body; autosave, the note id and the save path are Phase 8's Build list, and giving the
- * prototype its own ViewModel here would pull that work forward. The consequence is that edits die
- * on a rotation while the *selection* survives — `DuckShellViewModel` holds that, not this.
+ * - **It serialised the whole note body into the saved-instance `Bundle`** on every rotation, through
+ *   a 1MB per-process Binder buffer already shared with `DuckShellViewModel`'s `SavedStateHandle`.
+ *   A 10k-word note — this phase's own target — put `TransactionTooLargeException` in range.
+ * - **`rememberSaveable` keys on composition position**, and the editor moves between `Scaffold`
+ *   content on Compact and a `Row` child on Expanded, so crossing 600dp silently dropped the buffer.
  *
- * The buffer is `rememberSaveable` **keyed on [text]**, which is `rememberTextFieldState` expanded by
- * hand — that function is exactly `rememberSaveable(saver = TextFieldState.Saver)` with no key. Two
- * properties are needed here and neither can be dropped:
+ * Both are gone rather than moved: [state] is a plain field on `DuckShellViewModel`, which has no
+ * composition key at all, and the `Bundle` now carries only the note id. Restore is "read the id,
+ * re-query Room" — which is what makes *"kill the app mid-typing"* true for real rather than true up
+ * to a `Bundle` size.
  *
- * - **Keyed**, so selecting a different note replaces the buffer. Without the key the new argument is
- *   ignored and the failure looks like "tapping a note does nothing".
- * - **Saveable**, so a rotation does not discard what was typed. Plain `remember(text)` gets the
- *   keying and silently loses this — a regression against Phase 4's prototype, which had the saver.
- *
- * Known ceiling: `rememberSaveable` keys on composition position, and the editor moves between
- * `Scaffold` content on Compact and a `Row` child on Expanded, so **crossing 600dp still drops the
- * buffer**. That is the same trap `DuckShellViewModel` documents, and the reason shell state is in
- * `SavedStateHandle` instead. The editor cannot follow it there until Phase 8 gives it a ViewModel
- * and a save path; until then a resize losing unsaved text is the honest limit.
+ * This composable now holds **nothing saveable**. Do not give it a fallback `TextFieldState`: a
+ * default would let a caller silently get a detached buffer that autosave never sees.
  */
 @Composable
-fun MarkdownEditorScreen(text: String, modifier: Modifier = Modifier) {
-    val state = rememberSaveable(text, saver = TextFieldState.Saver) { TextFieldState(text) }
-
+fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
     // The cache is unkeyed, so the incremental scan survives everything — a fresh one per frame
@@ -122,6 +113,9 @@ internal val SAMPLE_NOTE = """
 @Composable
 private fun MarkdownEditorScreenPreview() {
     DuckTheme {
-        MarkdownEditorScreen(SAMPLE_NOTE)
+        // `remember`, not `rememberTextFieldState` — that IS the saver, and a preview has no process
+        // death to survive. Keeping it out means `src/main` has no saveable buffer at all, which is
+        // an invariant a scan can check rather than an exception it has to carve out.
+        MarkdownEditorScreen(remember { TextFieldState(SAMPLE_NOTE) })
     }
 }

@@ -760,6 +760,164 @@ An earlier version of that test asserted the opposite from imagination and faile
 
 **Success:** Kill the app mid-typing — no data loss. 10k-word note scrolls at 60fps.
 
+*Split into **8a** (autosave + the saver drop — shipped, below), **8b** (format toolbar, undo/redo
+buttons, task toggling, section folding) and **8c** (images, paste, focus mode, RTL). 4a/4b and 5a/5b
+precedent. Undo/redo moved from 8a to 8b: `TextFieldState.undoState` already works and there is
+nothing to build until a toolbar exposes it — what 8a owed it was the `clearHistory()` rule, below.*
+
+---
+
+## PHASE 8a — AUTOSAVE + SAVER DROP
+
+**Goal:** The open note's text is durable, and the two writers cannot corrupt each other.
+
+### The success bar was wrong, and is amended
+
+*"Kill the app mid-typing — no data loss"* cannot be met by a 400ms debounce, and not for the reason
+the phase note assumed. **400ms is an *idle* window, not a loss bound.** A debounce fires when typing
+*stops*; a continuous typist never stops, so it never fires and **the unsaved window is unbounded** —
+60 seconds of steady typing is 60 seconds at risk. `DuckShellAutosaveTest.
+debounceAloneNeverFiresDuringContinuousTyping` drives a bare `debounce(400)` over five seconds of
+keystrokes and asserts it saves **nothing**. That is evidence, not argument.
+
+So autosave is **400ms idle OR 2s since the first unsaved keystroke**, and the bar now reads:
+
+> **No data loss on any orderly departure** — home, recents, screen off, task switch, system reclaim;
+> `ON_STOP` flushes. **≤ 2 s of typing** on an abnormal kill — crash, `am force-stop`, kernel OOM
+> while foreground — where no `ON_STOP` fires. Nothing short of a Room write per keystroke recovers
+> that residual, and it is stated rather than hidden.
+
+### Three implementation decisions that were forced, not chosen
+
+**1. `cappedDebounce` is hand-rolled, and `merge(debounce, sample)` was rejected twice over.**
+`sample` schedules a *perpetual* ticker, so the scheduler never goes idle — under
+`kotlinx-coroutines-test` that hangs `advanceUntilIdle()` forever, which is most of the shell's
+existing suite. It was not a hypothesis: the whole suite hung until the operator was rewritten. And
+`sample` ticks on a fixed grid from subscription, so the ceiling it appears to enforce silently
+resets. The replacement parks on `receive()` between saves, so nothing is scheduled while idle.
+
+**2. The autosave loop keys on `loadedId`, not `selectedId`.** They look equivalent and are not:
+keyed on the selection, the loop starts the instant a row is tapped, observes the buffer still
+holding the *previous* note (or nothing at all on a fresh ViewModel), and writes that. The empty body
+becomes `lastWritten`, every later external change then reads as "buffer is dirty", and adoption
+stops happening entirely. **Six tests failed on that one cascade**, including a selection restored
+onto a hard-deleted note re-creating it from an empty buffer.
+
+**3. `save()` takes no text — it reads the buffer under the lock.** The emission that triggers a save
+is a signal, never a payload. `adopt` and `rewriteBuffer` mutate the buffer without anything calling
+`Snapshot.sendApplyNotifications`, so `snapshotFlow` has not re-emitted and the value still in flight
+is the text from *before* the rewrite. Trusting it reverted a rename on the very next debounce — the
+buffer correct, Room wrong, three writes where two belonged.
+
+### The two writers — adopt-when-clean was insufficient
+
+Autosave writes the body; `TagRepositoryImpl`'s rename and delete rewrite the same bodies. Phase 7
+assumed a single writer and said "revisit when autosave lands".
+
+Without a fix: rename reads the note's *last saved* body, commits, and 400ms later autosave writes
+the stale buffer — `saveNoteWithTags` re-derives tags and **`ensureTag` mints the row the transaction
+just deleted.** Last-writer-wins, and the winner is the stale one, on exactly the note the user was
+looking at.
+
+**Adopt-when-clean does not close it.** It blocks the adoption but leaves `#work` in a dirty buffer,
+and the next save resurrects the tag anyway — the identical failure, one debounce later. So the
+buffer is **rewritten, never discarded**, through the same `TagScanner` the transaction used:
+
+| intent | dirty-buffer action |
+|---|---|
+| `onRenameTag` | `TagScanner.rename` on the live buffer |
+| `onDeleteTag` | `TagScanner.remove` on the live buffer |
+| `onAddTagToNote` | **flush only.** The append rule lives inside `AddTagToNote`; re-applying it here would be a second implementation of tag syntax. It survives by a *chain* — flush leaves the buffer clean, adoption picks the appended body up — not a mechanism. Pinned, `ponytail:` at the call site |
+| `onUndo` | **no flush**, then adopts unconditionally |
+
+**`onUndo` is the one intent that must not flush**, and it did until review caught it. The other three
+flush so the transaction reads current text; undo's contract is the opposite — *discard what happened
+since the snapshot*. Flushing first wrote the user's typing to Room and then restored the snapshot
+straight over it, destroying the typing **on disk** rather than only in the buffer, and restamping
+`modifiedAt` on the way past for a write that lived two statements. The typing is still lost from the
+buffer, because adoption is unconditional and that is undo working; what changed is that Room is never
+polluted with a body the user asked to revert.
+
+`lastWritten` gets the same transform, because Room's copy underwent exactly it: a clean buffer stays
+clean, a dirty one stays dirty by the user's own edits.
+
+**Optimistic concurrency was not available.** `modifiedAt` cannot be the version — Phase 7
+deliberately does not restamp it on a rename, so it does not move. `remoteRev` is Phase 13's.
+
+### `modifiedAt`, unchanged both ways
+
+`SaveNote` restamps (an edit is an edit); `TagRepositoryImpl.writeBody` still does not (a rename is
+not). Visible consequence: the open note jumps to the top of the list once, then cannot move again —
+it is already newest. Opening a note restamps **nothing**, which needed the gate set *before* the
+buffer is written or the load writes itself straight back.
+
+### What the saver drop bought — and the guard that could not see it
+
+`MarkdownEditorScreen` holds nothing saveable. The `Bundle` carries filter, note id and expanded tag
+paths — three strings — and restore is "read the id, re-query Room". The 600dp resize that silently
+dropped the buffer under `rememberSaveable` is **gone, not moved**: a ViewModel field has no
+composition key. `rememberTextFieldState` survives only in `src/debug`, where the note is ~700 bytes
+and the gallery is dex-probed absent from release.
+
+**The first two guards for this were unsound, and it took an experiment to see it.** Both inspected
+`SavedStateHandle` for an oversized value. **`rememberSaveable` never goes near `SavedStateHandle`** —
+it writes to the composition's `SaveableStateRegistry`, which the *Activity* collects into
+`onSaveInstanceState`. Both land in the same `Bundle` and contend for the same 1MB Binder buffer,
+which is why the drop matters, but reading one says nothing about the other. Proven rather than
+argued: the saver was temporarily reintroduced into `MarkdownEditorScreen` and **both guards stayed
+green**. Neither composes anything, so neither could ever have observed a saver.
+
+`EditorSaverSourceTest` replaces them — a source scan in `TokenSourceTest`'s idiom, banning both
+`TextFieldState.Saver` and `rememberTextFieldState` (which *is* that saver, and reads as innocuous)
+in `presentation/markdown` and `presentation/shell`. It was verified by the same experiment in
+reverse: reintroduce the saver, and it goes red. Two properties it needs and the first draft lacked —
+it strips comments before matching, or the KDoc explaining the removal is itself flagged as the
+defect; and it proves the scan resolved, since a scan with a wrong path finds nothing and reports
+green. **This is the third time in this project a green test turned out to be looking at nothing** —
+after Phase 5's missing checkbox state and Phase 6's `[[WikiLink]]` corpus gap.
+
+The preview now uses `remember { TextFieldState(...) }` rather than `rememberTextFieldState`, so
+`src/main` has no saveable buffer at all — an invariant a scan can check, rather than an exception it
+has to carve out.
+
+### Painted pairs — none
+
+The editor pane paints three, all pre-existing and already floored: `onSurface on surface`,
+`accent on surface` (cursor — a fill, 3.0), `onSurface on selection`. No component gained `enabled`.
+**`duckPairs` stays 23, `distinguishability` stays 3.** No save indicator: a new pair bought with a
+feature nobody asked for.
+
+### Verification
+
+**328 JVM unit tests, 0 failures** (299 at `4a16ca7` + 29). **37 instrumented, 0 failures** on a
+Pixel 7 API 35 emulator — 31 pre-existing plus 6 new, run through
+`adb shell am instrument`, never `connectedAndroidTest`. Lint clean: 32 warnings, all dependency
+staleness, 0 errors.
+
+The six new instrumented tests are the ones a fake cannot speak to: process-death survival, `ON_STOP`
+flushing with no debounce elapsed, the ceiling firing **within `MAX_WAIT_MS` of the first keystroke**
+on a real clock, the `ensureTag` resurrection for both rename and delete, and a 10k-word note loading
+with only an id in the handle. **The resurrection pair is the phase's central claim** — no fake has an
+`ensureTag`, so nowhere else can observe a deleted `tags` row being minted again by a stale buffer.
+
+**`FakeTagRepository` now rewrites bodies when passed a note repository.** 8a's subject is two writers
+racing over one body, and with bodies frozen the shell correctly adopts Room's stale copy — the fake's
+artefact, not a defect. Still not a reimplementation: the rewriting goes through `TagScanner`. What it
+omits is the transaction, which is what a JVM test cannot speak to.
+
+**The instrumented suite was reported blocked on "no device" when the emulator was running.** `adb` is
+not on `PATH` on this machine, and a bare `adb devices` answers *"command not found"* — which reads
+exactly like an empty device list if skimmed. **An absent binary and an absent emulator produce the
+same conclusion.** Both absolute paths are now in `SETUP.md` beside the Gradle one, with the
+`emulator -avd` "multiple emulators" error flagged as meaning *already running*, not *failed*.
+
+**OPEN — "10k-word note scrolls at 60fps" is not evidenced and 8a does not claim it.** No JVM
+benchmark line was added, because none is honest: `ScannerBenchmarkTest` is pure JVM over
+`MarkdownTextCache`, and measuring the autosave observation needs `TextFieldState`, an Android-only
+artifact. Timing a bare 60KB `toString()` would measure the JDK. `BasicTextField` does not virtualise
+and layout is O(document), so at 10k words layout — not scanning, not autosave — is the likely
+villain. Needs a device trace; 8b or Phase 16 owns it.
+
 **Carried from Phase 6 — drop the editor's saver when autosave lands**
 
 `MarkdownEditorScreen` holds its buffer in `rememberSaveable(text, saver = TextFieldState.Saver)`.

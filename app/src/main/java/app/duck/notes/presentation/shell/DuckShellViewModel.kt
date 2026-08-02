@@ -1,10 +1,15 @@
 package app.duck.notes.presentation.shell
 
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.markdown.MarkdownScanner
+import app.duck.notes.domain.markdown.TagScanner
 import app.duck.notes.domain.model.BodySnapshot
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.TagCount
@@ -19,20 +24,30 @@ import app.duck.notes.domain.usecase.ObserveTagTree
 import app.duck.notes.domain.usecase.ParseTags
 import app.duck.notes.domain.usecase.PinTag
 import app.duck.notes.domain.usecase.RenameTag
+import app.duck.notes.domain.usecase.SaveNote
 import app.duck.notes.domain.usecase.SetTagIcon
 import app.duck.notes.domain.usecase.UndoTagChange
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.produce
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.time.ZoneId
 import javax.inject.Inject
@@ -49,14 +64,26 @@ import javax.inject.Inject
  * survives a rotation (the `ViewModelStore` is retained), a resize (same) and process death (the
  * handle is written to the saved-instance bundle).
  *
- * The editor is **not** wired here. Phase 6 hands it a `String`; autosave, undo and the save path
- * are Phase 8's, and pulling them forward is what giving the editor its own ViewModel would do.
+ * ## Phase 8a folded the editor's buffer in here
+ *
+ * Phase 6 handed the editor a `String` and said autosave was Phase 8's. This is that. [buffer] lives
+ * here rather than in a second ViewModel for one concrete reason: **all four operations that rewrite
+ * note bodies from outside the editor are intents on this class** — [onRenameTag], [onDeleteTag],
+ * [onAddTagToNote] and [onUndo]. Keeping the buffer here makes "flush before you write" a suspend
+ * call in the same coroutine. Split across two Hilt-scoped ViewModels it would need a shared
+ * coordinator object with exactly one caller, which the GLOBAL CONTRACT forbids.
+ *
+ * [buffer] is a plain field, deliberately **not** in [handle]: a `TextFieldState` holds the whole
+ * note body, and that is precisely what must stay out of the saved-instance `Bundle`. It survives a
+ * rotation and a 600dp resize because the `ViewModelStore` is retained; it does not survive process
+ * death, and does not need to, because the body was in Room at most [MAX_WAIT_MS] ago.
  */
 @HiltViewModel
 class DuckShellViewModel @Inject constructor(
     private val handle: SavedStateHandle,
     private val observeNotes: ObserveNotes,
     private val observeNote: ObserveNote,
+    private val saveNote: SaveNote,
     observeTagTree: ObserveTagTree,
     observeTagCounts: ObserveTagCounts,
     private val parseTags: ParseTags,
@@ -112,12 +139,20 @@ class DuckShellViewModel @Inject constructor(
      * editor open on a note the list no longer contains, which is correct. A null emission — the
      * note was trashed or purged from under us — collapses to "nothing selected" rather than
      * stranding the editor on a dead id.
+     *
+     * A `StateFlow`, not a cold `Flow`, since 8a. Two consumers now read it — [state]'s `combine` and
+     * the buffer-sync collector in `init` — and sharing means **one** `observeNote` query rather than
+     * two subscriptions to the same row.
+     *
+     * The buffer collector never unsubscribes, so `WhileSubscribed` never actually times out for this
+     * one flow. That is the deliberate cost of keeping the open note's body live: adopting an
+     * external change (a tag rename that rewrote it) is only possible while something is watching.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val selection: Flow<Selection> = selectedId.flatMapLatest { id ->
+    private val selection: StateFlow<Selection> = selectedId.flatMapLatest { id ->
         if (id == null) flowOf(Selection())
         else observeNote(id).map { note -> note?.let { Selection(id, it.body) } ?: Selection() }
-    }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), Selection())
 
     /** Three flows bundled into one, because `combine` tops out at five. */
     private val tagState: Flow<TagState> = combine(tree, counts, undo, ::TagState)
@@ -139,6 +174,204 @@ class DuckShellViewModel @Inject constructor(
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
 
+    // --- the editor buffer, and the one write path ---------------------------
+
+    /** The open note's text. Hoisted out of the composable in 8a — see the class KDoc. */
+    val buffer = TextFieldState()
+
+    /**
+     * Which note's text [buffer] currently holds. **Not** [selectedId], which moves the instant a row
+     * is tapped, while this moves only once the body has actually been loaded.
+     *
+     * A `StateFlow` because the autosave loop keys on it. Keying on [selectedId] instead looks
+     * equivalent and is not: the loop would start the moment a row was tapped, observe the buffer
+     * still holding the *previous* note (or, on a fresh ViewModel, nothing), and write that. The
+     * empty body then becomes [lastWritten], every later external change reads as "buffer is dirty",
+     * and adoption stops happening at all. Six tests in `DuckShellAutosaveTest` failed on exactly
+     * that cascade before the key moved here.
+     */
+    private val loadedId = MutableStateFlow<String?>(null)
+
+    /**
+     * The exact string last written to Room, or last loaded from it. The gate on **every** save path,
+     * not just [flush]: without it, opening a note would immediately write it straight back and
+     * restamp `modifiedAt` for nothing, reordering the list on a read.
+     */
+    private var lastWritten: String? = null
+
+    /**
+     * Serialises the three entrants to [save] — the debounce, the max-wait, and [flush].
+     *
+     * `flush()` at the top of an intent does not stop a debounced save that is already in flight, so
+     * without this a rename could interleave with the write it was meant to follow.
+     */
+    private val writeLock = Mutex()
+
+    init {
+        // Buffer sync. Keyed on the note id inside `sync`, so this handles both "a different note was
+        // selected" and "the open note's body changed underneath us".
+        viewModelScope.launch { selection.collect(::syncBuffer) }
+
+        // Autosave. flatMapLatest on the id is what makes the (id, text) pairing atomic: a note
+        // switch CANCELS the collector, so an emission produced while note A was open can never be
+        // delivered after the swap and land on note B. The id travels with the text rather than being
+        // read again at write time, which is the race a lock alone does not close.
+        @OptIn(ExperimentalCoroutinesApi::class)
+        viewModelScope.launch {
+            loadedId.flatMapLatest { id ->
+                if (id == null) emptyFlow() else snapshotFlow { buffer.text }.cappedDebounce().map { id }
+            }.collect(::save)
+        }
+    }
+
+    /**
+     * Debounce with a ceiling: emits [IDLE_MS] after the last change, **or** [MAX_WAIT_MS] after the
+     * first unsaved one, whichever comes first.
+     *
+     * The ceiling is not a refinement of the debounce, it is what makes the loss window finite. A
+     * debounce fires when typing *stops*; someone typing continuously never stops, so a plain
+     * `debounce(400)` would never fire at all and the unsaved window would be unbounded.
+     * `debounceAloneNeverFiresDuringContinuousTyping` pins that, and it is the reason the phase's
+     * success bar had to be amended rather than simply claimed.
+     *
+     * **Hand-rolled rather than `merge(debounce(400), sample(2000))`, for two reasons.** `sample`
+     * schedules a *perpetual* ticker, so it never lets the scheduler go idle — under
+     * `kotlinx-coroutines-test` that hangs `advanceUntilIdle()` forever, which is most of the shell's
+     * existing suite. And `sample` ticks on a fixed grid from subscription, so a change landing just
+     * before a tick is saved 1ms later while the ceiling it is supposed to enforce silently resets.
+     * This measures the ceiling from the first unsaved change, which is what the bar actually claims.
+     *
+     * Between saves it parks on `receive()` with nothing scheduled, so the scheduler goes idle.
+     */
+    private fun Flow<CharSequence>.cappedDebounce(): Flow<String> = flow {
+        coroutineScope {
+            val changes = produce(capacity = Channel.CONFLATED) {
+                this@cappedDebounce.collect { send(it.toString()) }
+            }
+            while (true) {
+                // Parks here indefinitely while nothing is typed. No timer, so the scheduler idles.
+                var latest = changes.receive()
+                withTimeoutOrNull(MAX_WAIT_MS) {
+                    while (true) {
+                        latest = withTimeoutOrNull(IDLE_MS) { changes.receive() }
+                            ?: return@withTimeoutOrNull
+                    }
+                }
+                emit(latest)
+            }
+        }
+    }
+
+    /**
+     * The only write path for a note body in this class. Idempotent: a redundant trigger costs one
+     * string comparison, not a write.
+     *
+     * **Takes no text — it reads [buffer] under the lock.** The emission that triggered this is a
+     * signal that something changed, never the payload. Trusting the payload is a real defect, not a
+     * theoretical one: `adopt` and [rewriteBuffer] mutate the buffer without anything calling
+     * `Snapshot.sendApplyNotifications`, so `snapshotFlow` has not re-emitted and the value still in
+     * flight is the text from *before* the rewrite. A rename would then be reverted by the very next
+     * debounce — `aDirtyBufferIsRewrittenByARenameAndTheOldTagIsNotResurrected` caught exactly that,
+     * with the buffer correct and Room wrong.
+     */
+    private suspend fun save(id: String) = writeLock.withLock {
+        val text = buffer.text.toString()
+        // The buffer holds [loadedId]'s text, which is NOT always the selected id: between a row
+        // being tapped and its body arriving they differ, and the buffer still holds the old note —
+        // or, on a fresh ViewModel, nothing at all. Writing then would save an empty body over the
+        // incoming note. `aSelectionRestoredOntoADeletedNoteClearsItself` caught exactly that: a
+        // selection restored onto a hard-deleted note re-created it from an empty buffer.
+        if (id != loadedId.value) return@withLock
+        if (text == lastWritten) return@withLock
+        saveNote(id, text)
+        lastWritten = text
+    }
+
+    /**
+     * Write now, without waiting for the debounce. Called before anything that rewrites bodies, and
+     * on `ON_STOP` so an orderly departure loses nothing.
+     *
+     * Suspends until the write lands, so callers can rely on Room being current when it returns.
+     */
+    suspend fun flush() {
+        save(loadedId.value ?: return)
+    }
+
+    /**
+     * `ON_STOP` — the hook that turns "≤2s of typing at risk" into "nothing at risk" for every
+     * departure the user can cause from the UI: home, recents, screen off, task switch.
+     *
+     * **[viewModelScope], deliberately.** A `rememberCoroutineScope()` is cancelled when the
+     * composable leaves the composition, which is exactly what is happening at `ON_STOP` — the flush
+     * would be cancelled by the event that triggered it. `viewModelScope` outlives the composition.
+     *
+     * Nothing recovers a kill that fires no `ON_STOP` at all — a crash, `am force-stop`, a kernel OOM
+     * — short of a Room write per keystroke. That residual is bounded by [MAX_WAIT_MS] and is stated
+     * in the phase's amended success bar rather than papered over.
+     */
+    fun onStop() {
+        viewModelScope.launch { flush() }
+    }
+
+    /**
+     * Reconciles [buffer] with what Room says the open note holds.
+     *
+     * Three cases, and the third is the one that matters:
+     * - **A different note** (or none): load it. [lastWritten] is set *before* the buffer is written,
+     *   or `snapshotFlow` fires against a stale gate and the load writes itself straight back.
+     * - **Same note, buffer clean**: an external change — adopt it.
+     * - **Same note, buffer dirty**: ignore. The user's unsaved keystrokes win, and the intent that
+     *   caused the external change has already applied the same transform to the buffer via
+     *   [rewriteBuffer]. Adopting here would discard what they typed.
+     */
+    private fun syncBuffer(sel: Selection) {
+        if (sel.id == loadedId.value) {
+            if (buffer.text.toString() == lastWritten) adopt(sel.body)
+            return
+        }
+        adopt(sel.body)
+        // Last, deliberately: this is what starts the autosave loop for the new note, and it must not
+        // start until the buffer and the gate below both hold that note's text.
+        loadedId.value = sel.id
+    }
+
+    private fun adopt(body: String) {
+        lastWritten = body
+        buffer.setTextAndPlaceCursorAtEnd(body)
+        // Undo must not walk backwards across a change the user did not make: the result would be
+        // text that is neither the pre- nor the post-change body.
+        buffer.undoState.clearHistory()
+    }
+
+    /**
+     * Applies a body transform to the **live** buffer, so an external rewrite is not lost to unsaved
+     * typing — and, more importantly, so the next autosave does not write the pre-rewrite text back.
+     *
+     * Adopt-when-clean alone is not enough. It blocks the adoption but leaves the old tag sitting in
+     * a dirty buffer, and the following save then re-derives tags from it and `ensureTag` **mints the
+     * deleted row again**. The buffer is rewritten, never discarded.
+     *
+     * [lastWritten] gets the same transform, because Room's copy underwent exactly this one: a buffer
+     * that was clean before stays clean, and one that was dirty stays dirty by the user's own edits.
+     *
+     * ponytail: whole-buffer replace, so the caret is re-clamped rather than offset-mapped — it
+     * drifts by one length delta per occurrence before it (`work`->`job` is 1 char each). Exact
+     * mapping would need `TagScanner` to return edit positions, for a drift after an operation
+     * started in the sidebar rather than the editor. Revisit if 8b's toolbar needs real offset maps.
+     */
+    private fun rewriteBuffer(transform: (String) -> String) {
+        val current = buffer.text.toString()
+        val next = transform(current)
+        lastWritten = lastWritten?.let(transform)
+        if (next == current) return
+        buffer.edit {
+            val caret = selection.start
+            replace(0, length, next)
+            selection = TextRange(caret.coerceAtMost(length))
+        }
+        buffer.undoState.clearHistory()
+    }
+
     // --- intents -------------------------------------------------------------
 
     /** Changing the filter clears the selection: the open note is usually not in the new list. */
@@ -147,12 +380,19 @@ class DuckShellViewModel @Inject constructor(
         handle[KEY_SELECTED] = null
     }
 
+    /** Flushes the outgoing note **before** the id moves, or its last keystrokes are lost. */
     fun onSelectNote(id: String) {
-        handle[KEY_SELECTED] = id
+        viewModelScope.launch {
+            flush()
+            handle[KEY_SELECTED] = id
+        }
     }
 
     fun onClearSelection() {
-        handle[KEY_SELECTED] = null
+        viewModelScope.launch {
+            flush()
+            handle[KEY_SELECTED] = null
+        }
     }
 
     fun onToggleTag(path: String) {
@@ -180,7 +420,13 @@ class DuckShellViewModel @Inject constructor(
      */
     fun onRenameTag(from: String, to: String) {
         viewModelScope.launch {
+            // Flush first, so the transaction reads the text the user can see rather than whatever
+            // the last debounce happened to leave in Room.
+            flush()
             val snapshot = renameTag(from, to) ?: return@launch
+            // Then the same rewrite on the live buffer. No membership check is needed: TagScanner
+            // returns the body unchanged when it does not carry the tag.
+            rewriteBuffer { TagScanner.rename(it, from, to) }
             followFilter(from) { path -> to + path.removePrefix(from) }
             offerUndo(snapshot, TagPrompt.Kind.Renamed, to)
         }
@@ -189,7 +435,9 @@ class DuckShellViewModel @Inject constructor(
     /** Deleting the tag the list is filtered by leaves nothing to show, so the filter goes home. */
     fun onDeleteTag(path: String) {
         viewModelScope.launch {
+            flush()
             val snapshot = deleteTag(path)
+            rewriteBuffer { TagScanner.remove(it, path) }
             followFilter(path) { null }
             offerUndo(snapshot, TagPrompt.Kind.Deleted, path)
         }
@@ -205,6 +453,21 @@ class DuckShellViewModel @Inject constructor(
      */
     fun onAddTagToNote(noteId: String, name: String) {
         viewModelScope.launch {
+            // Flush first, so the append lands on the text the user can see. Unlike rename and
+            // delete there is no matching [rewriteBuffer] call, and that asymmetry is deliberate:
+            // the append rule (trimEnd, own line, TagScanner.token) lives inside AddTagToNote, and
+            // re-applying it here would be a second implementation of tag syntax — the one thing
+            // this codebase does not allow.
+            //
+            // ponytail: the append therefore survives only because flush() leaves the buffer clean
+            // and the sync collector then adopts the appended body — NOT because anything reconciles
+            // the two. `anAppendedTagSurvivesAnUnsavedBufferViaFlushAndAdoption` pins that chain, and
+            // it is a chain rather than a mechanism: if a future change makes adoption conditional,
+            // or moves the flush, the tag is silently lost. Ceiling: keystrokes landing *between* the
+            // flush and the adoption still shadow it. Upgrade path is `TagScanner.append`, which
+            // makes the append a transform so `rewriteBuffer` handles it like the other two — worth
+            // doing the moment a second caller wants it, not before.
+            flush()
             if (addTagToNote(noteId, name) == AddTagResult.NotWritable) {
                 pendingUndo = null
                 undo.value = TagPrompt(TagPrompt.Kind.AddFailed, name)
@@ -216,11 +479,50 @@ class DuckShellViewModel @Inject constructor(
     fun tagsOfNote(noteId: String): List<String> =
         state.value.notes.find { it.id == noteId }?.let { parseTags(it.body) }.orEmpty()
 
+    /**
+     * Restores the snapshot, then **adopts the restored body unconditionally** — the one place that
+     * overrides adopt-when-clean, deliberately.
+     *
+     * A restore is not expressible as a [TagScanner] transform: it writes N exact previous bodies
+     * back. There is nothing to apply to a dirty buffer. And "put it back" is an explicit command
+     * the user just pressed, which is a different thing from a rename happening beside them — so the
+     * restored text wins, and typing done between the Snackbar appearing and Undo being pressed is
+     * discarded.
+     */
     fun onUndo() {
         viewModelScope.launch {
-            pendingUndo?.let { undoTagChange(it) }
+            // NO flush, and this is the one intent that must not have one. The other three flush so
+            // the transaction reads current text; undo's contract is the opposite — *discard what
+            // happened since the snapshot*. Flushing first writes the user's typing to Room and then
+            // restores the snapshot straight over it, so the typing is destroyed **on disk**, not
+            // merely in the buffer, and `SaveNote` restamps `modifiedAt` on the way past for a write
+            // whose entire lifetime is two statements.
+            //
+            // The typing is still lost from the buffer, because `adopt` below is unconditional. That
+            // is undo doing its job. What changes is that Room is never polluted with a body the user
+            // asked to revert, and the note returns to exactly its pre-operation state.
+            val snapshot = pendingUndo
             pendingUndo = null
             undo.value = null
+            if (snapshot == null) return@launch
+
+            // The restore and the adopt are ONE critical section, and removing the flush is exactly
+            // why. The flush used to drain the pending debounced save as a side effect; without it,
+            // that save can fire in the gap between the restore transaction and the adopt — reading a
+            // buffer that still holds the user's typing, against a [lastWritten] that is still the
+            // pre-restore value, so the gate waves it through and it overwrites the restored body.
+            // The adopt that follows would then read Room and faithfully adopt the clobbered text.
+            //
+            // Holding the lock across both makes the blocked save harmless rather than merely
+            // unlikely: it resumes after [adopt] has set [lastWritten] to the restored body, sees
+            // buffer == lastWritten, and writes nothing. Cancelling the pending emission instead
+            // would need new machinery to reach inside `cappedDebounce`; this reuses the lock that
+            // already serialises flush against the debounce, and is correct by construction rather
+            // than by timing.
+            writeLock.withLock {
+                undoTagChange(snapshot)
+                loadedId.value?.let { id -> observeNote(id).first()?.let { adopt(it.body) } }
+            }
         }
     }
 
@@ -291,12 +593,27 @@ class DuckShellViewModel @Inject constructor(
         val undo: TagPrompt?,
     )
 
-    private companion object {
-        const val KEY_FILTER = "shell.filter"
-        const val KEY_SELECTED = "shell.selectedNoteId"
-        const val KEY_EXPANDED = "shell.expandedTagPaths"
+    // Not private since 8a: `AutosaveDurabilityTest` waits out [MAX_WAIT_MS] on a real clock, and a
+    // test that hardcoded 2000 would keep passing after the constant moved.
+    companion object {
+        private const val KEY_FILTER = "shell.filter"
+        private const val KEY_SELECTED = "shell.selectedNoteId"
+        private const val KEY_EXPANDED = "shell.expandedTagPaths"
 
         /** Outlives a rotation, so Room's flows are not torn down and rebuilt for one. */
-        const val STOP_TIMEOUT_MS = 5_000L
+        private const val STOP_TIMEOUT_MS = 5_000L
+
+        /** Save this long after the last keystroke. The spec's number. */
+        const val IDLE_MS = 400L
+
+        /**
+         * And save at least this often *while* typing continues.
+         *
+         * A debounce fires when typing **stops**, so a continuous typist never triggers one and the
+         * unsaved window is unbounded, not 400ms — 60 seconds of steady typing is 60 seconds at
+         * risk. This is the ceiling that makes the number finite, and it is what the phase's amended
+         * success bar quotes.
+         */
+        const val MAX_WAIT_MS = 2_000L
     }
 }

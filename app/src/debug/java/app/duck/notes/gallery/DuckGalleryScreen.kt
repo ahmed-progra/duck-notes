@@ -38,6 +38,8 @@ import app.duck.notes.core.ui.DuckDivider
 import app.duck.notes.core.ui.DuckEmptyState
 import app.duck.notes.core.ui.DuckIconButton
 import app.duck.notes.core.ui.DuckTagChip
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
 import app.duck.notes.presentation.markdown.SAMPLE_NOTE
 import app.duck.notes.presentation.shell.AddTagDialog
@@ -90,7 +92,13 @@ fun DuckGalleryScreen() {
                 )
                 when (page) {
                     GalleryPage.Tokens -> TokenSheet()
-                    GalleryPage.Editor -> MarkdownEditorScreen(SAMPLE_NOTE)
+                    // A detached buffer, and `rememberTextFieldState` IS the saver Phase 8a removed
+                    // from `src/main` — deliberately, here. This is a palette harness with no
+                    // ViewModel and no save path (see DuckGalleryActivity), so the buffer has nowhere
+                    // to go but the Bundle, and SAMPLE_NOTE is ~700 bytes against a 1MB limit. The
+                    // argument that forced the drop was a 10k-word note in a real app; it does not
+                    // apply to a debug fixture that is dex-probed absent from release.
+                    GalleryPage.Editor -> MarkdownEditorScreen(rememberTextFieldState(SAMPLE_NOTE))
                     GalleryPage.Shell -> ShellPage()
                     GalleryPage.Tags -> TagsPage()
                 }
@@ -118,11 +126,20 @@ private fun ShellPage() {
     var state by remember { mutableStateOf(ShellFixture.state) }
     var expanded by remember { mutableStateOf(ShellFixture.initiallyExpanded) }
 
+    // Since 8a the editor renders a hoisted buffer, and in the real app `DuckShellViewModel` keeps it
+    // in step with the selection. The fixture has no ViewModel, so selecting a note sets both — the
+    // page's job is to show a populated editor in eight palettes, not to model autosave.
+    val buffer = rememberTextFieldState(ShellFixture.bodyOf(state.selectedNoteId.orEmpty()))
+
     DuckShell(
         state = state.copy(tagRows = ShellFixture.tree.flatten(expanded, ShellFixture.counts)),
+        buffer = buffer,
         actions = ShellActions(
             onFilter = { state = ShellFixture.apply(state, it) },
-            onSelectNote = { id -> state = state.copy(selectedNoteId = id, selectedNoteBody = ShellFixture.bodyOf(id)) },
+            onSelectNote = { id ->
+                state = state.copy(selectedNoteId = id, selectedNoteBody = ShellFixture.bodyOf(id))
+                buffer.setTextAndPlaceCursorAtEnd(ShellFixture.bodyOf(id))
+            },
             onClearSelection = { state = state.copy(selectedNoteId = null, selectedNoteBody = "") },
             onToggleTag = { path -> expanded = if (path in expanded) expanded - path else expanded + path },
         ),

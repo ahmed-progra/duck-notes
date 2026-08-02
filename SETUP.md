@@ -260,15 +260,29 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 Three things cost time in Phase 6. None is a project defect; all are easy to hit again.
 
-**1. There is no `gradle` on `PATH` and no wrapper in the repo.** The distribution Gradle already
-downloaded lives under the wrapper cache, and that is what to invoke:
+**1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
+absolute paths — these two lines are the ones to copy:
 
-```
-~/.gradle/wrapper/dists/gradle-8.13-bin/5xuhj0ry160q40clulazy9h7d/gradle-8.13/bin/gradle.bat
+```sh
+GRADLE=/c/Users/zconsumers/.gradle/wrapper/dists/gradle-8.13-bin/5xuhj0ry160q40clulazy9h7d/gradle-8.13/bin/gradle
+ADB=/c/Users/zconsumers/AppData/Local/Android/Sdk/platform-tools/adb.exe
 ```
 
-Pass `-p "<repo root>"` rather than relying on the working directory — a tool that has `cd`'d
-elsewhere will otherwise fail with *"not part of the build defined by settings file"*.
+(Windows-shell form: `…\gradle-8.13\bin\gradle.bat` and `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`.)
+
+`adb` is missing from `PATH` in the same way and for the same reason as `gradle`, and it costs the
+same rediscovery every time — a bare `adb devices` returns *"command not found"*, which reads exactly
+like "no device attached" if you are not looking closely. **That is the trap: an absent binary and an
+absent emulator produce the same conclusion.** Phase 8a reported the instrumented suite as blocked on
+"no device" when the emulator was in fact running.
+
+Pass `-p "<repo root>"` to Gradle rather than relying on the working directory — a tool that has
+`cd`'d elsewhere will otherwise fail with *"not part of the build defined by settings file"*.
+
+**Emulator already running?** `emulator -avd Pixel_7` fails with
+*"Running multiple emulators with the same AVD is an experimental feature"* when an instance is
+already up. That message means **success, not failure** — check `$ADB devices` before launching, and
+before concluding anything from the error.
 
 **2. Do not point `JAVA_HOME` at Android Studio's JBR.** `JAVA_HOME` is already set correctly to
 Temurin 21. The JBR lacks the `SunMSCAPI` security provider, so the `javax.net.ssl.trustStoreType=Windows-ROOT`

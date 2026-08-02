@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
@@ -37,6 +38,8 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.duck.notes.R
 import app.duck.notes.core.icons.DuckIcon
@@ -92,8 +95,14 @@ import kotlinx.coroutines.launch
 fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
+    // The flush that makes "no data loss" true for every departure the user can cause from the UI.
+    // ON_STOP rather than ON_PAUSE: pause fires for a transparent activity on top, which is not a
+    // departure. The coroutine runs in viewModelScope — see DuckShellViewModel.onStop.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.onStop() }
+
     DuckShell(
         state = state,
+        buffer = viewModel.buffer,
         actions = ShellActions(
             onFilter = viewModel::onFilter,
             onSelectNote = viewModel::onSelectNote,
@@ -116,11 +125,15 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
  * The stateless half. Ordinary Compose state hoisting, with two real callers: [DuckShell] above and
  * the debug gallery, which drives it from a fixture so the eight palettes can be checked against a
  * populated list rather than whatever happens to be in the database.
+ *
+ * [buffer] is a parameter rather than a `rememberTextFieldState` inside — that would be the saver
+ * Phase 8a just removed, back in `src/main`, and a buffer autosave cannot see.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DuckShell(
     state: ShellUiState,
+    buffer: TextFieldState,
     actions: ShellActions,
     modifier: Modifier = Modifier,
 ) {
@@ -201,7 +214,7 @@ fun DuckShell(
                             onTagClick = { actions.onFilter(ShellFilter.Tag(it)) },
                         )
                     }
-                    MarkdownEditorScreen(text = state.selectedNoteBody)
+                    MarkdownEditorScreen(state = buffer)
                 }
             }
         }

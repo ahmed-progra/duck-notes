@@ -70,6 +70,7 @@ class ShellStateRestorationTest {
         handle = handle,
         observeNotes = ObserveNotes(notes),
         observeNote = ObserveNote(notes),
+        saveNote = SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }),
         observeTagTree = ObserveTagTree(tags),
         observeTagCounts = ObserveTagCounts(tags),
         parseTags = parseTags,
@@ -122,6 +123,32 @@ class ShellStateRestorationTest {
     }
 
     /**
+     * The handle carries the note **id**, which is what makes restore "re-query Room" rather than
+     * "deserialise a body".
+     *
+     * This asserts only what it can see. It is **not** the saver guard, and an earlier version of it
+     * pretended to be: `rememberSaveable` writes to the composition's `SaveableStateRegistry`, which
+     * the Activity collects — never to `SavedStateHandle`. Reintroducing the saver into
+     * `MarkdownEditorScreen` left this test green, because nothing here composes anything.
+     * `EditorSaverSourceTest` is the guard that can actually fail.
+     */
+    @Test
+    fun theHandleCarriesTheNoteIdSoRestoreCanRequery() = runTest {
+        notes.seed(Note(id = "n1", title = "n1", body = "body", createdAt = 0L, modifiedAt = 1L))
+
+        val handle = SavedStateHandle()
+        val vm = shell(handle)
+        val scope = CoroutineScope(dispatcher)
+        scope.launch { vm.state.collect {} }
+        advanceUntilIdle()
+        vm.onSelectNote("n1")
+        advanceUntilIdle()
+
+        assertEquals("n1", handle.get<String>("shell.selectedNoteId"))
+        scope.cancel()
+    }
+
+    /**
      * A selection whose note vanished while the process was dead restores as "nothing selected".
      *
      * The handle still holds the dead id — it is a dumb map and cannot know. `ObserveNote` emitting
@@ -150,5 +177,10 @@ class ShellStateRestorationTest {
         assertEquals(null, after.state.value.selectedNoteId)
         assertEquals("", after.state.value.selectedNoteBody)
         restored.cancel()
+    }
+
+    private companion object {
+        /** Comfortably above any id, filter key or tag path; far below any real note body. */
+        const val MAX_HANDLE_VALUE = 512
     }
 }
