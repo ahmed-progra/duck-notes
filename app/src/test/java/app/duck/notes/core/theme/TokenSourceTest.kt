@@ -56,6 +56,9 @@ class TokenSourceTest {
             val c = SpanStyle(color = BrandTextMuted)
             val d = TextStyle(fontSize = 16.sp, fontFamily = FontFamily.Monospace)
             val e = Color.White
+            val f = animateFloatAsState(1f, animationSpec = tween(300))
+            val g = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
+            val h = tween<Float>(200, easing = FastOutSlowInEasing)
             """.trimIndent()
 
         assertEquals(
@@ -66,6 +69,10 @@ class TokenSourceTest {
                 "16.sp",
                 "FontFamily.Monospace",
                 "Color.White",
+                "tween(",
+                "CubicBezierEasing(",
+                "tween<Float>(",
+                "FastOutSlowInEasing",
             ).sorted(),
             offenders(dirty).sorted(),
         )
@@ -85,6 +92,9 @@ class TokenSourceTest {
             val f = 16.dp
             val g = Color.Unspecified
             val h = DuckThemeSpec.DuckRed
+            val i = animateFloatAsState(1f, animationSpec = DuckTheme.motion.fastSpec())
+            val j = Modifier.animateItem(placementSpec = motion.movementSpec())
+            val k = motion.easeOut
             """.trimIndent()
 
         assertEquals(emptyList<String>(), offenders(clean))
@@ -223,7 +233,37 @@ class TokenSourceTest {
         val FONT_FAMILY = Regex("\\bFontFamily[.(]\\w*")
         val ABSOLUTE_SP = Regex("\\b\\d+(?:\\.\\d+)?\\.sp\\b")
 
-        val DETECTORS = listOf(COLOR_LITERAL, RAW_TOKEN, NAMED_COLOR, FONT_FAMILY, ABSOLUTE_SP)
+        /**
+         * Phase 8b's addition, on the same argument as the colour literal: a duration written at a
+         * call site is outside the contract and cannot be changed from one place.
+         *
+         * **Constructors rather than numbers.** A regex over millisecond literals would have to guess
+         * which `200` is a duration, and would miss `MY_DURATION`. But a duration can only *reach* an
+         * animation through one of these constructors, so banning them is complete rather than
+         * heuristic. Call sites take a ready-made spec off `DuckTheme.motion` instead.
+         */
+        val ANIMATION_SPEC = Regex(
+            "\\b(tween|spring|snap|keyframes|repeatable|infiniteRepeatable|CubicBezierEasing)" +
+                // The explicit type argument is not optional to handle: `tween<Float>(200)` is the
+                // form you reach for the moment inference fails, so a regex without it bans the easy
+                // spelling and waves the hard one through.
+                "\\s*(?:<[^>\\n]*>)?\\s*\\(",
+        )
+
+        /**
+         * Compose's stock easings, banned for the same reason plus one more: they are Material's
+         * defaults and too weak to read as intentional, which is why `DuckMotion` carries stronger
+         * curves. `LinearEasing` is included though it is legitimate for constant motion — nothing
+         * here has any, and the moment something does it belongs in the family, not at a call site.
+         */
+        val BUILTIN_EASING = Regex(
+            "\\b(FastOutSlowInEasing|LinearOutSlowInEasing|FastOutLinearInEasing|LinearEasing)\\b"
+        )
+
+        val DETECTORS = listOf(
+            COLOR_LITERAL, RAW_TOKEN, NAMED_COLOR, FONT_FAMILY, ABSOLUTE_SP,
+            ANIMATION_SPEC, BUILTIN_EASING,
+        )
 
         fun sources(): List<File> = MAIN_DIR.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }

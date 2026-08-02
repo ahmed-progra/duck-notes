@@ -71,17 +71,35 @@ fun DuckNoteList(
         if (notes.isEmpty()) {
             DuckEmptyState(stringResource(R.string.shell_empty_notes))
         } else {
+            val motion = DuckTheme.motion
             LazyColumn(Modifier.fillMaxSize()) {
                 items(notes, key = { it.id }) { note ->
-                    DuckNoteCard(
-                        title = note.title,
-                        preview = note.previewLine(),
-                        modifiedAt = note.modifiedAt,
-                        selected = note.id == selectedNoteId,
-                        onClick = { onSelectNote(note.id) },
-                        onAddTag = { onAddTag(note.id) },
-                    )
-                    DuckDivider()
+                    // Wrapped so the card and its divider move as one item. Without the Column the
+                    // modifier would animate the card and leave the divider to jump.
+                    //
+                    // The list reorders on every save — `SaveNote` restamps `modifiedAt` and the
+                    // query is newest-first — so a note being edited climbs to the top. Unanimated,
+                    // that reads as rows teleporting.
+                    // Three different specs, because the three are three different jobs: arriving
+                    // (200ms, decelerating), moving (a spring, because reorders interrupt each
+                    // other), and leaving (120ms, accelerating — shorter, so dead rows clear).
+                    Column(
+                        Modifier.animateItem(
+                            fadeInSpec = motion.mediumSpec(),
+                            placementSpec = motion.placementSpec(),
+                            fadeOutSpec = motion.exitSpec(),
+                        ),
+                    ) {
+                        DuckNoteCard(
+                            title = note.title,
+                            preview = note.previewLine(),
+                            modifiedAt = note.modifiedAt,
+                            selected = note.id == selectedNoteId,
+                            onClick = { onSelectNote(note.id) },
+                            onAddTag = { onAddTag(note.id) },
+                        )
+                        DuckDivider()
+                    }
                 }
             }
         }

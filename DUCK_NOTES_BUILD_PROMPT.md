@@ -1014,6 +1014,218 @@ Pinned by `anUnterminatedMultiWordTagStillMintsItsFirstWord`.
 
 ---
 
+## PHASE 8b — MOTION
+
+**Renumbered from a proposed 5c.** A `5c` landing after `8a-fix` makes the log unreadable; the format
+toolbar becomes **8c** and images/paste/focus/RTL become **8d**. No committed phase changes name.
+
+Motion was not weak in Duck, it was **absent**: zero `androidx.compose.animation` imports in
+`src/main`, and no phase in this document had ever specified it.
+
+### Step 0 — the baseline, taken before adding per-frame work
+
+"10k-word note scrolls at 60fps" has been open since 8a, and motion adds per-frame cost, so a number
+had to exist first or a later regression would be unattributable. A 10,004-word note was seeded
+through the real Room database and scrolled with twelve identical swipes, **against a 303-word control
+on the same code path**:
+
+| | 303 words | 10,004 words |
+|---|---|---|
+| janky | 3 (1.14%) | 22 (6.83%) |
+| 50th / 90th / 95th / 99th | 17 / 17 / 17 / 18 ms | 17 / 19 / 22 / 32 ms |
+
+**The median is identical at 33× the length**, so 17ms is the emulator's floor, not the document's
+cost. The document appears only in the tail. **This is an attribution baseline and nothing more — the
+60fps claim stays OPEN**, because a host GPU flooring every document at 17ms cannot answer it.
+
+Three traps recorded rather than smoothed over: swiping the 4-item list rendered **0 frames** and
+reported `0.00%` jank, which reads exactly like a perfect score; jank varies ~2 points run to run, so
+a post-motion delta smaller than that means nothing; and the swipes were verified to *actually scroll*
+by screenshot (2,178 words, 21.6% of the document, no selection highlight) because a `uiautomator`
+dump returns the field's whole text and cannot show scroll position.
+
+### The frequency test — four animate, four refuse
+
+Animation frequency decides whether to animate at all, and most of what Duck does is high-frequency.
+
+| animate | refuse |
+|---|---|
+| Compact pane change (spatial continuity) | press feedback — Material ripple already owns it |
+| tag tree expand / collapse | `DropdownMenu` / `AlertDialog` — M3 animates them already |
+| note list insert / reorder / remove | the editor, on any keystroke path |
+| the two active bars, 120ms | **the chevron** — see below |
+
+**The chevron was in the plan and was dropped on reading the code**, which carries: *"Two distinct
+glyphs, not one rotated: the states have to differ in shape, not only in orientation."* Rotating it is
+exactly what that decision forbids. Planned motion lost to a recorded decision.
+
+The tree and the list **collapse into one mechanism**: expanding a tag *is* an item insertion, so
+`Modifier.animateItem()` serves both. No `AnimatedVisibility`, no second mechanism to keep in step.
+
+### Reduced motion — measured, and one claim was wrong
+
+Measured on API 35, toggling *Accessibility → Remove animations*:
+
+| state | `animator` | `transition` | `window` |
+|---|---|---|---|
+| fresh, untouched | **null** | 1.0 | 1.0 |
+| Remove animations on | 0.0 | 0.0 | 0.0 |
+| **battery saver on** | **1.0** | 1.0 | 1.0 |
+
+**Battery saver does not disable animation.** The plan asserted it did; that was pre-Android-9 policy.
+And the key is **absent** on a fresh device, so `Settings.Global.getFloat(cr, key)` throws there — the
+defaulting overload is mandatory, and the original design would have shipped that crash.
+
+**`ValueAnimator.areAnimatorsEnabled()` is OR'd in, and does not close the battery-saver gap.** Its
+javadoc claims it does — *"or by Battery Savery mode being enabled"*, AOSP's own typo — and the
+implementation path supports the idea: it reads `sDurationScale`, written only from
+`WindowManagerGlobal` off `IWindowManager.getCurrentAnimatorScale()`, i.e. WMS's *effective* scale
+rather than anything persisted. **But on API 35 it measurably does not fire**: `powerSaveMode=true`,
+`areAnimatorsEnabled()` still `true`.
+
+That measurement only counts because of its positive control. **The first probe returned `true`
+unconditionally, even at `animator_duration_scale=0`** — `sDurationScale` is populated only in a
+process that owns a window, and a bare instrumentation process never receives `onAnimatorScaleChanged`.
+Adding a compose rule made it report `false` at scale 0 and still `true` under battery saver. Without
+the control the run would have been read as a real result for the wrong reason.
+
+So: **the call is kept** (one static read, correct wherever the platform does lower the scale) and the
+`ACTION_POWER_SAVE_MODE_CHANGED` receiver written alongside it was **removed** — machinery for an event
+measured not to affect us. **Duck's reduced motion covers the accessibility toggle; battery saver's
+effect on Duck's own animations is a stated gap.**
+
+**All three keys are read**, not just the animator scale. One more emulator would still leave eight API
+levels unverified; treating any zero as reduce-motion makes the question moot at all of them. Accepted
+cost: zeroing only `window_animation_scale` in Developer Options also stops in-app motion.
+
+**Observed, not read once** — a `ContentObserver` inside a `DisposableEffect`, backed by
+`mutableStateOf`, re-read after registration to close the register-gap, unregistered in `onDispose`.
+Verified live on device: five toggles plus navigation, same PID, clean logcat.
+
+### Contrast during a transition
+
+**The active bars animate `scaleY` at full opacity, not alpha.** Fading would paint `accent` below the
+3:1 a 1.4.11 graphic owes for the whole 120ms, on the most-tapped element in the app. Growing from the
+centre keeps every painted frame at full `accent`, so **the ratio is invariant and no exemption is
+needed** for it.
+
+The exemption is still written down, in `ContrastTest`'s KDoc, because the pane change genuinely does
+crossfade text: **`duckPairs` enumerates steady states a user can read, not in-flight frames.**
+Anything reachable at rest stays enumerated and floored. An unstated exemption is indistinguishable
+from an oversight.
+
+### Guards, and the test that was measuring nothing
+
+`TokenSourceTest` now bans `tween(`, `spring(`, `snap(`, `keyframes(`, `CubicBezierEasing(` and
+Compose's stock easings outside `core/theme/`. **Constructors rather than millisecond literals** — a
+duration can only reach an animation through one of them, so the rule is complete rather than
+heuristic. The regex handles `tween<Float>(`, the form you reach for when inference fails. Verified by
+planting a real offender in `DuckNoteCard` and watching `mainSourceGoesThroughTheTokenLayer` go red.
+
+**`PaneTransitionTest` never reads `Settings`.** On a device with animator scale 0 every duration
+collapses and an assertion about mid-transition state measures nothing — the same shape as the saver
+guards and the `UP-TO-DATE` run. It provides `LocalDuckMotion` directly.
+
+**And the first version of it was broken in exactly that way.** The provider was wrapped *around*
+`DuckTheme`, which provides `LocalDuckMotion` itself — so the theme overwrote it and the reduced-motion
+case ran at full motion. It surfaced as a failure only because the reduced case asserted the opposite
+of the case above it. Moving the provider **inside** `DuckTheme` fixed it. Then inverted: forcing
+`DuckMotion.none` into the spec turned the animation assertion red with its own message.
+
+### Three specs, because three different jobs — and the platform default was better than the token
+
+`animateItem`'s defaults in foundation 1.9.4 are **all springs**, `spring(stiffness = 400f)`, verified
+in the bytecode rather than recalled. The first draft of this phase passed tweens for all three and
+**silently replaced them** — on the one surface that is routinely interrupted. The note list reorders
+on every save (`SaveNote` restamps, query is newest-first), so a row is often still moving when the
+next reorder lands; a tween restarts from zero there and stutters, a spring carries its velocity.
+
+So the three specs split by job, not by one shared value:
+
+| spec | what | why |
+|---|---|---|
+| `mediumSpec()` 200ms `easeOut` | arriving | decelerating; the user is waiting on it |
+| `placementSpec()` **spring** | moving | interrupted constantly; must not restart |
+| `exitSpec()` 120ms `easeExit` | leaving | shorter, accelerating; clear dead state |
+
+`easeExit` is a third curve, and the one place an accelerating shape is right: nobody waits on an exit,
+and lingering keeps stale content over the state being read. It is **not** the `easeIn` deliberately
+absent from entrances — same shape, opposite job. The pinned easing count moved 2 → 3 deliberately.
+
+**The token layer names the platform's good default; it does not overwrite it.**
+
+### Reduced motion is not the same as zero duration
+
+Measured frame by frame, `AnimatedContent` with every duration at zero **still held both panes
+composed for two frames** — `0ms L1/E0, 16ms L1/E1, 32ms L1/E1, 48ms L0/E1`. Invisible, since a
+zero-length fade sits at alpha 0, but it composes and lays out both panes; on a 10k-word note that is
+the editor's entire layout run beside the list's, for nothing.
+
+The test in place at the time asserted at **64ms and passed**, which is how it was missed. Reduced
+motion now **does not enter `AnimatedContent` at all** (`DuckMotion.animates`), and the assertion moved
+to the first frame — `0ms L1/E0, 16ms L0/E1`, no overlap.
+
+### Verification
+
+**364 JVM** (348 at `e9cf2e6` + 16), **41 instrumented** (39 + 2), lint **0 errors**. No new gallery
+page: `ShellPage` already exercises three of the four surfaces interactively, and a motion page would
+have re-staged it.
+
+**Every new guard was inverted — planted a violation, watched it go red, reverted.** Each produced
+exactly one failure, and the named one:
+
+| guard | planted | failure |
+|---|---|---|
+| whole-tree motion ban | a **new file** in `presentation/shell` holding `tween(300, easing = FastOutSlowInEasing)` | `mainSourceGoesThroughTheTokenLayer` — `[TempMotionOffender.kt: tween(, TempMotionOffender.kt: FastOutSlowInEasing]` |
+| active-bar symmetry | `activeBarSpec` returning `fastSpec()` for both directions | `theActiveBarLeavesAndArrivesOnDifferentCurvesAtTheSameLength` |
+| motion spec slot count | an eighth spec accessor on `DuckMotion` | `theMotionSpecSlotCountIsPinned` |
+
+The first one is deliberately a **new file** rather than a line added to an existing one: that proves
+the tree walk picks up sources it has never seen, which is the failure mode a scan actually has. The
+in-tree `detectorFlagsPlantedOffenders` case only proves the regex fires on a string.
+
+### The active bar's other half — Option B
+
+The first draft specified the bar *arriving* and left the bar *departing* on whatever spec happened
+to be there. Selection moves tens of times a day, so the unspecified half ran as often as the
+specified one. `DuckMotion.activeBarSpec(selected)` now owns both: `easeOut` in, `easeExit` out, both
+at `fast` so the crossover is one exchange rather than a stagger.
+
+**The alternative is deferred, not rejected.** Two unrelated elements animating oppositely is not the
+same as one indicator *translating* between rows, which is what the motion depicts. That needs a
+single bar in the list's coordinate space driven by item offsets — an overlay above the `LazyColumn`,
+`layoutInfo` reads per scroll frame, and answers for three states that have none today (selection
+scrolled off-screen, selection changing mid-scroll, selected row removed by a filter), on both
+surfaces, interacting with `animateItem`'s own placement clock. Estimated 150–250 lines across 3–4
+files plus 4–6 instrumented tests, and it puts per-frame layout reads on the list already suspected
+in the unresolved 60fps question. **Judged on a device first; a future phase candidate if the
+crossover reads wrong.**
+
+**Neither screenshots nor screen recording can judge a transition on this emulator** — `screencap`
+latency exceeds a 2s animation even at 10× scale, and `screenrecord` produces a one-frame file. Every
+mid-transition claim here comes from clock-stepped instrumented tests; the screenshot sweep is
+evidence about *steady states* only, and cannot stand in for them.
+
+**Large font — done, and it is the steady state the sweep is good for.** `font_scale 2.0`, the
+accessibility maximum, on API 35. The worry was specific: the active bar is `fillMaxHeight` against a
+row whose height is driven by text, so looking right at 100% is not evidence about 200%. Measured
+from the framebuffer against `uiautomator` bounds, not judged by eye:
+
+| surface | row / card height | accent bar | bar width |
+|---|---|---|---|
+| sidebar row | 126px (48dp) | `y=74..199` — **126px** | 8px (3dp) |
+| note card | 415px (158dp) | `y=649..1063` — **415px** | 8px (3dp) |
+
+Exact on both, including a card grown to 158dp by wrapped text. The note list itself holds: rows
+grow, the snippet still clamps to two lines, dividers and ellipsis intact, nothing clipped; the
+editor renders with the accent cursor and handle. Two things the numbers show that eyes would not:
+the sidebar row does **not** grow at 200% — its label is 31.6dp inside a 48dp minimum, so the
+`heightIn(min = ROW_HEIGHT)` floor is still what sets it — and note-card pitch goes 220px → 415px,
+so item insert/remove moves nearly twice as far per row at this setting. Both fall out of `scaleY`
+against a parent height, which is why nothing needed changing.
+
+---
+
 ## PHASE 9 — LINKING + INFO PANEL
 
 **Goal:** Personal wiki without a graph database.

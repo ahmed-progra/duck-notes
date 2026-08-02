@@ -120,6 +120,15 @@ private enum class GalleryPage { Tokens, Editor, Shell, Tags }
  *
  * Interactive, not static: selecting a note and expanding a tag are the two things the accent bar
  * and the chevron are for, and neither can be judged from a screenshot of one state.
+ *
+ * **This is also 8b's motion harness, and no separate page was added for it.** Three of the four
+ * animated surfaces are already here for the reason above — the sidebar bar and the note-card bar
+ * both animate on selection, and expanding a tag is the item insertion that `animateItem` animates.
+ * A motion page would have re-staged what this page already does interactively.
+ *
+ * The fourth, the Compact pane change, is not reachable here: it needs a narrow width, and the
+ * gallery renders the shell at the window's own size. It is covered by `PaneTransitionTest` on device
+ * and by the 10x animator-scale sweep in the phase notes.
  */
 @Composable
 private fun ShellPage() {

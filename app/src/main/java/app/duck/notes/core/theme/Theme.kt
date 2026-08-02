@@ -10,6 +10,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 private val DefaultSpacing = DuckSpacing()
 private val DefaultShapes = DuckShapes()
 private val DefaultType = duckType()
+private val DefaultMotion = DuckMotion()
 
 val LocalDuckColors = staticCompositionLocalOf<DuckColors> {
     error("No DuckColors — wrap the content in DuckTheme { }")
@@ -17,6 +18,14 @@ val LocalDuckColors = staticCompositionLocalOf<DuckColors> {
 val LocalDuckType = staticCompositionLocalOf { DefaultType }
 val LocalDuckSpacing = staticCompositionLocalOf { DefaultSpacing }
 val LocalDuckShapes = staticCompositionLocalOf { DefaultShapes }
+
+/**
+ * Static like the three above, though unlike them it **does** change at runtime — when the system
+ * reduce-motion setting flips. That costs a recomposition of everything under the provider, because
+ * a static local does not track individual reads; for a setting a user touches approximately never,
+ * that is cheaper than tracking every read of a duration for the life of the app.
+ */
+val LocalDuckMotion = staticCompositionLocalOf { DefaultMotion }
 
 /**
  * Duck's design system. **Wraps** `MaterialTheme` rather than replacing it or sitting beside it.
@@ -46,6 +55,8 @@ fun DuckTheme(
         LocalDuckType provides DefaultType,
         LocalDuckSpacing provides DefaultSpacing,
         LocalDuckShapes provides DefaultShapes,
+        // The one token family that answers to the system rather than to [spec].
+        LocalDuckMotion provides if (rememberMotionEnabled()) DefaultMotion else DuckMotion.none,
     ) {
         MaterialTheme(
             colorScheme = duckColorScheme(spec, dark),
@@ -68,4 +79,7 @@ object DuckTheme {
 
     val shapes: DuckShapes
         @Composable @ReadOnlyComposable get() = LocalDuckShapes.current
+
+    val motion: DuckMotion
+        @Composable @ReadOnlyComposable get() = LocalDuckMotion.current
 }

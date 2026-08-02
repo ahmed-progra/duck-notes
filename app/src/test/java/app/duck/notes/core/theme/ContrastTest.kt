@@ -26,6 +26,23 @@ import kotlin.math.pow
  *
  * The WCAG maths is implemented here rather than taken from `Color.luminance()`: this is the
  * assertion, so it should not share an implementation with anything it might be asserting about.
+ *
+ * ## What the pair enumeration covers, and what it does not — Phase 8b
+ *
+ * **These pairs are steady states a user can read. Frames that exist only while a transition runs are
+ * out of scope.** Duck's Compact pane change crossfades, so for ~200ms text is painted at partial
+ * opacity and therefore under its floor. That is not a state anyone reads a note in, and flooring it
+ * would mean either no crossfade anywhere or a fade that starts at 60% and visibly steps.
+ *
+ * The boundary is deliberately narrow: **anything reachable at rest is enumerated and floored**,
+ * including every state a user can stop on. Only the in-flight frames of a running transition are
+ * exempt, and only for as long as it runs.
+ *
+ * The rule is stated because it is an exemption, and an unstated exemption is indistinguishable from
+ * an oversight. It is also **not** relied upon where it could have been avoided: the sidebar and
+ * note-card active bars animate `scaleY` at full opacity rather than fading, precisely so the
+ * most-tapped element in the app keeps `accent` at its full ratio in every painted frame. See
+ * `DuckSidebar`. Reach for the exemption only when the alternative is worse.
  */
 class ContrastTest {
 

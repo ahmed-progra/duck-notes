@@ -1,5 +1,6 @@
 package app.duck.notes.presentation.shell
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -26,7 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
@@ -77,6 +78,7 @@ fun DuckSidebar(
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
+    val motion = DuckTheme.motion
 
     LazyColumn(modifier.fillMaxSize().background(colors.surfaceElevated)) {
         items(ShellFilter.navRows, key = { it.key }) { row ->
@@ -114,7 +116,17 @@ fun DuckSidebar(
             }
         } else {
             items(tagRows, key = { ShellFilter.Tag(it.path).key }) { row ->
-                TagRowItem(row, filter, onFilter, onToggleTag, onTagMenu)
+                // Expanding a tag is an item *insertion* — `flatten` emits descendants only while
+                // the parent is expanded — so the same modifier that animates a list change animates
+                // the tree opening. No AnimatedVisibility, and no second mechanism to keep in step.
+                TagRowItem(
+                    row, filter, onFilter, onToggleTag, onTagMenu,
+                    modifier = Modifier.animateItem(
+                        fadeInSpec = motion.mediumSpec(),
+                        placementSpec = motion.placementSpec(),
+                        fadeOutSpec = motion.exitSpec(),
+                    ),
+                )
             }
         }
 
@@ -150,10 +162,11 @@ private fun TagRowItem(
     onFilter: (ShellFilter) -> Unit,
     onToggleTag: (String) -> Unit,
     onTagMenu: (TagRow, TagMenuAction) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
 
-    Box {
+    Box(modifier) {
         SidebarRow(
             label = row.segment,
             selected = filter == ShellFilter.Tag(row.path),
@@ -243,12 +256,26 @@ private fun SidebarRow(
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // scaleY, not alpha, and the distinction is a contract one rather than a taste one. Fading
+        // the bar would render `accent` at partial opacity for the whole transition, i.e. below the
+        // 3:1 a 1.4.11 graphic owes, on the most-tapped element in the app. Growing it from its
+        // centre keeps every painted frame at full `accent`, so the ratio is invariant and
+        // `duckPairs` needs no exemption for it.
+        //
+        // Both directions are specified: see DuckMotion.activeBarSpec. The row losing selection
+        // shrinks out as deliberately as the row gaining it grows in.
+        val barScale by animateFloatAsState(
+            targetValue = if (selected) 1f else 0f,
+            animationSpec = DuckTheme.motion.activeBarSpec(selected),
+            label = "sidebarActiveBar",
+        )
         Box(
             Modifier
                 .width(BAR)
                 .fillMaxHeight()
                 .heightIn(min = ROW_HEIGHT)
-                .background(if (selected) colors.accent else Color.Transparent),
+                .graphicsLayer { scaleY = barScale }
+                .background(colors.accent),
         )
         Box(Modifier.width(spacing.md + INDENT * indent))
 

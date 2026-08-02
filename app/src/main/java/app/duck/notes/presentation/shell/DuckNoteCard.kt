@@ -1,6 +1,7 @@
 package app.duck.notes.presentation.shell
 
 import android.text.format.DateUtils
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
@@ -15,8 +16,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
@@ -85,13 +87,23 @@ fun DuckNoteCard(
                 },
             ),
     ) {
-        // Flush to the leading edge and outside the text block. Transparent rather than absent when
-        // inactive, so an inactive row's text does not shift sideways by 3dp.
+        // Flush to the leading edge and outside the text block. Always laid out, never absent, so an
+        // inactive row's text does not shift sideways by 3dp — the bar hides by scaling to nothing,
+        // which keeps that true through the transition as well as at either end of it.
+        //
+        // scaleY rather than alpha: a fade would paint `accent` below the 3:1 a 1.4.11 graphic owes
+        // for the whole 120ms. Scaling keeps every painted frame at full `accent`. See DuckSidebar.
+        val barScale by animateFloatAsState(
+            targetValue = if (selected) 1f else 0f,
+            animationSpec = DuckTheme.motion.activeBarSpec(selected),
+            label = "noteCardActiveBar",
+        )
         Box(
             Modifier
                 .width(BAR)
                 .fillMaxHeight()
-                .background(if (selected) colors.accent else Color.Transparent),
+                .graphicsLayer { scaleY = barScale }
+                .background(colors.accent),
         )
         Column(
             Modifier

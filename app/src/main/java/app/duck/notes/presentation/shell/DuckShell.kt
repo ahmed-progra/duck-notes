@@ -1,6 +1,11 @@
 package app.duck.notes.presentation.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -274,10 +279,43 @@ fun DuckShell(
                         )
                     },
                 ) { padding ->
-                    if (state.selectedNoteId == null) {
-                        list(Modifier.padding(padding))
-                    } else {
-                        editor(Modifier.padding(padding))
+                    val motion = DuckTheme.motion
+                    val noteOpen = state.selectedNoteId != null
+                    // Keyed on "is a note open", NOT on the note id, and the difference is a defect
+                    // rather than a preference. AnimatedContent composes outgoing and incoming
+                    // together for the length of the transition; keyed on the id, switching notes
+                    // would put two editors on screen at once, both bound to the single
+                    // DuckShellViewModel.buffer — one TextFieldState driving two BasicTextFields,
+                    // contending over focus and the IME. On the Boolean, only list <-> editor
+                    // transitions, and exactly one editor exists at any instant.
+                    //
+                    // It also lands where the frequency rule wants it: moving between two notes is
+                    // something you do all day and it stays instant.
+                    // Reduced motion does not enter AnimatedContent at all, and that is not a
+                    // shortcut — it is the difference between "instant" and "instant and free".
+                    // Measured frame by frame: with every duration at zero, AnimatedContent still
+                    // holds the outgoing pane for TWO frames while its transition bookkeeping
+                    // settles (0ms L1/E0, 16ms L1/E1, 32ms L1/E1, 48ms L0/E1). Invisible, since a
+                    // zero-length fade puts the outgoing pane at alpha 0 immediately, but it lays
+                    // out and composes both panes — on a 10k-word note that is the editor's whole
+                    // layout run alongside the list's, for no reason a user asked for.
+                    if (!motion.animates) {
+                        if (noteOpen) editor(Modifier.padding(padding)) else list(Modifier.padding(padding))
+                        return@Scaffold
+                    }
+                    AnimatedContent(
+                        targetState = noteOpen,
+                        transitionSpec = {
+                            // Depth, not sideways travel: the editor is *into* the note, and back
+                            // returns. Sliding would imply the list and editor are siblings on one
+                            // plane, which is the Expanded layout's story, not Compact's.
+                            val out = if (targetState) 1.02f else 0.98f
+                            (fadeIn(motion.mediumSpec()) + scaleIn(motion.mediumSpec(), initialScale = out))
+                                .togetherWith(fadeOut(motion.exitSpec()))
+                        },
+                        label = "compactPane",
+                    ) { noteOpen ->
+                        if (noteOpen) editor(Modifier.padding(padding)) else list(Modifier.padding(padding))
                     }
                 }
             }

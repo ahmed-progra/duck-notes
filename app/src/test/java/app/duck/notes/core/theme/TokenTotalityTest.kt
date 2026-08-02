@@ -1,5 +1,6 @@
 package app.duck.notes.core.theme
 
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -98,6 +99,32 @@ class TokenTotalityTest {
                 "update this count. Do NOT just bump the number.",
             48,
             slots.size,
+        )
+    }
+
+    /**
+     * The motion family's **spec** slots, pinned here beside the colour-scheme tripwire for the same
+     * reason: a new one is a deliberate act and should make somebody say so.
+     *
+     * Deliberately a different slot class from the two `MotionTest` already pins. That file counts
+     * *durations* (3) and *easings* (3) — the raw values. This counts the ready-made specs built from
+     * them, which is the surface call sites actually consume and the one that grew three times in a
+     * single phase: `exitSpec`, `placementSpec`, `activeBarSpec`. Nothing else was watching that
+     * number, so a fourth arriving unnoticed was the realistic failure.
+     *
+     * Return type rather than parameter count, because `activeBarSpec` takes an argument and a filter
+     * written around the others would quietly not see it.
+     */
+    @Test
+    fun theMotionSpecSlotCountIsPinned() {
+        val specs = DuckMotion::class.java.methods
+            .filter { AnimationSpec::class.java.isAssignableFrom(it.returnType) }
+            .map { it.name }
+        assertEquals(
+            "DuckMotion gained or lost a spec accessor — decide whether call sites should be using " +
+                "it, then update this count. Do NOT just bump the number. Found: ${specs.sorted()}",
+            7,
+            specs.size,
         )
     }
 
