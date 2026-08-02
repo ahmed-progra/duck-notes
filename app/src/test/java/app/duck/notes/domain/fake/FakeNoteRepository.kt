@@ -34,6 +34,16 @@ class FakeNoteRepository : NoteRepository {
      */
     val writes = mutableListOf<Note>()
 
+    /**
+     * The `(id, tagNames)` of every [save], in order — the tag half of [writes].
+     *
+     * [savedTags] keeps only the most recent list per note, which cannot answer the question the
+     * in-progress-tag suppression exists for: *was a partial ever minted on the way past?* A partial
+     * is orphaned and reaped by the very next save, so final state is clean either way. Same argument
+     * as [writes] itself.
+     */
+    val writtenTags = mutableListOf<Pair<String, List<String>>>()
+
     suspend fun seed(note: Note, tags: List<String> = emptyList()) = save(note, tags)
 
     fun current(id: String) = notes.value.find { it.id == id }
@@ -89,6 +99,7 @@ class FakeNoteRepository : NoteRepository {
     override suspend fun save(note: Note, tagNames: List<String>) {
         savedTags[note.id] = tagNames
         writes += note
+        writtenTags += note.id to tagNames
         notes.value = notes.value.filterNot { it.id == note.id } + note
     }
 }

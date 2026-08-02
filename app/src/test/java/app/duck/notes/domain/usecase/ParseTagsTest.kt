@@ -141,4 +141,61 @@ class ParseTagsTest {
 
     @Test
     fun tagsAcrossMultipleLines() = assertTags(listOf("one", "two"), "text #one\ntext #two")
+
+    // --- The caret: suppressing the tag being typed --------------------------
+    //
+    // Everything above is the syntax and is unchanged by these — a caret filters what `TagScanner`
+    // found, it never changes what counts as a tag. If any case above ever needs editing to
+    // accommodate a caret, the suppression has leaked into the syntax and the design is wrong.
+
+    private fun assertTags(expected: List<String>, body: String, caret: Int) =
+        assertEquals("body=<$body> caret=$caret", expected, parseTags(body, caret))
+
+    @Test
+    fun aTagEndingAtTheCaretIsStillBeingTyped() = assertTags(emptyList(), "#work", caret = 5)
+
+    @Test
+    fun everyPrefixOfATagIsSuppressedAsItIsTyped() =
+        listOf("#w", "#wo", "#wor", "#work").forEach { assertTags(emptyList(), it, it.length) }
+
+    /** One character past the tag and it is finished — this is what makes the tag ever appear. */
+    @Test
+    fun aTagFollowedByASpaceIsNotSuppressed() = assertTags(listOf("work"), "#work ", caret = 6)
+
+    @Test
+    fun onlyTheTagAtTheCaretIsSuppressed() =
+        assertTags(listOf("work"), "#work and #home", caret = 15)
+
+    @Test
+    fun aCaretInsideATagButNotAtItsEndSuppressesNothing() =
+        assertTags(listOf("work"), "#work", caret = 3)
+
+    /** The closed form ends at its `#`, so the caret has to be past that, not past the name. */
+    @Test
+    fun aClosedMultiWordTagIsSuppressedAtItsClosingHash() =
+        assertTags(emptyList(), "#multi word tag#", caret = 16)
+
+    /**
+     * The ceiling, pinned so it cannot regress silently: while the closed form is still open, its
+     * prefix scans as a complete open-form tag ending at the space, not at the caret.
+     */
+    @Test
+    fun anUnterminatedMultiWordTagStillMintsItsFirstWord() =
+        assertTags(listOf("multi"), "#multi word", caret = 11)
+
+    // --- The caret is total: no bounds guard exists, and none is needed ------
+
+    @Test
+    fun aCaretPastTheBodyParsesAsThoughItWereAbsent() =
+        assertTags(listOf("work"), "#work", caret = 99)
+
+    @Test
+    fun aNegativeCaretParsesAsThoughItWereAbsent() =
+        assertTags(listOf("work"), "#work", caret = -1)
+
+    @Test
+    fun anExplicitNullCaretMatchesTheSingleArgumentForm() {
+        val bodies = listOf("#tag", "#multi word tag#", "## Sprint #q3", "`#code`", "/x#frag", "")
+        bodies.forEach { assertEquals(it, parseTags(it), parseTags(it, caret = null)) }
+    }
 }

@@ -936,6 +936,84 @@ is also what makes *"kill the app mid-typing — no data loss"* true for real ra
 
 ---
 
+## PHASE 8a-fix — THE IN-PROGRESS TAG
+
+8a made the editor durable and, in doing so, put partially typed text in front of the tag parser for
+the first time. Typing `#work` one character at a time minted `w`, `wo` and `wor` as real `tags` rows.
+
+### The mechanism, because it is not where anyone looked
+
+The report read as self-contradictory: the sidebar showed the partials, Database Inspector showed a
+clean table with no orphans. Both were true. **The table holds exactly one row at every step and never
+accumulates** — each partial loses its only reference on the next save and `deleteOrphanTags` reaps it
+in the same transaction. The sidebar was faithfully rendering a *sequence* of momentarily-correct
+states.
+
+So the fix is **not** in the reaping (correct), **not** in the sidebar (it reads `TagDao.observeAll`
+and nothing else), and **not** in the scanner. `#w` is a *complete, valid tag* to `TagScanner`;
+nothing about it is "in progress" from the parser's point of view. **What the parser lacked was the
+caret.** A span whose `end` is exactly the caret may still grow by one more character.
+
+**A settle timer was rejected on the evidence.** It separates mid-word from finished by *duration*,
+and the defect was reported by typing one character at a time with long pauses — any window would
+still mint the partial. The caret separates them categorically. Recorded so it is not re-proposed.
+
+### The rule
+
+1. **Autosave** derives tags with the span ending at the caret dropped (`ParseTags(body, caret)`).
+2. **Flush** — `ON_STOP`, note switch, before any body-rewriting intent — drops nothing.
+3. **A suppressed write owes a full one, and paying it is not an edit.** Completing `#work` changes no
+   character, so the `lastWritten` gate would swallow the write that mints it; `oweFullWrite` lets it
+   through, and that write passes `restamp = false`. One restamp per edit — the same rule Phase 7
+   applies when a rename declines to restamp.
+
+`TagScanner` is untouched. The suppression *filters spans it produced*; a second tag parser would be
+the bug this avoids.
+
+**Cost, stated:** a tag typed and left with the caret parked on it does not reach the sidebar until
+the next text change or a flush. A bare caret move is not enough — `snapshotFlow { buffer.text }`
+observes text only. The editor still paints it accent-red throughout.
+
+### Two things this got wrong before it got them right
+
+**`oweFullWrite` was reset in `adopt`, which killed the debt it existed to carry.** After the
+suppressed write Room re-emits the note, `syncBuffer` takes the same-note-clean branch and adopts our
+own text — clearing the flag before the flush could pay it, so the tag never appeared at all. Only a
+*different* note retires the debt: `adopt(body, keepTagDebt = true)` on the same-note path.
+
+**And it outlives `loadedId` if nothing resets it.** Reachable through `onFilter`, which clears the
+selection without flushing — `onSelectNote` flushes first and pays the debt on the way out, which is
+exactly why the leak is invisible from the obvious path. Same cascade shape as keying the autosave
+loop on `selectedId`. `syncBuffer` now holds `writeLock`, so the flag, `lastWritten`, the buffer and
+`loadedId` move as one.
+
+### Verification
+
+**Every new check was inverted and observed to fail** — the discipline `EditorSaverSourceTest` was
+written to enforce after three guards shipped that could not fail:
+
+| inversion | what failed |
+|---|---|
+| collector passes `suppressInProgressTag = false` | 6 tests, including the repro |
+| `keepTagDebt = true` on the note-change path | `anOwedTagWriteDoesNotFollowTheUserToTheNextNote`, alone |
+| `restamp = true` unconditionally | `mintingTheTagOnFlushDoesNotRestampModifiedAt`, alone |
+
+`PartialTagMintingTest` was **inverted, not extended** — it pinned the defect, and a pinning test that
+survives its own fix is measuring nothing. Its KDoc keeps the mechanism.
+
+**348 JVM unit tests** (330 at `3127589` + 18), **39 instrumented** (38 + 1) on a Pixel 7 API 35
+emulator, lint **0 errors**. The JVM baseline was re-measured by running: the first `testDebugUnitTest`
+came back `UP-TO-DATE` and produced no number at all, which is its own trap.
+
+**Known ceiling — the closed form still leaks its first word.** Typing `#multi word tag#`, at the
+instant the body reads `#multi word` with the caret at 11, `scan` returns `TagSpan(0, 6, "multi")` —
+the open form ends at the space, `6 != 11`, so `multi` is minted until the closing `#` lands.
+(`#multi` with the caret at 6 *is* suppressed; the space opens the leak.) Closing it needs the scanner
+to report an unterminated closed-form candidate — a change to a frozen module for the rarer form.
+Pinned by `anUnterminatedMultiWordTagStillMintsItsFirstWord`.
+
+---
+
 ## PHASE 9 — LINKING + INFO PANEL
 
 **Goal:** Personal wiki without a graph database.

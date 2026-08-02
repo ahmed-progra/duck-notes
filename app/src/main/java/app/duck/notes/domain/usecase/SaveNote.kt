@@ -19,13 +19,27 @@ class SaveNote @Inject constructor(
     private val parseTags: ParseTags,
     private val clock: Clock,
 ) {
-    suspend operator fun invoke(id: String?, body: String): Note {
+    /**
+     * @param caret suppresses the tag being typed at that offset — see [ParseTags]. Null parses the
+     *   whole body, which is what every caller outside the editor's autosave wants.
+     * @param restamp false keeps the existing `modifiedAt`. **Only for a write that carries no new
+     *   edit**: the editor's autosave suppresses an in-progress tag, then owes one more write to
+     *   mint it once the caret moves on, and those keystrokes were already stamped by the write that
+     *   suppressed them. Stamping again would age the note by however long the caret sat parked. The
+     *   same rule Phase 7 applies when a rename declines to restamp. Ignored when creating.
+     */
+    suspend operator fun invoke(
+        id: String?,
+        body: String,
+        caret: Int? = null,
+        restamp: Boolean = true,
+    ): Note {
         val now = clock.nowMillis()
         val existing = id?.let { notes.getNote(it) }
         val note = existing?.copy(
             title = deriveTitle(body),
             body = body,
-            modifiedAt = now,
+            modifiedAt = if (restamp) now else existing.modifiedAt,
         ) ?: Note(
             id = id ?: UUID.randomUUID().toString(),
             title = deriveTitle(body),
@@ -33,7 +47,7 @@ class SaveNote @Inject constructor(
             createdAt = now,
             modifiedAt = now,
         )
-        notes.save(note, parseTags(body))
+        notes.save(note, parseTags(body, caret))
         return note
     }
 }

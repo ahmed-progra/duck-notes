@@ -3,6 +3,7 @@ package app.duck.notes.presentation.shell
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.SavedStateHandle
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.fake.FakeNoteRepository
@@ -659,5 +660,182 @@ class DuckShellAutosaveTest {
 
         assertEquals(emptyList<Pair<String, String>>(), notes.writes)
         scope.cancel()
+    }
+
+    // --- the in-progress tag -------------------------------------------------
+
+    /** Every tag list ever written for [id], flattened — not just the one that survived. */
+    private fun tagsEverWrittenTo(id: String) =
+        notes.writtenTags.filter { it.first == id }.flatMap { it.second }.distinct()
+
+    /** Types [text] and leaves the caret inside it, at [caret], rather than at the end. */
+    private fun DuckShellViewModel.typeWithCaret(text: String, caret: Int) {
+        buffer.edit {
+            replace(0, length, text)
+            selection = TextRange(caret)
+        }
+        Snapshot.sendApplyNotifications()
+    }
+
+    /**
+     * **The reported defect.** Typing `#work` one character at a time, pausing past the idle window
+     * on each, used to mint `w`, `wo` and `wor` as real tag rows — each visible in the sidebar for
+     * the moment it existed.
+     *
+     * Asserts against every tag list ever written, not the final one: a partial loses its only
+     * reference on the next save and is reaped in the same transaction, so the resting state is
+     * clean whether or not the fix is present. That is why the report and the database inspector
+     * looked like they contradicted each other.
+     */
+    @Test
+    fun typingATagOneCharacterAtATimeNeverMintsAPartial() = withOpenNote(body = "") { vm ->
+        "#work".forEachIndexed { i, _ ->
+            vm.type("#work".substring(0, i + 1))
+            advanceTimeBy(DuckShellViewModel.IDLE_MS + 1) // fire the debounce on every prefix
+        }
+        advanceUntilIdle()
+
+        assertEquals(
+            "a partial tag was minted: ${notes.writtenTags}",
+            emptyList<String>(),
+            tagsEverWrittenTo("n1"),
+        )
+        // The body is still durable throughout — suppression drops the tag, never the text.
+        assertEquals("#work", notes.current("n1")?.body)
+    }
+
+    /**
+     * The control on the other side. Suppression that never releases would be indistinguishable from
+     * "tags are broken", and this is the ordinary way a tag finishes: one more character.
+     */
+    @Test
+    fun aTagFollowedByASpaceIsMintedByTheVeryNextSave() = withOpenNote(body = "") { vm ->
+        vm.type("#work ")
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("work"), notes.savedTags["n1"])
+    }
+
+    /**
+     * A tag typed and left with the caret parked on it is minted by [DuckShellViewModel.flush] —
+     * `ON_STOP`, a note switch, or any intent that rewrites bodies.
+     *
+     * **The text does not change between the two writes**, so the `lastWritten` gate would swallow
+     * this one; `oweFullWrite` is what lets it through. Without it the tag would appear only after
+     * some later, unrelated edit.
+     */
+    @Test
+    fun aTagLeftUnderTheCaretIsMintedByTheFlush() = withOpenNote(body = "") { vm ->
+        vm.type("#work")
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+        assertEquals("precondition: the autosave suppressed it", emptyList<String>(), notes.savedTags["n1"])
+
+        vm.flush()
+        advanceUntilIdle()
+
+        assertEquals(listOf("work"), notes.savedTags["n1"])
+    }
+
+    /**
+     * ...and that flush does **not** age the note. The keystrokes were already stamped by the write
+     * that suppressed the tag; stamping again would move `modifiedAt` by however long the caret sat
+     * parked, for no new edit. Same rule Phase 7 applies when a rename declines to restamp.
+     *
+     * One *minted* stamp, not one write — the completion write lands either way, and only the clock
+     * distinguishes them.
+     */
+    @Test
+    fun mintingTheTagOnFlushDoesNotRestampModifiedAt() = withOpenNote(body = "") { vm ->
+        val baseline = notes.current("n1")?.modifiedAt ?: 0L
+        vm.type("#work")
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+        val afterTyping = mintedStampsAfter("n1", baseline)
+        assertEquals("precondition: typing restamps once", 1, afterTyping.size)
+
+        vm.flush()
+        advanceUntilIdle()
+
+        assertEquals(
+            "the tag completion restamped a second time for one edit",
+            afterTyping,
+            mintedStampsAfter("n1", baseline),
+        )
+    }
+
+    /**
+     * **`oweFullWrite` is per-note.** Left standing across a note switch, the next note's first
+     * flush bypasses its own `lastWritten` gate and writes a note the user only opened.
+     *
+     * Reached through [DuckShellViewModel.onFilter], which clears the selection **without** flushing
+     * — `onSelectNote` flushes first and so pays the debt on the way out, which is exactly why the
+     * leak is invisible from the obvious path. Same cascade shape as keying the autosave loop on
+     * `selectedId` instead of `loadedId`.
+     */
+    @Test
+    fun anOwedTagWriteDoesNotFollowTheUserToTheNextNote() = withOpenNote(body = "") { vm ->
+        notes.seed(note("n2", "second"))
+        vm.type("#work")
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+        assertTrue("precondition: the write was suppressed", notes.savedTags["n1"].isNullOrEmpty())
+
+        vm.onFilter(ShellFilter.All) // clears the selection, and does not flush
+        advanceUntilIdle()
+        val baseline = notes.current("n2")?.modifiedAt ?: 0L
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        notes.writes.clear()
+
+        vm.flush()
+        advanceUntilIdle()
+
+        assertEquals("n2 was written by a debt n1 ran up", emptyList<String>(), writesTo("n2"))
+        assertEquals(emptyList<Long>(), mintedStampsAfter("n2", baseline))
+    }
+
+    /** Only the tag at the caret is dropped. A second tag elsewhere in the body is finished. */
+    @Test
+    fun anotherTagInTheSameBodyIsStillMinted() = withOpenNote(body = "") { vm ->
+        vm.type("#work and #home")
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("work"), notes.savedTags["n1"])
+    }
+
+    /** A range selection is someone selecting, not someone typing: nothing is in progress. */
+    @Test
+    fun aRangeSelectionOverATagSuppressesNothing() = withOpenNote(body = "") { vm ->
+        vm.type("#work")
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+        assertEquals("precondition: the collapsed caret suppressed it", emptyList<String>(), notes.savedTags["n1"])
+
+        // Same text, so only the selection can move the outcome.
+        vm.buffer.edit { selection = TextRange(0, 5) }
+        Snapshot.sendApplyNotifications()
+        vm.type("#work!")
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+        vm.buffer.edit { selection = TextRange(0, 6) }
+        Snapshot.sendApplyNotifications()
+        vm.flush()
+        advanceUntilIdle()
+
+        assertEquals(listOf("work"), notes.savedTags["n1"])
+    }
+
+    /** The caret suppresses; it never moves the text. */
+    @Test
+    fun suppressionNeverChangesTheBodyThatIsWritten() = withOpenNote(body = "") { vm ->
+        vm.typeWithCaret("#work in progress", caret = 5)
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("#work in progress"), writesTo("n1"))
+        assertEquals(emptyList<String>(), tagsEverWrittenTo("n1"))
     }
 }

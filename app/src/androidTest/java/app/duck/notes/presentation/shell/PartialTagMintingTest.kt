@@ -37,20 +37,19 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Typing `#work` one character at a time mints `w`, `wo`, `wor` as real tags. **Pinned as current
- * behaviour, pending a decision** — this asserts the mechanism, not a fix.
+ * Typing `#work` one character at a time no longer mints `w`, `wo`, `wor` as real tags — on a real
+ * database, with the real `ensureTag` and the real transaction.
  *
- * ## The mechanism, measured rather than assumed
+ * ## The mechanism this fix is aimed at, measured rather than assumed
  *
- * The report looked contradictory: the sidebar shows the partials, while Database Inspector shows a
- * clean four-row `tags` table with no orphans. Reading both sides at the same instant resolves it —
- * they were never in contradiction, they are the same system at different times.
+ * The report looked contradictory: the sidebar showed the partials, while Database Inspector showed a
+ * clean four-row `tags` table with no orphans. Reading both sides at the same instant resolved it —
+ * they were never in contradiction, they were the same system at different times. Before the fix:
  *
  * | after | `tags` table | sidebar |
  * |---|---|---|
@@ -59,22 +58,26 @@ import org.junit.runner.RunWith
  * | `#wor` | `[wor]` | `[wor]` |
  * | `#work` | `[work]` | `[work]` |
  *
- * **The table holds exactly one tag at every step and never accumulates.** `#w` is a *complete, valid
+ * **The table held exactly one tag at every step and never accumulated.** `#w` is a *complete, valid
  * tag* to `TagScanner` — nothing about it is "in progress" from the parser's point of view — so every
- * autosave that lands mid-word mints a real row and a real `note_tags` ref. The next save calls
- * `clearCrossRefs`, the previous partial loses its only reference, and `deleteOrphanTags` removes it.
+ * autosave that landed mid-word minted a real row and a real `note_tags` ref. The next save called
+ * `clearCrossRefs`, the previous partial lost its only reference, and `deleteOrphanTags` removed it.
  *
- * So: **nothing is reaping incorrectly and there are no orphans to reap.** `deleteOrphanTags` is
- * working exactly as designed, and the sidebar is reading the `tags` table
- * (`ObserveTagTree` → `TagRepository.observeAll` → `TagDao.observeAll`) and nothing else. What looks
- * like accumulation is the sidebar faithfully rendering a *sequence* of momentarily-correct states.
+ * So: **nothing was reaping incorrectly and there were no orphans to reap.** `deleteOrphanTags` works
+ * exactly as designed, and the sidebar reads the `tags` table
+ * (`ObserveTagTree` → `TagRepository.observeAll` → `TagDao.observeAll`) and nothing else. What looked
+ * like accumulation was the sidebar faithfully rendering a *sequence* of momentarily-correct states.
+ *
+ * That is why the fix is neither in the reaping nor in the sidebar nor in the scanner: what the parser
+ * lacked was **the caret**. A span whose `end` is the caret may still grow by one more character. See
+ * `ParseTags`.
  *
  * An earlier run of this test showed the sidebar one step behind the table. That is Room invalidation
  * propagation latency, not a defect: with a longer settle the two agree at every step. Recorded
  * because a one-step lag looks exactly like a stale-cache bug.
  *
- * **Phase 8a introduced this.** Before autosave the editor never wrote, so a partially typed tag never
- * reached `saveNoteWithTags` at all. Any save landing mid-word necessarily parses the prefix.
+ * **Phase 8a introduced the defect.** Before autosave the editor never wrote, so a partially typed tag
+ * never reached `saveNoteWithTags` at all.
  */
 @RunWith(AndroidJUnit4::class)
 class PartialTagMintingTest {
@@ -150,18 +153,63 @@ class PartialTagMintingTest {
             val sidebar = vm.state.value.tagRows.map { it.path }.sorted()
             println("PARTIAL after '$prefix'  table=$table  refs=${refCounts()}  sidebar=$sidebar")
 
-            // The partial IS minted — that is the defect, pinned.
-            val expected = if (prefix == "#") emptyList() else listOf(prefix.removePrefix("#"))
-            assertEquals("the tags table at '$prefix'", expected, table)
-            // ...and it never accumulates: exactly one row, so nothing is failing to be reaped.
-            assertTrue("the table accumulated partials: $table", table.size <= 1)
-            // ...and the sidebar shows the table, not something else.
+            // Nothing is minted while the caret sits at the end of the tag — including `#work`
+            // itself, which is indistinguishable from a prefix until the caret moves on.
+            assertEquals("a partial tag reached the database at '$prefix'", emptyList<String>(), table)
+            // ...and the sidebar shows the table, not something else. This is the half that made the
+            // report look self-contradictory, so it stays asserted.
             assertEquals("sidebar disagrees with the tags table at '$prefix'", table, sidebar)
+
+            // The body is durable the whole way. Suppression drops the tag, never the text.
+            assertEquals("the body at '$prefix'", prefix, db.noteDao().getById("n1")?.body)
         }
 
-        delay(1_000)
-        assertEquals("the resting state must be clean", listOf("work"), tableRows())
+        // One more character finishes the tag: the span no longer ends at the caret.
+        withContext(Dispatchers.Main) {
+            vm.buffer.setTextAndPlaceCursorAtEnd("#work ")
+            Snapshot.sendApplyNotifications()
+        }
+        delay(DuckShellViewModel.IDLE_MS + 2_000)
+
+        assertEquals("the finished tag must be minted", listOf("work"), tableRows())
         assertEquals(mapOf("work" to 1), refCounts())
+        scope.cancel()
+    }
+
+    /**
+     * The other release valve: leaving the note mints the tag even though the caret never moved.
+     *
+     * `flush` suppresses nothing, and the text has not changed since the suppressed write — so this
+     * is the path that only reaches the database because the write carries an explicit debt.
+     */
+    @Test
+    fun aTagLeftUnderTheCaretIsMintedWhenTheAppStops() = runBlocking {
+        db.noteDao().saveNoteWithTags(
+            NoteEntity(id = "n1", title = "n", body = "", createdAt = 0L, modifiedAt = 0L),
+            emptyList(),
+        )
+
+        val vm = withContext(Dispatchers.Main) { shell() }
+        val scope = CoroutineScope(Dispatchers.Main)
+        scope.launch { vm.state.collect {} }
+        withContext(Dispatchers.Main) { vm.onSelectNote("n1") }
+        delay(500)
+
+        withContext(Dispatchers.Main) {
+            vm.buffer.setTextAndPlaceCursorAtEnd("#work")
+            Snapshot.sendApplyNotifications()
+        }
+        delay(DuckShellViewModel.IDLE_MS + 2_000)
+        assertEquals("precondition: the autosave suppressed it", emptyList<String>(), tableRows())
+        val beforeStop = db.noteDao().getById("n1")?.modifiedAt
+
+        withContext(Dispatchers.Main) { vm.flush() }
+        delay(1_000)
+
+        assertEquals("ON_STOP must mint the tag", listOf("work"), tableRows())
+        assertEquals(mapOf("work" to 1), refCounts())
+        // ...and must not age the note: those keystrokes were stamped by the write that hid the tag.
+        assertEquals("the tag completion restamped", beforeStop, db.noteDao().getById("n1")?.modifiedAt)
         scope.cancel()
     }
 }

@@ -200,6 +200,29 @@ class DuckShellViewModel @Inject constructor(
     private var lastWritten: String? = null
 
     /**
+     * Whether the last write dropped a tag that was still being typed, and therefore owes one more
+     * write to mint it.
+     *
+     * Completing a tag changes no character — `#work` is the same string whether the caret sits on
+     * it or not — so the [lastWritten] gate would swallow the write that finally records it, and the
+     * tag would appear only after the *next* edit. This flag is what lets [flush] through.
+     *
+     * **Only a different note retires it — never an [adopt] of our own text.** The ordinary case of
+     * adopting is Room echoing back the very write that took on the debt, so clearing it there means
+     * the flush that should mint the tag finds nothing owed and the tag never appears at all. That
+     * is why [adopt] takes `keepTagDebt`, and it was a real failure, not a hypothetical one:
+     * `aTagLeftUnderTheCaretIsMintedByTheFlush` caught it.
+     *
+     * **And it must not outlive [loadedId].** Left standing across a note switch, the next note's
+     * first flush bypasses its own [lastWritten] gate and writes a note the user only opened. The
+     * path there is [onFilter], which clears the selection *without* flushing — [onSelectNote]
+     * flushes first and so pays the debt on the way out, which is exactly why the leak is invisible
+     * from the obvious route. Same cascade shape that put the autosave loop on [loadedId] instead of
+     * [selectedId].
+     */
+    private var oweFullWrite = false
+
+    /**
      * Serialises the three entrants to [save] — the debounce, the max-wait, and [flush].
      *
      * `flush()` at the top of an intent does not stop a debounced save that is already in flight, so
@@ -220,7 +243,7 @@ class DuckShellViewModel @Inject constructor(
         viewModelScope.launch {
             loadedId.flatMapLatest { id ->
                 if (id == null) emptyFlow() else snapshotFlow { buffer.text }.cappedDebounce().map { id }
-            }.collect(::save)
+            }.collect { save(it, suppressInProgressTag = true) }
         }
     }
 
@@ -274,17 +297,32 @@ class DuckShellViewModel @Inject constructor(
      * debounce — `aDirtyBufferIsRewrittenByARenameAndTheOldTagIsNotResurrected` caught exactly that,
      * with the buffer correct and Room wrong.
      */
-    private suspend fun save(id: String) = writeLock.withLock {
+    private suspend fun save(id: String, suppressInProgressTag: Boolean) = writeLock.withLock {
+        // Adjacent, and in this order: there is no suspension point between them, so `adopt` and
+        // [rewriteBuffer] cannot interleave and the caret cannot be stale against the text it
+        // indexes. Keep them together if this method grows.
         val text = buffer.text.toString()
+        val selection = buffer.selection
+        // A non-collapsed selection is someone selecting, not someone typing — nothing is in
+        // progress, so nothing is suppressed.
+        val caret = selection.start.takeIf { suppressInProgressTag && selection.collapsed }
+
         // The buffer holds [loadedId]'s text, which is NOT always the selected id: between a row
         // being tapped and its body arriving they differ, and the buffer still holds the old note —
         // or, on a fresh ViewModel, nothing at all. Writing then would save an empty body over the
         // incoming note. `aSelectionRestoredOntoADeletedNoteClearsItself` caught exactly that: a
         // selection restored onto a hard-deleted note re-created it from an empty buffer.
         if (id != loadedId.value) return@withLock
-        if (text == lastWritten) return@withLock
-        saveNote(id, text)
+
+        // Unchanged text still owes a write when the last one suppressed a tag — completing `#work`
+        // changes no character, so this gate would otherwise swallow the write that mints it.
+        val owed = oweFullWrite && !suppressInProgressTag
+        if (text == lastWritten && !owed) return@withLock
+
+        // An owed write carries no new keystrokes, only the tag, so it must not age the note.
+        saveNote(id, text, caret, restamp = !(owed && text == lastWritten))
         lastWritten = text
+        oweFullWrite = caret != null && parseTags(text, caret) != parseTags(text)
     }
 
     /**
@@ -294,7 +332,9 @@ class DuckShellViewModel @Inject constructor(
      * Suspends until the write lands, so callers can rely on Room being current when it returns.
      */
     suspend fun flush() {
-        save(loadedId.value ?: return)
+        // Suppresses nothing: the user is leaving, or handing control to an intent that rewrites the
+        // body. There is no next keystroke to wait for, so a tag typed and left is minted here.
+        save(loadedId.value ?: return, suppressInProgressTag = false)
     }
 
     /**
@@ -323,11 +363,16 @@ class DuckShellViewModel @Inject constructor(
      * - **Same note, buffer dirty**: ignore. The user's unsaved keystrokes win, and the intent that
      *   caused the external change has already applied the same transform to the buffer via
      *   [rewriteBuffer]. Adopting here would discard what they typed.
+     *
+     * **Holds [writeLock].** [loadedId], [lastWritten], [oweFullWrite] and the buffer describe one
+     * note between them, so they have to move together — a save landing mid-swap would otherwise see
+     * a mixture of the two. [onUndo] already holds the lock across its own [adopt] and acquires
+     * nothing new, so this introduces no nesting.
      */
-    private fun syncBuffer(sel: Selection) {
+    private suspend fun syncBuffer(sel: Selection) = writeLock.withLock {
         if (sel.id == loadedId.value) {
-            if (buffer.text.toString() == lastWritten) adopt(sel.body)
-            return
+            if (buffer.text.toString() == lastWritten) adopt(sel.body, keepTagDebt = true)
+            return@withLock
         }
         adopt(sel.body)
         // Last, deliberately: this is what starts the autosave loop for the new note, and it must not
@@ -335,8 +380,16 @@ class DuckShellViewModel @Inject constructor(
         loadedId.value = sel.id
     }
 
-    private fun adopt(body: String) {
+    /**
+     * @param keepTagDebt true only when adopting **the same note's** body. [oweFullWrite] describes a
+     *   tag still owed for the text in the buffer, and the ordinary case of adopting here is Room
+     *   echoing back the very write that took on the debt — clearing it there means the flush that
+     *   should mint the tag finds nothing owed and the tag never appears at all. A different note
+     *   retires the debt, because the text it referred to is gone.
+     */
+    private fun adopt(body: String, keepTagDebt: Boolean = false) {
         lastWritten = body
+        if (!keepTagDebt) oweFullWrite = false
         buffer.setTextAndPlaceCursorAtEnd(body)
         // Undo must not walk backwards across a change the user did not make: the result would be
         // text that is neither the pre- nor the post-change body.
