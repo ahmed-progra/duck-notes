@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -174,6 +175,43 @@ class TagRewriteTest {
     }
 
     /**
+     * **The other half of a merge undo, pinned rather than hidden. This test asserts a DEFECT.**
+     *
+     * Undoing a merge does not roll back the pin the target *inherited*. `carryCustomization:220`
+     * writes `isPinned = current.isPinned || old.isPinned` onto the destination row, and `restore`
+     * only walks `snapshot.tags` — which holds the **source** rows. `BodySnapshot` carries no record
+     * of the target's prior state, so there is nothing to put back and the target stays pinned.
+     *
+     * Closing it needs a new snapshot field (the destination rows as they were before the merge), not
+     * a change to either loop, which is why it is recorded rather than fixed here.
+     *
+     * **Cosmetic, not data-losing** — an extra row in the pinned section that the user can unpin. That
+     * is the whole reason it is pinned instead of scheduled; it is a carried Phase 7 defect, not one
+     * this pass introduced. Measured before it was written down: a temporary assertion for the
+     * *correct* behaviour failed on device.
+     *
+     * **It goes red when the defect is fixed, and that is when to delete it.** Same shape as
+     * `TagAgreementTest.aWikiLinkInsideCodeIsResolvedButNotPainted`. Do not "fix" a red here by
+     * loosening the assertion.
+     */
+    @Test
+    fun restore_ofAMergeLeavesTheTargetPinned() = runBlocking {
+        seed("#from note")
+        seed("#into other")
+        db.tagDao().upsert(tag("from").copy(isPinned = true))
+        assertTrue("precondition: the target is not pinned to begin with", !tag("into").isPinned)
+
+        repo.restore(repo.rename("from", "into"))
+
+        assertTrue("the source's own pin does come back", tag("from").isPinned)
+        assertTrue(
+            "the target kept the pin it inherited — if this is now false the defect is FIXED, so " +
+                "delete this test",
+            tag("into").isPinned,
+        )
+    }
+
+    /**
      * A failure **inside** the operation, after N bodies have already been written.
      *
      * `deleteByName` runs last in both `rename` and `removeTag` — after `rewriteAll` has saved every
@@ -257,22 +295,25 @@ class TagRewriteTest {
     }
 
     /**
-     * Renaming a **pinned tag no note carries** deletes it rather than moving it.
+     * Renaming a **pinned tag no note carries** moves the row rather than destroying it.
      *
-     * Recorded, not asserted as desirable — it is an edge no criterion specifies, and this test
-     * originally claimed the opposite before the device disagreed.
+     * This test previously asserted the opposite, under a KDoc claiming the loss was *"Recoverable
+     * rather than lost… so undo restores it pinned."* Both halves were wrong: the row was destroyed,
+     * and `restore` could not bring it back. The claim survived because the only assertion behind it
+     * — `snapshot.tags.single().isPinned` — proves the snapshot *carries* the row, which is a
+     * different statement from undo reinstating it. See
+     * [rename_ofAPinnedTagNoNoteCarriesIsUndoable] for the assertion that now makes it.
      *
-     * It follows from bodies being the source of truth. `rename` rewrites bodies, and
-     * `carryCustomization` moves a pin onto *the row those bodies created* — but with no note
-     * carrying `#unused`, no `renamed` row is ever minted, so `getByName(newName) ?: return@forEach`
-     * carries nothing and `deleteByName` then drops the original. Such a row can only exist because
-     * `deleteOrphanTags` deliberately spares pinned ones.
-     *
-     * Recoverable rather than lost: the snapshot carries the old row, so undo restores it pinned.
-     * If it should instead survive the rename, that is a product decision and a new criterion.
+     * Bodies are still the source of truth; this is the one case where they cannot be. With no note
+     * carrying `#unused`, `saveNoteWithTags` never mints a `renamed` row, so there is nothing for
+     * `carryCustomization` to graft the pin onto. It now moves the old row instead — same id, new
+     * name — which `deleteByName` then no longer matches. Such a row can only exist because
+     * `deleteOrphanTags` spares pinned ones, and that exemption is what makes moving it the correct
+     * answer rather than a special case: the row was deliberately kept alive without notes, so a
+     * rename should carry it, not collect it.
      */
     @Test
-    fun rename_ofAPinnedTagNoNoteCarriesDeletesIt() = runBlocking {
+    fun rename_ofAPinnedTagNoNoteCarriesMovesIt() = runBlocking {
         val id = seed("#projects note")
         db.tagDao().upsert(TagEntity(id = UUID.randomUUID().toString(), name = "unused", isPinned = true))
 
@@ -280,9 +321,96 @@ class TagRewriteTest {
 
         assertEquals("#projects note", bodyOf(id))
         assertTrue("no bodies rewritten", snapshot.bodies.isEmpty())
-        assertNull("no row is minted with no body to mint it", db.tagDao().getByName("renamed"))
-        assertNull("and the original is gone", db.tagDao().getByName("unused"))
-        assertTrue("but undo can put it back", snapshot.tags.single().isPinned)
+        val moved = db.tagDao().getByName("renamed")
+        assertNotNull("the row must move rather than be deleted", moved)
+        assertTrue("...and keep its pin", moved?.isPinned == true)
+        assertNull("nothing is left under the old name", db.tagDao().getByName("unused"))
+        assertTrue("and the snapshot still carries the old row for undo", snapshot.tags.single().isPinned)
+    }
+
+    /**
+     * **Undo actually puts the pinned row back** — the claim the old KDoc made and never asserted.
+     *
+     * The row goes back by the same mechanism it moved: `restore` finds nothing named `unused`, so
+     * it upserts the snapshot's row whole, and since `upsert` is keyed on `id` that relocates the
+     * moved row rather than adding a second one. The `createdNames` sweep that follows then finds no
+     * `renamed` and is correctly a no-op — which is why the tags loop has to run before it.
+     */
+    @Test
+    fun rename_ofAPinnedTagNoNoteCarriesIsUndoable() = runBlocking {
+        seed("#projects note")
+        db.tagDao().upsert(TagEntity(id = UUID.randomUUID().toString(), name = "unused", isPinned = true))
+
+        val snapshot = repo.rename("unused", "renamed")
+        repo.restore(snapshot)
+
+        val back = db.tagDao().getByName("unused")
+        assertNotNull("undo must put the pinned row back", back)
+        assertTrue("...and put it back still pinned", back?.isPinned == true)
+        assertNull("and must not leave the renamed row behind", db.tagDao().getByName("renamed"))
+    }
+
+    /**
+     * The delete path's half of the same claim, which nothing covered.
+     *
+     * Deleting a pinned tag no note carries is correct — the user asked for it. Undoing it goes
+     * through the same `restore` branch as rename's, and was broken in the same way.
+     */
+    @Test
+    fun removeTag_ofAPinnedTagNoNoteCarriesIsUndoable() = runBlocking {
+        seed("#projects note")
+        db.tagDao().upsert(TagEntity(id = UUID.randomUUID().toString(), name = "unused", isPinned = true))
+
+        val snapshot = repo.removeTag("unused")
+        assertNull("precondition: the delete removed it", db.tagDao().getByName("unused"))
+
+        repo.restore(snapshot)
+
+        val back = db.tagDao().getByName("unused")
+        assertNotNull("undo must put the pinned row back", back)
+        assertTrue("...and put it back still pinned", back?.isPinned == true)
+    }
+
+    /**
+     * Phase 7's collision merge crossed with the row-moving `@Upsert` above — **the two must not meet.**
+     *
+     * `tags.name` carries a UNIQUE index, and `@Upsert` resolves on the `id` primary key, so an upsert
+     * that changed a row's name into one another row already held would raise
+     * `SQLiteConstraintException` rather than merging. The move added for the pinned-orphan case
+     * writes a *new* name, which is exactly the write that could hit it.
+     *
+     * It cannot, and the reason is worth stating because it is not obvious from the two sites being
+     * far apart: the move is the `?:` branch of `getByName(newName)`, so it runs only when that name
+     * was just observed free, and it writes precisely that name — same string, same collation (the
+     * index is plain, not `NOCASE`), same `immediateTransaction`, no window between the read and the
+     * write. A collision routes to the merge instead, which touches the target's own id and leaves its
+     * name alone.
+     *
+     * Asserted rather than reasoned, on both directions, because a constraint violation here would be
+     * a crash on a user's undo. The id assertions are what distinguish *merged* from *moved* — without
+     * them a test that simply did not throw would pass whichever branch ran.
+     */
+    @Test
+    fun rename_ofAPinnedOrphanOntoAnExistingTagMergesRatherThanColliding() = runBlocking {
+        val note = seed("#into other")
+        val target = tag("into").id
+        val orphan = UUID.randomUUID().toString()
+        db.tagDao().upsert(TagEntity(id = orphan, name = "unused", isPinned = true))
+
+        val snapshot = repo.rename("unused", "into")
+
+        val merged = tag("into")
+        assertEquals("the target row survives — a merge, not a relocation", target, merged.id)
+        assertTrue("and inherits the orphan's pin", merged.isPinned)
+        assertNull("the orphan's own row is gone", db.tagDao().getByName("unused"))
+        assertEquals("#into other", bodyOf(note))
+
+        repo.restore(snapshot)
+
+        val back = db.tagDao().getByName("unused")
+        assertNotNull("undo puts the orphan back", back)
+        assertEquals("...as the same row, not a duplicate", orphan, back?.id)
+        assertEquals("and the target, which still has a note, survives the sweep", target, tag("into").id)
     }
 }
 

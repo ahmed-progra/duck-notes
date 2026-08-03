@@ -90,6 +90,28 @@ class EditorSaverSourceTest {
     }
 
     /**
+     * A URL must not swallow the rest of its line — the hole an audit proved by planting.
+     *
+     * The plant was a real `rememberTextFieldState` call written after `"https://duck.example"` on
+     * one line of `MarkdownEditorScreen.kt`. Under the old bare `//.*` strip the entire suite stayed
+     * green with a genuine offender in the tree. This is that plant, reduced to an assertion, so the
+     * hole cannot reopen without going red here first.
+     */
+    @Test
+    fun aUrlDoesNotHideABannedCallOnTheSameLine() {
+        assertEquals(
+            listOf("rememberTextFieldState"),
+            offendersIn("""val u = "https://duck.example"; val s = rememberTextFieldState(body)"""),
+        )
+        assertEquals(
+            listOf("TextFieldState.Saver"),
+            offendersIn("""val u = "https://x.example"; val a = rememberSaveable(saver = TextFieldState.Saver) {}"""),
+        )
+        // A URL on its own is not an offender, and must not be reported as one.
+        assertEquals(emptyList<String>(), offendersIn("""val u = "https://duck.example/x""""))
+    }
+
+    /**
      * The assertion proper: neither the editor nor the shell may hold a note body across process death.
      *
      * `rememberTextFieldState` is banned by name as well as the raw `Saver`, because it *is* the saver
@@ -111,13 +133,28 @@ class EditorSaverSourceTest {
     private fun offendersIn(source: String): List<String> =
         stripComments(source).let { code -> BANNED.filter { it in code } }
 
-    /** Block and line comments out; string literals are not a concern for these two tokens. */
-    private fun stripComments(source: String): String = source
-        .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
-        .replace(Regex("//.*"), "")
+    /**
+     * Comments out, **strings matched first** — the same alternation `TokenSourceTest` uses, and for
+     * the reason its KDoc gives rather than by imitation.
+     *
+     * This was `.replace(Regex("//.*"), "")`, with a comment claiming string literals were not a
+     * concern for these two tokens. They are: a bare `//.*` truncates at the first `//` anywhere on
+     * the line, **including inside a URL**, so a banned call written after one silently disappears
+     * before `BANNED.filter` ever sees it. That is the false-negative direction — it reports green.
+     *
+     * Not hypothetical. `MarkdownEditorScreen.SAMPLE_NOTE` contains `https://duck.example` and is in
+     * this very scan set, and an audit proved the hole by planting a real `rememberTextFieldState`
+     * call after a URL on one line: the whole suite stayed green. Matching the string first consumes
+     * the `//` as string content, so it can never open a comment.
+     *
+     * Blanking strings wholesale is safe here in a way it is not for a colour literal: neither banned
+     * token is something you would ever write *inside* a string in this package.
+     */
+    private fun stripComments(source: String): String =
+        source.replace(STRING_OR_COMMENT) { if (it.value.first() in "\"'") "\"\"" else "" }
 
     private fun sources(): List<File> =
-        SCANNED.flatMap { dir -> dir.walkTopDown().filter { it.extension == "kt" } }
+        SCANNED.flatMap { dir -> dir.walkTopDown().filter { it.isFile && it.extension == "kt" } }
 
     private companion object {
         val SCANNED = listOf(
@@ -127,5 +164,17 @@ class EditorSaverSourceTest {
 
         /** Both spellings of the same mechanism. Order is the order [detectorFlagsPlantedOffenders] expects. */
         val BANNED = listOf("TextFieldState.Saver", "rememberTextFieldState")
+
+        /**
+         * String literals and comments in **one** alternation, so a string is matched before a `//`
+         * inside it can be. Copied deliberately from `TokenSourceTest`; see [stripComments].
+         */
+        val STRING_OR_COMMENT = Regex(
+            "\"\"\"[\\s\\S]*?\"\"\"" + // raw string
+                "|\"(?:\\\\.|[^\"\\\\\\n])*\"" + // string literal
+                "|'(?:\\\\.|[^'\\\\\\n])*'" + // char literal
+                "|/\\*[\\s\\S]*?\\*/" + // block comment / KDoc
+                "|//[^\\n]*", // line comment
+        )
     }
 }

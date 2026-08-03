@@ -1,11 +1,15 @@
 package app.duck.notes.domain.markdown
 
 /**
- * The 20 samples the golden and invariant suites both run over.
+ * The samples the golden and invariant suites both run over.
  *
  * Chosen so that every token kind appears at least once, and so that the awkward cases are pinned:
  * markers at offset 0, markers at end-of-text, stacked block markers, unclosed delimiters, code
  * masking, and the tag forms that `ParseTagsTest` already pins from the other direction.
+ *
+ * Deliberately **not** numbered here. The count said "20" while the list held 27, which is the drift
+ * a pinned number is supposed to prevent and instead demonstrated. The counts that matter are
+ * asserted in tests, where they fail; a number in prose only rots.
  */
 object MarkdownCorpus {
 
@@ -37,6 +41,13 @@ object MarkdownCorpus {
         "adjacent" to "**a**_b_==c==",
         "markerAtStart" to "**bold at the very start**",
         "emptyLines" to "\n\n# after blanks\n\n",
+        // The two masking cases the corpus was missing. Every `[[…]]` above sits in open prose — the
+        // `mixed` sample has a wiki link AND a code span but keeps them apart — so nothing exercised
+        // a wiki link the editor masks. `TagAgreementTest` claimed to hold `ResolveWikiLinks` and
+        // `MarkdownScanner` to agreement and could not, because the inputs never made them disagree.
+        // These two do. See TagAgreementTest.WIKI_LINK_CODE_MASKING_DEFECT.
+        "wikiLinkInFence" to "```\n[[Hidden]]\n```",
+        "wikiLinkInCodeSpan" to "a `[[Hidden]]` span",
     )
 
     /** A body of roughly [words] words with a realistic spread of markup. */

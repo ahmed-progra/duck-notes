@@ -7,6 +7,7 @@ import app.duck.notes.data.local.dao.NoteDao
 import app.duck.notes.data.local.dao.TagDao
 import app.duck.notes.data.local.entity.NoteEntity
 import app.duck.notes.data.mapper.toDomain
+import app.duck.notes.data.mapper.toEntity
 import app.duck.notes.domain.markdown.TagScanner
 import app.duck.notes.domain.model.BodySnapshot
 import app.duck.notes.domain.model.Tag
@@ -119,8 +120,18 @@ class TagRepositoryImpl @Inject constructor(
             writeBody(note, body)
         }
         snapshot.tags.forEach { old ->
-            tags.getByName(old.name)?.let { current ->
-                tags.upsert(current.copy(iconKey = old.iconKey, isPinned = old.isPinned))
+            val current = tags.getByName(old.name)
+            when {
+                current != null -> tags.upsert(current.copy(iconKey = old.iconKey, isPinned = old.isPinned))
+                // Null when no restored body names this tag — a pinned or icon'd row with no notes,
+                // which exists only because `deleteOrphanTags` spares it. There is no minted row to
+                // graft customization onto, so put the old one back whole. Without this branch undo
+                // silently kept nothing: `?.let` skipped, and the row stayed destroyed. Covers the
+                // delete path too, which reaches this same line.
+                old.isPinned || old.iconKey != null -> tags.upsert(old.toEntity())
+                // A plain row with no body to re-create it is not resurrected: `setPinned`'s rule is
+                // that tags only come from note bodies, and the next save reaps it anyway.
+                else -> Unit
             }
         }
         // Conditional: on a merge undo the target still holds its own original notes and must live.
@@ -196,7 +207,14 @@ class TagRepositoryImpl @Inject constructor(
     private suspend fun carryCustomization(oldRows: List<Tag>, newNames: List<String>) {
         oldRows.zip(newNames).forEach { (old, newName) ->
             if (!old.isPinned && old.iconKey == null) return@forEach
-            val current = tags.getByName(newName) ?: return@forEach
+            val current = tags.getByName(newName)
+                // No body carries this tag, so `saveNoteWithTags` never minted a row to carry onto.
+                // Move the old row itself rather than dropping it: `upsert` is keyed on `id`, so
+                // rewriting it under the new name *relocates* it, and the `deleteByName(old.name)`
+                // that follows then matches nothing. Reachable only because `deleteOrphanTags`
+                // spares pinned and icon'd rows — which is the same exemption that lets a tag with
+                // no notes exist at all. Dropping it here destroyed a pinned tag outright.
+                ?: return@forEach tags.upsert(old.toEntity().copy(name = newName))
             tags.upsert(
                 current.copy(
                     isPinned = current.isPinned || old.isPinned,

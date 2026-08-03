@@ -1,5 +1,6 @@
 package app.duck.notes.core.theme
 
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.SnapSpec
 import androidx.compose.animation.core.SpringSpec
 import org.junit.Assert.assertEquals
@@ -23,6 +24,17 @@ class MotionTest {
         DuckMotion::class.java.methods
             .filter { it.parameterCount == 0 && it.returnType == Integer.TYPE && it.name.startsWith("get") }
             .associate { it.name.removePrefix("get").replaceFirstChar(Char::lowercase) to it.invoke(m) as Int }
+
+    /**
+     * Every easing, the same way and for the same reason.
+     *
+     * `startsWith("get")` matters: a data class also generates `componentN()` returning the same
+     * type, so counting every `Easing`-returning method counts each property twice.
+     */
+    private fun easings(m: DuckMotion): Map<String, Easing> =
+        DuckMotion::class.java.methods
+            .filter { it.parameterCount == 0 && it.returnType.name.endsWith("Easing") && it.name.startsWith("get") }
+            .associate { it.name.removePrefix("get").replaceFirstChar(Char::lowercase) to it.invoke(m) as Easing }
 
     /**
      * The pinned count, mirroring `TokenTotalityTest`'s tripwire for the colour scheme: a new slot is
@@ -90,12 +102,7 @@ class MotionTest {
      */
     @Test
     fun theFamilyHasThreeEasings() {
-        // `startsWith("get")` matters: a data class also generates `componentN()` returning the same
-        // type, so counting every Easing-returning method counts each property twice.
-        val easings = DuckMotion::class.java.methods.filter {
-            it.parameterCount == 0 && it.returnType.name.endsWith("Easing") && it.name.startsWith("get")
-        }
-        assertEquals("easings found: ${easings.map { it.name }.sorted()}", 3, easings.size)
+        assertEquals("easings found: ${easings(motion).keys.sorted()}", 3, easings(motion).size)
     }
 
     @Test
@@ -182,12 +189,49 @@ class MotionTest {
         assertTrue("easeOut is $atHalf at t=0.5; it should be well past halfway", atHalf > 0.8f)
     }
 
-    /** Both curves must be anchored, or an animation would jump at one end. */
+    /**
+     * Every curve is anchored **and monotonic** — by reflection, so a fourth cannot dodge it.
+     *
+     * ## What this replaces, and why the old one was decoration
+     *
+     * `bothEasingsStartAtZeroAndEndAtOne` asserted only the two anchors, and **could not fail**. A
+     * cubic Bezier has fixed endpoints P0=(0,0) and P3=(1,1), so `transform(0f) == 0f` and
+     * `transform(1f) == 1f` hold for *every* control-point choice. Proven rather than reasoned: an
+     * audit planted `easeOut = CubicBezierEasing(0.9f, 0.1f, 0.9f, 0.1f)` — a curve wrong in every
+     * way that matters — and it stayed green while [easeOutFrontLoadsItsMovement] and
+     * [easeExitStartsSlowlyUnlikeEveryOtherCurveHere] went red. It also only looked at two of three
+     * easings, having been written when there were two.
+     *
+     * **Monotonicity is the half that can actually fail.** Only the *x* control points are
+     * constrained to [0, 1]; a *y* outside it is legal and produces a curve that runs backwards
+     * mid-flight — an animation that visibly reverses on its way to a state it already passed. That
+     * is a real defect a hand-typed bezier can introduce and nothing else here would catch.
+     *
+     * The anchor assertions stay: they are two comparisons, and they stop being free the moment an
+     * easing is written as an `Easing { }` lambda rather than a Bezier, where they can fail.
+     */
     @Test
-    fun bothEasingsStartAtZeroAndEndAtOne() {
-        listOf("easeOut" to motion.easeOut, "easeInOut" to motion.easeInOut).forEach { (name, e) ->
+    fun everyEasingIsAnchoredAndMonotonic() {
+        easings(motion).forEach { (name, e) ->
             assertEquals("$name at t=0", 0f, e.transform(0f), 0.001f)
             assertEquals("$name at t=1", 1f, e.transform(1f), 0.001f)
+
+            var previous = 0f
+            for (step in 0..STEPS) {
+                val t = step.toFloat() / STEPS
+                val v = e.transform(t)
+                assertTrue(
+                    "$name runs backwards at t=$t: $v after $previous — a y control point outside " +
+                        "[0,1] makes the animation reverse mid-flight",
+                    v >= previous - TOLERANCE,
+                )
+                previous = v
+            }
         }
+    }
+
+    private companion object {
+        const val STEPS = 100
+        const val TOLERANCE = 0.001f
     }
 }

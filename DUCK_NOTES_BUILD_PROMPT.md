@@ -1226,6 +1226,91 @@ against a parent height, which is why nothing needed changing.
 
 ---
 
+## PHASE 8b-AUDIT-FIXES — what a read-only audit of the suite found
+
+An audit ran every check in the suite against one question: *could this ever fail?* 405 checks,
+all green at the time (364 JVM + 41 instrumented). It found one shipped data-loss defect, three
+guards that could not do what they were cited for, and a handful of smaller gaps. Recorded here
+because the **defect class** is the reusable part, not the individual fixes.
+
+### The class: a check that has a positive control and still proves the wrong thing
+
+Beyond "vacuous" and "unanchored" there is a third, worse shape — **misdirected**: a real assertion
+*with* a real control, where what a red would prove is not what the check is cited to guarantee. It
+is more dangerous than having no control, because it buys trust it has not earned. This codebase has
+now produced it four times: the original saver guard (inspected `SavedStateHandle`, not
+`SaveableStateRegistry`), the `areAnimatorsEnabled()` battery-saver claim (doc said it covered it,
+measurement said otherwise), and the two below. **When a check presents a control, ask what the
+control's red state actually proves, and whether that is the same proposition the check is cited
+for.** A gap there is the finding.
+
+- `TagRewriteTest`'s pinned-orphan rename asserted `snapshot.tags.single().isPinned` under a KDoc
+  claiming *"undo restores it pinned"*. That proves the snapshot **carries** the row, not that
+  `restore` reinstates it — and it did not. Fixed; see below.
+- `TagAgreementTest.theEditorPaintsTheWikiLinksResolveWikiLinksFinds` was cited as holding
+  `ResolveWikiLinks` and `MarkdownScanner` to agreement, and passed only because no corpus sample
+  put a `[[…]]` inside code. Now pinned explicitly; see Phase 9's known defect.
+
+**Falsifiability was proven by planting, not by argument** — a temporary offending edit in the real
+tracked tree, run against the real Gradle task, then reverted. A scratch copy cannot test that a
+whole-tree scan resolves the actual source root, which is precisely what such a scan gets wrong.
+
+### Fixed
+
+| what | where |
+|---|---|
+| **Renaming a pinned tag no note carries destroyed it, and undo could not recover it** — `carryCustomization` dropped the pin, `deleteByName` then destroyed the row, and `restore`'s `getByName` was null so the recovery branch never ran. Rename now **moves** the row (`upsert` is keyed on `id`); `restore` re-inserts a customized row no body re-created. Fixes the delete path's undo too, which was broken by the same line. | `TagRepositoryImpl.carryCustomization` / `.restore` |
+| `bothEasingsStartAtZeroAndEndAtOne` **could not fail** — a cubic Bezier has fixed endpoints, so it held for any control points. Replaced with anchored **and monotonic**, over all three easings by reflection. | `MotionTest` |
+| `stripComments` used a bare `//.*`, so a banned call after a URL on the same line vanished before detection. Proven by plant: the suite stayed green with a real `rememberTextFieldState` in `MarkdownEditorScreen`. Now uses `TokenSourceTest`'s string-first alternation. | `EditorSaverSourceTest` |
+| 8b's animation-spec control planted 4 of 11 banned alternates. | `TokenSourceTest` |
+| Five tests asserted only inside a loop over a possibly-empty collection. | `ConcealInvariantTest` ×3, `MarkdownTextCacheTest`, `TagAgreementTest` |
+
+### Two slot rules to read from the code, not from shorthand
+
+Both were audit false positives caused by a one-line summary being stricter or vaguer than the code.
+Stated here so the next audit does not re-raise them.
+
+- **`chromeMuted` does paint text, and that is correct.** The rule is not "never text" — it is
+  `DuckColors.kt`'s own phrasing: *"Borders, outlines, and genuinely **disabled** controls. Never
+  text, at any size."* The disabled carve-out is deliberate: WCAG 1.4.3 exempts inactive components,
+  and `ContrastTest.distinguishability` tracks the pair as "rename confirm label". `TagMenu`'s two
+  `disabledContentColor` uses are the intended callers. **No code defect.**
+- **`DuckColors.selection` is currently painted by nothing**, and that is safe. Nothing provides
+  `LocalTextSelectionColors`, so `MaterialTheme` supplies its default —
+  `TextSelectionColors(primary, primary.copy(alpha = 0.4f))`, read from the material3 1.4.0 bytecode
+  the build actually resolves — and `primary` is `accentText`. The painted pair is therefore
+  `onSurface` over `accentText` at 40% on `surface`, measured **5.39–7.82 across all eight
+  palettes**, so it clears 4.5 everywhere and there is no accessibility failure. Two `duckPairs`
+  entries consequently measure a slot nothing paints. **Keep the slot and keep the count at 16** —
+  wire it to `LocalTextSelectionColors` only if custom selection styling is ever wanted, at which
+  point those two floors start doing work.
+
+### Carried from Phase 7 — merge undo leaves the target pinned. Unscheduled.
+
+`carryCustomization` writes `isPinned = current.isPinned || old.isPinned` onto the destination row on
+a merge; `restore` only walks `snapshot.tags`, which holds the **source** rows. `BodySnapshot` has no
+record of the target's prior state, so undoing a merge cannot put it back and the target stays pinned.
+
+Closing it needs a **new snapshot field** — the destination rows as they were — not a change to
+either loop. **Cosmetic, not data-losing:** an extra row in the pinned section the user can unpin.
+Found while checking whether the pinned-orphan `@Upsert` could collide with the `name` UNIQUE index
+(it cannot — both name-changing writes are guarded by a `getByName` that just returned null, proven by
+defeating the guard and watching `UNIQUE constraint failed: tags.name` appear).
+
+Pinned by `TagRewriteTest.restore_ofAMergeLeavesTheTargetPinned`, which **asserts the defect** and
+goes red the day it is fixed. Not scheduled to a phase.
+
+### Still open after this pass
+
+`ResolveWikiLinks`' missing code masking (Phase 9, below — now pinned rather than unnoticed) ·
+merge undo's inherited pin (above, pinned, unscheduled) ·
+release builds unminified, `isMinifyEnabled = false`, deferred to Phase 16 · **"10k-word note scrolls
+at 60fps" remains unevidenced.** 8b's jank numbers are an attribution baseline and nothing more; a
+host GPU flooring every document at 17ms cannot answer the question, and no benchmark in the repo
+claims to. It needs a real-hardware trace.
+
+---
+
 ## PHASE 9 — LINKING + INFO PANEL
 
 **Goal:** Personal wiki without a graph database.
@@ -1238,26 +1323,38 @@ against a parent height, which is why nothing needed changing.
 
 **Known defect carried from Phase 4 — fix before writing `note_links` rows**
 
-`[[WikiLink]]` has two implementations that disagree, which is the exact failure `TagScanner` was
-extracted to prevent — in the other syntax.
+`[[WikiLink]]` has **three** implementations that disagree, which is the exact failure `TagScanner`
+was extracted to prevent — in the other syntax.
 
-- `ResolveWikiLinks` is a bare `Regex("\\[\\[([^\\[\\]]+)]]")` over the whole body. **No code
+- `ResolveWikiLinks.kt:22` is a bare `Regex("\\[\\[([^\\[\\]]+)]]")` over the whole body. **No code
   masking, no fence tracking.** It resolves `` `[[X]]` `` and a fenced `[[X]]` as real links.
-- `MarkdownScanner` correctly refuses both: a fenced line yields only a `FENCE_BODY` token and never
-  reaches inline scanning, and `scanInline` skips offsets masked by `TagScanner.codeSpanMask`.
+- `MarkdownScanner.wikiLinkAt` correctly refuses both: a fenced line yields only a `FENCE_BODY` token
+  and never reaches inline scanning, and `scanInline` skips offsets masked by
+  `TagScanner.codeSpanMask`.
+- **`DeriveTitle.kt:44` holds a byte-identical third copy** of the regex, found by the post-8b audit.
+  It was missed because the defect was written up as "two implementations" and the third does not
+  resolve links — it strips them for a title, and mis-strips a wiki link inside code the same way.
+  **Three call sites to retire, not two.**
 
 So a link written inside a code sample will be painted as plain text but still written to
 `note_links`, producing a backlink the user cannot see or click.
 
-**This is currently failing by omission, not by test.** `TagAgreementTest.
-theEditorPaintsTheWikiLinksResolveWikiLinksFinds` passes only because no `MarkdownCorpus` sample
-contains a `[[...]]` inside a code span or fence. Adding one is the first step — it should go red.
+**No longer failing by omission — it is pinned.** `MarkdownCorpus` now carries `wikiLinkInFence` and
+`wikiLinkInCodeSpan`, which made `TagAgreementTest.theEditorPaintsTheWikiLinksResolveWikiLinksFinds`
+go red exactly as predicted. Rather than leave it red, the divergence is asserted explicitly by
+`TagAgreementTest.aWikiLinkInsideCodeIsResolvedButNotPainted`, with the two samples excluded from the
+agreement test via `WIKI_LINK_CODE_MASKING_DEFECT` — one list, two consumers, so the exclusion and
+the pin cannot drift.
+
+**The pin asserts the defect, so it goes red when you fix it.** That is the signal, not a regression:
+delete the pin and `WIKI_LINK_CODE_MASKING_DEFECT`, and the agreement test regains full corpus
+coverage with no other edit. Do not loosen the assertion to make it pass.
 
 **Fix:** extract a `WikiLinkScanner` beside `TagScanner` in `domain/markdown/`, owning the bracket
-rule and reusing `codeSpanMask` plus the fence carry. `ResolveWikiLinks` becomes a thin view over it,
-exactly as `ParseTags` is over `TagScanner`, and `MarkdownScanner` calls it instead of reimplementing
-the rule. One implementation, three views. Do this **before** `note_links` rows are written, or the
-bad rows outlive the fix.
+rule and reusing `codeSpanMask` plus the fence carry. `ResolveWikiLinks`, `MarkdownScanner` and
+`DeriveTitle` all become thin views over it, exactly as `ParseTags` is over `TagScanner`. One
+implementation, four views (counting the CommonMark side below). Do this **before** `note_links` rows
+are written, or the bad rows outlive the fix.
 
 **Also from Phase 4 — the CommonMark side.** `[[WikiLink]]` is deliberately absent from
 `DuckSyntaxExtension`. A `customInlineContentParserFactory` triggered on `[` never fires: `[` is

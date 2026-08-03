@@ -258,7 +258,8 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 ## Build environment traps on this machine
 
-Three things cost time in Phase 6. None is a project defect; all are easy to hit again.
+Four things have cost time here — the first three in Phase 6, the fourth in the 8b audit-fix pass.
+None is a project defect; all are easy to hit again.
 
 **1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
 absolute paths — these two lines are the ones to copy:
@@ -301,3 +302,29 @@ gradle -p <root> -q app:dependencyInsight --configuration debugRuntimeClasspath 
 
 **PowerShell note:** `adb exec-out screencap -p > file.png` corrupts the PNG (a BOM and text encoding
 are prepended). Use `adb shell screencap -p /sdcard/x.png` followed by `adb pull`.
+
+**4. An editing tool can write a NUL byte into a `.kt` file.** It happened to
+`TagRepositoryImpl.kt` during the 8b audit-fix pass: a `\0` landed inside a string literal, and
+**Kotlin compiled it and the tests ran** — a NUL is legal in a Kotlin string. What broke was the
+tooling around it. `grep` classifies any file containing a NUL as binary and prints
+*"Binary file … matches"* instead of the matching lines, so the line could not be found by search.
+
+That is the trap: **the compiler is happy and the search tool is silently useless**, which reads like
+"my edit didn't apply" and sends you looking in the wrong place.
+
+```sh
+file app/src/.../Suspect.kt          # "data" instead of "C source, Unicode text, UTF-8 text"
+grep -c $'\0' path                   # or: python -c "print(open(p,'rb').read().count(b'\0'))"
+grep -an pattern path                # -a forces text mode, if you only need to *see* the line
+```
+
+Repair with a byte-level replace rather than a text edit — a tool that mangled the byte once can do it
+again, and `git checkout` of a tracked file is banned by the global contract:
+
+```sh
+python -c "
+p='path/to/File.kt'; d=open(p,'rb').read()
+assert d.count(b'\x00')==1
+open(p,'wb').write(d.replace(b'\x00',b''))"
+file path/to/File.kt                 # confirm it reads as UTF-8 text again
+```

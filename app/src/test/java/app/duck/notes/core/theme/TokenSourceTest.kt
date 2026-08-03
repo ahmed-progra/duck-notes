@@ -59,6 +59,14 @@ class TokenSourceTest {
             val f = animateFloatAsState(1f, animationSpec = tween(300))
             val g = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
             val h = tween<Float>(200, easing = FastOutSlowInEasing)
+            val i = spring<Float>(stiffness = 200f)
+            val j = snap(0)
+            val k = keyframes<Float>(config)
+            val l = repeatable<Float>(2, spec)
+            val m = infiniteRepeatable<Float>(spec)
+            val n = LinearOutSlowInEasing
+            val o = FastOutLinearInEasing
+            val p = LinearEasing
             """.trimIndent()
 
         assertEquals(
@@ -69,10 +77,21 @@ class TokenSourceTest {
                 "16.sp",
                 "FontFamily.Monospace",
                 "Color.White",
+                // All seven ANIMATION_SPEC constructors and all four BUILTIN_EASING names, not a
+                // representative few: an audit found the control planted 4 of 11, so seven branches
+                // of the alternation were banned on paper and demonstrated by nothing.
                 "tween(",
-                "CubicBezierEasing(",
                 "tween<Float>(",
+                "CubicBezierEasing(",
+                "spring<Float>(",
+                "snap(",
+                "keyframes<Float>(",
+                "repeatable<Float>(",
+                "infiniteRepeatable<Float>(",
                 "FastOutSlowInEasing",
+                "LinearOutSlowInEasing",
+                "FastOutLinearInEasing",
+                "LinearEasing",
             ).sorted(),
             offenders(dirty).sorted(),
         )

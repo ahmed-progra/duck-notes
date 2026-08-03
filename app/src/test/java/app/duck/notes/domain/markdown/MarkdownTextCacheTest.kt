@@ -102,7 +102,13 @@ class MarkdownTextCacheTest {
     @Test
     fun everyTokenIsWithinBounds() {
         val text = "# H\n> quote\n- [ ] task\n`code` **b** _i_ ==h== ~~s~~\n[l](u) ![i](u) [[w]] #t\n---"
-        fullScan(text).tokens.forEach {
+        val tokens = fullScan(text).tokens
+        // Every assertion below is inside a `forEach`, so a scanner returning nothing would report
+        // green. This line is the positive control: the text above deliberately carries one of
+        // nearly every kind, so a scan of it is never legitimately empty.
+        assertTrue("the scan produced no tokens at all for a body full of markup", tokens.isNotEmpty())
+
+        tokens.forEach {
             assertTrue("$it start", it.start in 0..text.length)
             assertTrue("$it end", it.end in it.start..text.length)
             it.markers.forEach { m ->

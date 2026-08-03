@@ -20,12 +20,15 @@ class ConcealInvariantTest {
 
     @Test
     fun concealRangesAreWellFormedAtEveryCaretPosition() {
+        var examined = 0
+
         MarkdownCorpus.samples.forEach { (name, body) ->
             for (caret in 0..body.length) {
                 val conceal = plan(body, caret).conceal
                 val where = "sample=$name caret=$caret"
 
                 conceal.forEach {
+                    examined++
                     assertTrue("$where: range $it starts before 0", it.first >= 0)
                     assertTrue("$where: range $it ends past ${body.length}", it.last < body.length)
                     assertTrue("$where: range $it is empty or reversed", it.last >= it.first)
@@ -42,6 +45,12 @@ class ConcealInvariantTest {
                 }
             }
         }
+
+        // Every assertion above sits inside `conceal.forEach`, so a scanner that returned nothing
+        // would report green over an empty list. Counting what was actually examined is the positive
+        // control; a per-sample non-emptiness check would be wrong, since plenty of samples
+        // legitimately conceal nothing at some caret positions.
+        assertTrue("no conceal range was examined at all — nothing here was tested", examined > 0)
     }
 
     /**
@@ -111,6 +120,8 @@ class ConcealInvariantTest {
      */
     @Test
     fun renderedStylesLandOnTheSameCharacters() {
+        var examined = 0
+
         MarkdownCorpus.samples.forEach { (name, body) ->
             for (caret in 0..body.length) {
                 val plan = plan(body, caret)
@@ -119,6 +130,7 @@ class ConcealInvariantTest {
                 }.toString()
 
                 SpanPlanner.renderedStyles(plan).forEach {
+                    examined++
                     val where = "sample=$name caret=$caret style=${it.style}"
                     assertTrue("$where: start ${it.start} < 0", it.start >= 0)
                     assertTrue("$where: end ${it.end} > ${rendered.length}", it.end <= rendered.length)
@@ -126,6 +138,8 @@ class ConcealInvariantTest {
                 }
             }
         }
+
+        assertTrue("no rendered style was examined at all — nothing here was tested", examined > 0)
     }
 
     @Test
@@ -152,12 +166,17 @@ class ConcealInvariantTest {
 
     @Test
     fun styledRangesStayInBounds() {
+        var examined = 0
+
         MarkdownCorpus.samples.forEach { (name, body) ->
             plan(body, 0).styles.forEach {
+                examined++
                 assertTrue("$name: ${it.style} starts before 0", it.start >= 0)
                 assertTrue("$name: ${it.style} ends past ${body.length}", it.end <= body.length)
                 assertTrue("$name: ${it.style} is reversed", it.end >= it.start)
             }
         }
+
+        assertTrue("no styled range was examined at all — nothing here was tested", examined > 0)
     }
 }
