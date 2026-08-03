@@ -67,4 +67,18 @@
         <item quantity="one">Deleted #%1$s from %2$d note</item>
         <item quantity="other">Deleted #%1$s from %2$d notes</item>
     </plurals>
+
+    <!--
+      Phase 8c format toolbar. These are the buttons' contentDescription, so they are read aloud and
+      have to name the action rather than the glyph — "Bullet list", not "Dots".
+    -->
+    <string name="format_bold">Bold</string>
+    <string name="format_italic">Italic</string>
+    <string name="format_code">Code</string>
+    <string name="format_highlight">Highlight</string>
+    <string name="format_heading">Heading</string>
+    <string name="format_bullet">Bullet list</string>
+    <string name="format_quote">Quote</string>
+    <string name="format_task">Checkbox</string>
+    <string name="format_link">Link</string>
 </resources>

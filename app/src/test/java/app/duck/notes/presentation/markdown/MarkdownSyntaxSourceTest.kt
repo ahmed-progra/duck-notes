@@ -1,0 +1,142 @@
+package app.duck.notes.presentation.markdown
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+/**
+ * **No layer above `domain/markdown` may spell Duck's markdown out loud.**
+ *
+ * Phase 8c gave the editor buttons that *write* syntax, which is the first time anything outside the
+ * scanner had a reason to know what bold looks like. A `"**"` in a composable would be the third
+ * implementation of one syntax — the exact defect Phase 9 documents for `[[WikiLink]]`, where
+ * `ResolveWikiLinks`, `MarkdownScanner` and `DeriveTitle` disagree about code fences. Cheaper to
+ * forbid it than to reconcile it later.
+ *
+ * The legal route is `MarkdownScanner.markerFor` / `prefixFor`, whose output `MarkdownFormatTest`
+ * round-trips back through the real parser.
+ *
+ * ## Scope, and why it stops where it does
+ *
+ * `presentation/` and `core/` only. `domain/` is **not** scanned, and that is deliberate rather than
+ * an oversight: the two known duplicate wiki-link regexes live in `domain/usecase`, they are pinned
+ * by `TagAgreementTest.aWikiLinkInsideCodeIsResolvedButNotPainted` as an asserted defect, and
+ * retiring them is scheduled for Phase 9. A guard that went red on day one would be turned off on day
+ * two. This one holds the line that is currently clean.
+ */
+class MarkdownSyntaxSourceTest {
+
+    @Test
+    fun noSyntaxLiteralAppearsAboveTheScanner() {
+        val offenders = sources().flatMap { file ->
+            syntaxLiteralsIn(file.readText()).map { "${file.name}: $it" }
+        }
+        assertEquals(
+            "markdown syntax written outside domain/markdown — use MarkdownScanner.markerFor / " +
+                "prefixFor, which MarkdownFormatTest round-trips through the parser",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    @Test
+    fun noRegexIsBuiltAboveTheScanner() {
+        val offenders = sources()
+            .filter { Regex("\\bRegex\\s*\\(").containsMatchIn(stripStringsAndComments(it.readText())) }
+            .map { it.name }
+        assertEquals(
+            "a regex in presentation/ or core/ is how a second parser starts",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
+    /**
+     * Positive control for both absence assertions above.
+     *
+     * Each of those reports green over an empty list if the walk resolves nothing or the detector is
+     * dead — the failure mode a whole-tree scan is most prone to, and the one an audit of this suite
+     * already caught once. So: the tree really has files, one of them really is the toolbar, and the
+     * detector really fires on a planted string.
+     */
+    @Test
+    fun theScanIsPointedAtRealFilesAndTheDetectorWorks() {
+        val files = sources()
+        assertTrue("the source walk found nothing — check SCANNED", files.size >= 10)
+        assertTrue(
+            "FormatToolbar.kt is the file this guard exists for and it is not being scanned",
+            files.any { it.name == "FormatToolbar.kt" },
+        )
+        // The exact shape the plant takes: a task marker spelled out in a composable.
+        assertEquals(
+            listOf("\"- [ ] \""),
+            syntaxLiteralsIn("""private const val TASK = "- [ ] """" + "\n"),
+        )
+        assertTrue(
+            Regex("\\bRegex\\s*\\(").containsMatchIn(
+                stripStringsAndComments("""val T = Regex("- \\[[ xX]]")"""),
+            ),
+        )
+    }
+
+    private companion object {
+        val SCANNED = listOf(
+            File("src/main/java/app/duck/notes/presentation"),
+            File("src/main/java/app/duck/notes/core"),
+        )
+
+        /**
+         * String literals and comments, in one alternation, string-first.
+         *
+         * Copied from `TokenSourceTest` and load-bearing for the same reason: a bare `//.*` truncates
+         * at the first `//` inside a URL and silently erases any real violation later on the line —
+         * a false negative that reports green.
+         */
+        val STRING_OR_COMMENT = Regex(
+            "\"\"\"[\\s\\S]*?\"\"\"" +
+                "|\"(?:\\\\.|[^\"\\\\\\n])*\"" +
+                "|'(?:\\\\.|[^'\\\\\\n])*'" +
+                "|/\\*[\\s\\S]*?\\*/" +
+                "|//[^\\n]*",
+        )
+
+        /**
+         * Duck's syntax, as a string a call site could write.
+         *
+         * Block prefixes carry their trailing space, which is what keeps them from matching ordinary
+         * prose — `"- "` is a bullet marker, while a bare `"-"` is a hyphen and matches everything.
+         */
+        val SYNTAX = listOf("**", "__", "~~", "==", "`", "[[", "]]", "# ", "> ", "- ", "[ ]", "[x]")
+
+        /**
+         * Only **short** literals are offenders, and that is the whole exemption mechanism.
+         *
+         * `SAMPLE_NOTE` in `MarkdownEditorScreen` is a 500-character raw string containing every
+         * token kind, because it is the preview and gallery *fixture* — sample data, not an
+         * implementation. Nobody implements markdown in a 500-character literal, so length separates
+         * the two cleanly and needs no per-file allow-list. An allow-list would name the one file
+         * this guard exists to watch, and would grow quietly.
+         *
+         * **Known limit:** `"*" + "*"` defeats it, as does any literal split across concatenation.
+         * A real offender is written the obvious way; this stops that, and the `Regex(` ban next door
+         * stops the other obvious route. It is not a proof, and it is not claimed as one.
+         */
+        const val MAX_LITERAL = 24
+
+        fun sources(): List<File> = SCANNED.flatMap { dir ->
+            dir.walkTopDown().filter { it.isFile && it.extension == "kt" }
+        }
+
+        /** Comments and char literals dropped; only real string literals are searched. */
+        fun syntaxLiteralsIn(source: String): List<String> =
+            STRING_OR_COMMENT.findAll(source)
+                .map { it.value }
+                .filter { it.startsWith("\"") && it.length <= MAX_LITERAL }
+                .filter { literal -> SYNTAX.any { it in literal } }
+                .toList()
+
+        fun stripStringsAndComments(source: String): String =
+            source.replace(STRING_OR_COMMENT) { if (it.value.first() in "\"'") "\"\"" else "" }
+    }
+}

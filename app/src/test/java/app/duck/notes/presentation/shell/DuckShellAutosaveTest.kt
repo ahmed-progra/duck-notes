@@ -17,7 +17,9 @@ import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.markdown.FormatAction
 import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.presentation.markdown.applyFormat
 import app.duck.notes.domain.usecase.PinTag
 import app.duck.notes.domain.usecase.RenameTag
 import app.duck.notes.domain.usecase.SaveNote
@@ -837,5 +839,54 @@ class DuckShellAutosaveTest {
 
         assertEquals(listOf("#work in progress"), writesTo("n1"))
         assertEquals(emptyList<String>(), tagsEverWrittenTo("n1"))
+    }
+
+    // --- Phase 8c: the format toolbar is the third writer, and needs no new path ----
+
+    /**
+     * **A toolbar press is an ordinary edit, and this is what "ordinary" has to mean.**
+     *
+     * The toolbar does not go through the ViewModel at all — it calls `TextFieldState.edit`, the same
+     * function the keyboard drives. So no new write path, no `flush()`, no lock, and no entry point
+     * on [DuckShellViewModel]: the debounce that already watches the buffer picks it up, and
+     * [DuckShellViewModel.save] takes no payload precisely so it reads whatever is there.
+     *
+     * It calls the **real** `applyFormat`, which is `internal` for that reason. Re-typing its four
+     * lines here would give a test that keeps passing while the toolbar rots — the Misdirected shape
+     * this suite's own audit turned up twice.
+     *
+     * Routing it through `rewriteBuffer` instead is impossible rather than merely discouraged:
+     * that function is `private` to the ViewModel, so the compiler holds this line and no test needs
+     * to. What this asserts is the half a compiler cannot — that the edit reaches **Room**.
+     */
+    @Test
+    fun aToolbarFormatReachesRoomThroughTheOrdinaryDebounce() = withOpenNote(body = "hello") { vm ->
+        vm.buffer.edit { selection = TextRange(0, 5) }
+        Snapshot.sendApplyNotifications()
+
+        vm.buffer.applyFormat(FormatAction.BOLD)
+        Snapshot.sendApplyNotifications()
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("**hello**"), writesTo("n1"))
+    }
+
+    /** And it costs one write, not one per touched line or one plus a flush. */
+    @Test
+    fun aToolbarFormatCostsExactlyOneSave() = withOpenNote(body = "one\ntwo") { vm ->
+        // The note's own stamp, not the raw clock counter: `nowSource` holds the value the clock will
+        // hand out *next*, so a save minting exactly it fails a strict `>` and reports zero saves.
+        val baseline = notes.current("n1")?.modifiedAt ?: 0L
+        vm.buffer.edit { selection = TextRange(0, 7) }
+        Snapshot.sendApplyNotifications()
+
+        vm.buffer.applyFormat(FormatAction.BULLET)
+        Snapshot.sendApplyNotifications()
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("- one\n- two"), writesTo("n1"))
+        assertEquals(1, mintedStampsAfter("n1", baseline).size)
     }
 }

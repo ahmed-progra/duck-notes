@@ -749,21 +749,36 @@ An earlier version of that test asserted the opposite from imagination and faile
 
 **Build**
 - Autosave debounce 400ms. Never lose a keystroke on process death.
-- Format toolbar above keyboard: H, checkbox, list, bold, italic, highlight, link, table, image, more.
+- Format toolbar above keyboard, **nine buttons**: bold, italic, code, highlight, heading, list,
+  quote, checkbox, link. `table`, `image` and `more` move to **8d**, where images and paste already
+  live — a table needs a grid the editor cannot draw yet, and an image button with no picker behind it
+  is a button that does nothing. `code` and `quote` were not on the original list and are here because
+  the scanner already produces both and the toolbar cost is one entry each.
 - Tasks: `- [ ]` / `- [x]`, tap toggles, thin progress line under note card in list.
 - Section folding by heading. Persist fold state per note.
 - Images: pick, insert, Coil render inline, tap to zoom, resize, delete.
 - Paste handling: URL → link, image → attachment, markdown → raw.
-- Undo/redo stack.
+- Undo/redo stack. **Pulled out of the toolbar phase and left unscheduled**, correcting the note
+  below. `TextFieldState.undoState` gives buttons for free, so bolting two `DuckIconButton`s onto the
+  format bar looks like the whole job — and is not. Everything hard about undo in Duck is *outside*
+  the editor: `adopt` and `rewriteBuffer` both call `clearHistory()` because a tag rename is not the
+  user's edit to walk back through, `BodySnapshot` is a separate transient stack for exactly that
+  reason, and 8a's own note calls a durable undo "an operation log or nothing". That is a design
+  question, not a toolbar row.
 - Focus mode: hide chrome, dim non-current paragraph.
 - RTL support (Arabic). Bidi-safe markdown rendering.
 
 **Success:** Kill the app mid-typing — no data loss. 10k-word note scrolls at 60fps.
 
-*Split into **8a** (autosave + the saver drop — shipped, below), **8b** (format toolbar, undo/redo
-buttons, task toggling, section folding) and **8c** (images, paste, focus mode, RTL). 4a/4b and 5a/5b
-precedent. Undo/redo moved from 8a to 8b: `TextFieldState.undoState` already works and there is
-nothing to build until a toolbar exposes it — what 8a owed it was the `clearHistory()` rule, below.*
+*Split into **8a** (autosave + the saver drop), **8b** (motion), **8c** (format toolbar, task
+toggling, section folding) and **8d** (images, paste, focus mode, RTL). 4a/4b and 5a/5b precedent.*
+
+***This paragraph said something different until 8c, and the stale version is worth recording rather
+than quietly replacing.*** *It assigned the toolbar to 8b and images to 8c, which stopped being true
+the moment 8b shipped as motion — the renumbering was written down in the 8b section (below) and never
+propagated here. So the two definitions of "8c" in this document disagreed for a whole phase, and the
+first one a reader hits is the wrong one. Nothing broke, because nobody read it; that is the point.
+**A phase split lives in exactly one place, and this is it.***
 
 ---
 
@@ -1308,6 +1323,72 @@ release builds unminified, `isMinifyEnabled = false`, deferred to Phase 16 · **
 at 60fps" remains unevidenced.** 8b's jank numbers are an attribution baseline and nothing more; a
 host GPU flooring every document at 17ms cannot answer the question, and no benchmark in the repo
 claims to. It needs a real-hardware trace.
+
+---
+
+## PHASE 8c — FORMAT TOOLBAR, TASK TOGGLING, SECTION FOLDING
+
+**Goal:** the editor gains write affordances. Until now the only ways to change a body were typing in
+it and `TagRepositoryImpl` rewriting it from the sidebar.
+
+Three commits: **8c-a** toolbar, **8c-b** task toggling, **8c-c** folding. b and c both touch conceal
+and are independent of each other; c needs no hit-test, so if 8c-b's Compose spike fails, b defers and
+a/c still ship.
+
+### 8c-a — the format toolbar
+
+**Nine buttons, no toggled state.** A button inserts syntax; it does not report whether the caret is
+already bold. That keeps every button to the two states `DuckIconButton` already paints and already
+has a `ContrastTest` distinguishability row for — an active state would owe a third colour and a new
+row. Add it when someone asks, and enumerate its pair in the same change.
+
+**The toolbar declares no syntax.** Every literal it writes comes from `MarkdownScanner.markerFor` /
+`prefixFor`, and `MarkdownFormatTest.everyMarkerScansBackAsItsOwnKind` feeds each one back through the
+real parser rather than comparing it to a table — the round trip `TagScanner.isValidName` uses, in the
+other syntax. `MarkdownSyntaxSourceTest` then scans `presentation/` and `core/` for markdown literals
+and for `Regex(`, so the rule is enforced rather than remembered.
+
+That guard exempts by **length, not by file**: `SAMPLE_NOTE` is a 500-character preview fixture, and
+nobody implements markdown in a 500-character literal. A per-file allow-list would have had to name
+`FormatToolbar.kt` — the one file the guard exists to watch.
+
+**"Already formatted?" is answered by scanning, never by `startsWith`.** `- [x] done` is a task line,
+and a `startsWith("- [ ] ")` check says it is not and prepends a second marker. Scanning also makes
+removal exact: `##   Heading` loses its whole marker rather than a hardcoded prefix length.
+
+**A toolbar press is an ordinary edit.** It goes through `TextFieldState.edit`, the same function the
+keyboard drives, so `snapshotFlow { buffer.text }` emits and the 400ms debounce writes it. **No new
+write path, no `flush()`, no lock, and no intent on `DuckShellViewModel`.** Routing it through
+`rewriteBuffer` is impossible rather than discouraged — that function is `private` to the ViewModel,
+so the compiler holds the line and no test has to. `DuckShellAutosaveTest` asserts the half a compiler
+cannot: that the edit reaches Room, in exactly one save.
+
+**Fences: the buttons go `enabled = false`, and there is no message path in 8c by design.**
+`AddTagToNote`'s `NotWritable` Snackbar exists because *that* failure is invisible — the menu item
+appears to do nothing. A disabled button is visible before the tap, so a message would explain a state
+already on screen. Applying "outside the fence" was rejected: it splits one action into several edits,
+so one undo entry becomes several, and a `**` written into a code sample is literal text.
+
+`MarkdownFormat.isWritable` has two overloads and the difference is load-bearing. The toolbar's
+enabled state recomputes on every keystroke, so it takes the editor's **incremental** `ScanResult`
+rather than rescanning, and walks `lineTokens` rather than `tokens` — the latter is a `get()` that
+flattens the whole note on every access.
+
+**Theme: zero new pairs. `duckPairs` stays 23, `distinguishability` stays 3.** The bar is
+`surfaceElevated` on `surface`, its glyphs are `onSurface` (4.5, floored) and `chromeMuted` when
+disabled (3.0, floored), and it reuses `DuckIconButton` rather than introducing a second button type —
+which is why it inherits the `"icon button glyph"` row instead of owing one.
+
+**Motion: zero new slots.** The bar rides on `imePadding()`, so the keyboard's own animation owns the
+timing; a spec here would fight it.
+
+### Still open in 8c
+
+`8c-b` (task toggling) and `8c-c` (section folding) are planned and unbuilt. **8c-b is blocked on a
+Compose spike, not on effort:** task markers are currently concealed to nothing —
+`MarkdownScanner` emits one marker range covering `- [ ] ` entire and `MarkdownStyles` paints
+`TASK_OPEN` as an empty `SpanStyle` — so `- [ ] milk` renders as `milk` and **there is nothing on
+screen to tap.**
 
 ---
 

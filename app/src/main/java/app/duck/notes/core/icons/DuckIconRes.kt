@@ -53,8 +53,32 @@ fun DuckIconImage(
     contentDescription: String?,
     modifier: Modifier = Modifier,
 ) {
+    DuckIconImage(icon.drawable(), tint, contentDescription, modifier)
+}
+
+/**
+ * The same painter, for a glyph that is **not** a [DuckIcon].
+ *
+ * [DuckIcon] is the *tag* icon set — its entries carry keywords and feed `forTag`, and `DuckIconTest`
+ * pins both the count and the rule that only the fallback has no keywords. Phase 8c's nine format
+ * glyphs are not tags and must not be in it: they would resolve to nothing, break those two
+ * assertions, and make "the icon set" mean two different things.
+ *
+ * So the format toolbar names its drawable directly, and [FormatToolbar] keeps the mapping in one
+ * exhaustive `when` over `FormatAction` — the same compile-time totality [drawable] gets from being
+ * exhaustive over the enum, in the layer that is allowed to know about `R`.
+ *
+ * [tint] is required here for the same two reasons the [DuckIcon] overload documents above.
+ */
+@Composable
+fun DuckIconImage(
+    @DrawableRes id: Int,
+    tint: Color,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+) {
     Image(
-        painter = painterResource(icon.drawable()),
+        painter = painterResource(id),
         contentDescription = contentDescription,
         modifier = modifier,
         colorFilter = ColorFilter.tint(tint),

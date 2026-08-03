@@ -2,6 +2,7 @@ package app.duck.notes.presentation.markdown
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -17,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import app.duck.notes.core.markdown.MarkdownOutputTransformation
 import app.duck.notes.core.markdown.MarkdownStyles
 import app.duck.notes.core.theme.DuckTheme
+import app.duck.notes.domain.markdown.MarkdownFormat
 import app.duck.notes.domain.markdown.MarkdownTextCache
 
 /**
@@ -39,6 +41,12 @@ import app.duck.notes.domain.markdown.MarkdownTextCache
  *
  * This composable now holds **nothing saveable**. Do not give it a fallback `TextFieldState`: a
  * default would let a caller silently get a detached buffer that autosave never sees.
+ *
+ * ## Phase 8c hung the format toolbar under it
+ *
+ * [FormatToolbar] is the `bottomBar`, and `imePadding()` is what floats it over the keyboard rather
+ * than under it. Its buttons write through `state.edit`, the same path the keyboard uses, so autosave
+ * needs no new entry point — see that file for the argument.
  */
 @Composable
 fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
@@ -57,7 +65,23 @@ fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
     val styles = remember(colors, type) { MarkdownStyles(colors, type) }
     val transformation = remember(styles) { MarkdownOutputTransformation(cache, styles) }
 
-    Scaffold(modifier = modifier.fillMaxSize()) { innerPadding ->
+    // The toolbar's enabled state, off the SAME incremental scan the transformation renders from.
+    //
+    // Keyed on the text, not on the selection: only the text can move a fence, and the caret moves
+    // far more often than it changes. Keying on both would run a scan per caret move, on the one
+    // surface still carrying the unresolved 10k-word question. `cache.scan` is safe to call here for
+    // the reason its KDoc gives — an `AtomicReference`, deliberately not snapshot state, and a
+    // repeat call on identical text is a pure read.
+    val text = state.text
+    val selection = state.selection
+    val scan = remember(text) { cache.scan(text.toString()) }
+    val writable = MarkdownFormat.isWritable(scan, selection.start, selection.end)
+
+    Scaffold(
+        // imePadding, so the bar rides above the keyboard instead of behind it.
+        modifier = modifier.fillMaxSize().imePadding(),
+        bottomBar = { FormatToolbar(state = state, enabled = writable) },
+    ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()

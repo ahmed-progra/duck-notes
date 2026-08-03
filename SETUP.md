@@ -318,6 +318,16 @@ grep -c $'\0' path                   # or: python -c "print(open(p,'rb').read().
 grep -an pattern path                # -a forces text mode, if you only need to *see* the line
 ```
 
+**5. Plant-then-revert can leave lint's Kotlin index stale, and it fails loudly for the wrong reason.**
+After a few plant → run → revert cycles in one daemon session, `lintAnalyzeDebugUnitTest` and
+`lintAnalyzeDebugAndroidTest` died with a **`FileNotFoundException`** deep in
+`KotlinLocalVirtualFile.contentsToByteArray` — hundreds of lines of `LintDriver` stack and not one
+lint finding. It is an index holding a path whose content moved underneath it, not a problem with the
+code.
+
+**Re-running `lint` on its own passes.** Do that before investigating; a stack trace this large reads
+like a real defect and is not one. If it persists across a fresh invocation, then it is worth reading.
+
 Repair with a byte-level replace rather than a text edit — a tool that mangled the byte once can do it
 again, and `git checkout` of a tracked file is banned by the global contract:
 

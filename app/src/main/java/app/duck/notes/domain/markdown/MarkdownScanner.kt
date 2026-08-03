@@ -47,6 +47,42 @@ object MarkdownScanner {
         return false
     }
 
+    /**
+     * The inline delimiter that scans back as [kind], or null when [kind] is not an inline node.
+     *
+     * **A round trip, not a lookup table** — the same trick as `TagScanner.isValidName`.
+     * `MarkdownFormatTest` asserts that scanning `marker + text + marker` yields exactly [kind], so
+     * the literal the toolbar *writes* and the alternation [delimiterAt] *reads* cannot drift apart.
+     * A second copy of `"**"` in the presentation layer is the defect Phase 9 documents for
+     * `[[WikiLink]]`, one layer up.
+     *
+     * `STRIKE` is deliberately absent: there is no strikethrough button, and a marker with no caller
+     * is a claim nothing checks. Add it here with its round-trip case the day one lands.
+     */
+    fun markerFor(kind: TokenKind): String? = when (kind) {
+        TokenKind.BOLD -> "**"
+        // `_`, not `*`: `**bold**` and `*italic*` next to each other are hard to read and harder to
+        // nest, and [delimiterAt] accepts either.
+        TokenKind.ITALIC -> "_"
+        TokenKind.HIGHLIGHT -> "=="
+        TokenKind.CODE_SPAN -> "`"
+        else -> null
+    }
+
+    /**
+     * The block marker that scans back as [kind], or null when [kind] is not a block node.
+     *
+     * Round-trip checked the same way as [markerFor]. The trailing space is part of the marker, not
+     * decoration: [scanBlockPrefix] requires it, so `#Heading` is not a heading at all.
+     */
+    fun prefixFor(kind: TokenKind): String? = when (kind) {
+        TokenKind.HEADING -> "# "
+        TokenKind.QUOTE -> "> "
+        TokenKind.BULLET -> "- "
+        TokenKind.TASK_OPEN -> "- [ ] "
+        else -> null
+    }
+
     /** Scans [line], which starts at absolute [base], under [carry]. Returns its tokens and the next carry. */
     fun scanLine(line: String, base: Int, carry: LineCarry): Pair<List<Token>, LineCarry> {
         val tokens = mutableListOf<Token>()
