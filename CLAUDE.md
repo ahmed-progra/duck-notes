@@ -76,6 +76,12 @@ the thing under test.**
 - Every guard owes a named plant: the edit to `src/main` that turns it red. Run it, watch it fail,
   revert. A guard with no nameable plant is decoration — say so in its KDoc rather than leaving it
   to read as cover.
+- **A plant is code, and can be wrong in the direction that fakes a red.** Two of this pass's plants
+  were defective; both failed to *compile*, which is the safe direction. A plant that compiles, runs
+  and exercises the wrong path produces a red you would believe — strictly worse than no plant,
+  because it certifies a guard nobody has actually tested. Mitigation, and it is cheap: **prefer a
+  minimal edit to an existing expression over new code.** Invert a condition, change a constant,
+  swap one spec. A plant that adds a function or an import can fail on its own terms.
 
 Written down after five checks shipped as five dressings of one defect. `MotionTest` read
 `MAX_DURATION_MS` off the class it policed; the `MAX_WAIT_MS` tests read the constant;

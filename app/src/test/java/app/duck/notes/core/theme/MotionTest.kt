@@ -50,8 +50,33 @@ class MotionTest {
     }
 
     /**
-     * The ceiling. Past ~300ms a UI animation reads as slow however good the curve is, and this is the
-     * rule most likely to erode one comfortable 50ms at a time.
+     * The ceiling itself, pinned as a literal.
+     *
+     * [noDurationExceedsTheCeiling] below reads [DuckMotion.MAX_DURATION_MS] out of the class it is
+     * policing, so the bar moves with the thing being measured: `slow = 900` next to
+     * `MAX_DURATION_MS = 1000` is one diff, both lines, and it reads as a retune. That is exactly the
+     * "one comfortable 50ms at a time" erosion the rule exists to stop, and the guard was riding
+     * along with it. CLAUDE.md's Guards rule — *pin the literal* — was written from this and three
+     * siblings.
+     *
+     * 300ms is the number, not a variable. Moving it is a decision about how the app feels, and it
+     * should cost a deliberate edit here.
+     */
+    @Test
+    fun theCeilingItselfIsPinned() {
+        assertEquals(
+            "MAX_DURATION_MS is the rule, not a tunable. Raising it does not make a slow animation " +
+                "acceptable, it makes the check stop asking. Change this literal only on purpose.",
+            300,
+            DuckMotion.MAX_DURATION_MS,
+        )
+    }
+
+    /**
+     * Past ~300ms a UI animation reads as slow however good the curve is.
+     *
+     * Still the right check — it is what catches a duration going over — but it is only as good as
+     * the number it compares against, which is why [theCeilingItselfIsPinned] sits above it.
      */
     @Test
     fun noDurationExceedsTheCeiling() {

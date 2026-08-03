@@ -169,6 +169,43 @@ class DuckShellAutosaveTest {
 
     // --- the debounce and its ceiling ---------------------------------------
 
+    /**
+     * **The two numbers the amended success bar quotes, pinned as literals.**
+     *
+     * Everything else here measures *behaviour* against these constants by reading them, so the bar
+     * moves with the thing under test and no behavioural test can catch a change to the promise
+     * itself. Measured: [theCeilingSavesWhileTypingNeverPauses] drives 5 s of typing and asserts two
+     * or more saves, so it tolerates any ceiling up to 2500 ms; `AutosaveDurabilityTest`'s device
+     * test asserts `elapsed <= MAX_WAIT_MS + 1_000`, which is a bound built from the value it is
+     * checking. **`MAX_WAIT_MS = 2_400L` was green across both**, silently growing the stated
+     * data-loss window by 20% in a diff that reads as tuning.
+     *
+     * These are not tunables. They are the two halves of a promise made to the user in the phase's
+     * success bar:
+     *
+     * > No data loss on any orderly departure — `ON_STOP` flushes. **≤ 2 s of typing** on an
+     * > abnormal kill (crash, `am force-stop`, kernel OOM) where no `ON_STOP` fires.
+     *
+     * [DuckShellViewModel.MAX_WAIT_MS] *is* that 2 s. [DuckShellViewModel.IDLE_MS] is the spec's own
+     * 400 ms debounce. Changing either changes what Duck promises, so it costs an edit here and a
+     * matching edit to the bar in `DUCK_NOTES_BUILD_PROMPT.md`. CLAUDE.md's Guards rule — *pin the
+     * literal* — was written from this and three siblings.
+     */
+    @Test
+    fun theAutosaveWindowsThemselvesArePinned() {
+        assertEquals(
+            "MAX_WAIT_MS is the '<= 2 s of typing' in the phase's success bar, not a tunable. " +
+                "Moving it moves what Duck promises on an abnormal kill — update the bar too.",
+            2_000L,
+            DuckShellViewModel.MAX_WAIT_MS,
+        )
+        assertEquals(
+            "IDLE_MS is the spec's 400ms debounce. Same rule: change the promise, not just the number.",
+            400L,
+            DuckShellViewModel.IDLE_MS,
+        )
+    }
+
     @Test
     fun keystrokesInsideTheIdleWindowProduceExactlyOneSave() = withOpenNote { vm ->
         repeat(5) { i ->
