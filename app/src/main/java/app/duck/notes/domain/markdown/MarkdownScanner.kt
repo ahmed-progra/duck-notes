@@ -48,6 +48,40 @@ object MarkdownScanner {
     }
 
     /**
+     * [body] with the task box containing [offset] flipped, or **null** when [offset] is not in one.
+     *
+     * The null is the whole guard, and it is a narrow one on purpose: [offset] must fall inside the
+     * three characters of `[ ]`, not merely on a line that has a task on it. A tap on the task's own
+     * *text* is a caret placement, and answering it with a toggle would make the word unselectable.
+     *
+     * Fence-correctness is inherited rather than written, the same way [hasOpenTask] gets it: the
+     * walk carries [LineCarry] forward, so a `- [ ]` inside a fenced block scans as `FENCE_BODY`,
+     * never reaches [scanBlockPrefix], and therefore has no box to be found. Handing each line a
+     * fresh `LineCarry()` would make fenced tasks togglable — which is what the P3 plant does.
+     *
+     * One character replaced, not a marker rewritten. `- [x] ` is not built from [prefixFor] because
+     * the state char is the only thing that changes, and rebuilding the prefix would discard the
+     * line's own spacing: `-   [ ] milk` would come back as `- [x] milk`.
+     */
+    fun toggleTaskAt(body: String, offset: Int): String? {
+        var carry = LineCarry()
+        var base = 0
+        for (line in body.lineSequence()) {
+            if (base > offset) return null
+            val (tokens, next) = scanLine(line, base, carry)
+            for (token in tokens) {
+                val box = token.box ?: continue
+                if (offset !in box) continue
+                val state = if (token.kind == TokenKind.TASK_DONE) " " else "x"
+                return body.replaceRange(box.first + 1, box.first + 2, state)
+            }
+            carry = next
+            base += line.length + 1
+        }
+        return null
+    }
+
+    /**
      * The inline delimiter that scans back as [kind], or null when [kind] is not an inline node.
      *
      * **A round trip, not a lookup table** — the same trick as `TagScanner.isValidName`.
@@ -159,7 +193,17 @@ object MarkdownScanner {
                 // Through the space after `]`, not just the box — every other block marker eats its
                 // trailing space, and leaving this one would indent concealed task lines by one.
                 val body = skipSpace(line, afterBox)
-                out += Token(kind, base + i, base + line.length, listOf(base + i until base + body))
+                out += Token(
+                    kind = kind,
+                    start = base + i,
+                    end = base + line.length,
+                    markers = listOf(base + i until base + body),
+                    // The box, carried out of the scan rather than re-derived downstream. `-   [ ]`
+                    // is legal and moves it, so `markerStart + 2` would be wrong on that line — and
+                    // wrong in a way that lands the tap target on the wrong characters rather than
+                    // failing loudly. [taskAt] has both endpoints; it used to discard the first.
+                    box = base + content until base + afterBox,
+                )
                 return body
             }
             out += Token(TokenKind.BULLET, base + i, base + line.length, listOf(base + i until base + content))

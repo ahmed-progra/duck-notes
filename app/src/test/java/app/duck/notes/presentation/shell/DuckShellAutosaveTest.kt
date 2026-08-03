@@ -18,8 +18,12 @@ import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
 import app.duck.notes.domain.markdown.FormatAction
+import app.duck.notes.domain.markdown.MarkdownTextCache
+import app.duck.notes.domain.markdown.ScanResult
+import app.duck.notes.domain.markdown.SpanPlanner
 import app.duck.notes.domain.usecase.ParseTags
 import app.duck.notes.presentation.markdown.applyFormat
+import app.duck.notes.presentation.markdown.toggleTask
 import app.duck.notes.domain.usecase.PinTag
 import app.duck.notes.domain.usecase.RenameTag
 import app.duck.notes.domain.usecase.SaveNote
@@ -889,4 +893,80 @@ class DuckShellAutosaveTest {
         assertEquals(listOf("- one\n- two"), writesTo("n1"))
         assertEquals(1, mintedStampsAfter("n1", baseline).size)
     }
+
+    /**
+     * The task overlay is the **third** caller of `state.edit` — keyboard, toolbar, checkbox — and
+     * deliberately not a third write path. Same argument as the two toolbar tests above, and the
+     * same reason it drives the real `toggleTask`: a retyped copy would keep passing while the
+     * production one rotted.
+     *
+     * It also asserts the caret, which the toolbar tests do not, because *the caret must not move*
+     * is half of what makes a checkbox tap a checkbox tap rather than a caret placement.
+     *
+     * **The caret is asserted before the debounce, and that is deliberate — see
+     * [aSavedBufferIsReAdoptedAndTheCaretJumpsToTheEnd] directly below.** Asserting it after would
+     * fail, and it would fail for a reason that has nothing to do with this function: 8a's
+     * `syncBuffer` re-adopts the note Room echoes back and `adopt` re-clamps the caret. That defect
+     * is pinned separately rather than folded in here, so this test keeps failing only when
+     * `toggleTask` breaks.
+     */
+    @Test
+    fun aTaskToggleReachesRoomAndLeavesTheCaret() = withOpenNote(body = "- [ ] milk\n\ntail") { vm ->
+        val baseline = notes.current("n1")?.modifiedAt ?: 0L
+        val caret = "- [ ] milk\n\nta".length
+        vm.buffer.edit { selection = TextRange(caret) }
+        Snapshot.sendApplyNotifications()
+
+        vm.buffer.toggleTask(boxesOf(vm.buffer.text.toString(), caret).single())
+        assertEquals("a checkbox tap must not move the caret", caret, vm.buffer.selection.start)
+
+        Snapshot.sendApplyNotifications()
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals(listOf("- [x] milk\n\ntail"), writesTo("n1"))
+        assertEquals(1, mintedStampsAfter("n1", baseline).size)
+    }
+
+    /**
+     * **A Phase 8a defect, found by 8c-b and pinned rather than fixed. Asserts the CURRENT wrong
+     * behaviour, so it goes red the day someone fixes it — same shape as `TagRewriteTest`'s
+     * merge-undo pin.**
+     *
+     * `DuckShellViewModel.adopt` calls `setTextAndPlaceCursorAtEnd` **unconditionally**, including
+     * when the body it is adopting is byte-identical to what the buffer already holds. `syncBuffer`
+     * reaches it on the "same note, buffer clean" branch — which is precisely the state every
+     * successful autosave leaves behind. So Room echoes the note back, the buffer adopts a body it
+     * already had, and the caret lands at the end of the note.
+     *
+     * **This is not specific to task toggling.** The same sequence moves the caret after a toolbar
+     * press and after ordinary typing; it was found here only because a checkbox tap is the first
+     * edit whose contract explicitly forbids moving the caret. The fix is one condition in `adopt`
+     * — skip when `body == buffer.text.toString()` — but that is 8a's code and 8a's blast radius,
+     * so it is scheduled, not smuggled into this commit.
+     *
+     * Delete this test when it is fixed; do not loosen it.
+     */
+    @Test
+    fun aSavedBufferIsReAdoptedAndTheCaretJumpsToTheEnd() = withOpenNote(body = "one\ntwo\nthree") { vm ->
+        val caret = "one\ntw".length
+        vm.buffer.edit { selection = TextRange(caret); replace(0, 3, "ONE") }
+        Snapshot.sendApplyNotifications()
+        advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
+        advanceUntilIdle()
+
+        assertEquals("precondition: the save landed", listOf("ONE\ntwo\nthree"), writesTo("n1"))
+        assertEquals(
+            "the caret survived the autosave — if this is now true the defect is FIXED, so delete " +
+                "this test and assert the caret in aTaskToggleReachesRoomAndLeavesTheCaret instead",
+            vm.buffer.text.length,
+            vm.buffer.selection.start,
+        )
+    }
+
+    /** The boxes the editor would show for [body] with the caret at [caret]. */
+    private fun boxesOf(body: String, caret: Int) =
+        MarkdownTextCache.rescan(ScanResult.Empty, body).tokens.let { tokens ->
+            SpanPlanner.taskBoxes(body, tokens, SpanPlanner.plan(tokens, caret, caret))
+        }
 }

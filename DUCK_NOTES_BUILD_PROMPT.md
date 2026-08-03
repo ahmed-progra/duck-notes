@@ -1382,13 +1382,85 @@ which is why it inherits the `"icon button glyph"` row instead of owing one.
 **Motion: zero new slots.** The bar rides on `imePadding()`, so the keyboard's own animation owns the
 timing; a spec here would fight it.
 
+### 8c-b — task toggling
+
+**The blocker, and why the wording mattered.** Task markers concealed to nothing: `MarkdownScanner`
+emits one marker range covering `- [ ] ` entire, `SpanPlanner` concealed it whole, and `- [ ] milk`
+rendered as `milk`. `TaskTapSpikeTest` measured what that costs on device — a tap sweep across a task
+line landed only in `{0} ∪ [6..]`, never in 1..5.
+
+**State it as collapse, not unreachability.** Compose maps a rendered position back to the *start* of
+a deleted range, so every tap over `- [ ] ` resolved to source 0. The six offsets were shared, not
+destroyed — and that is precisely why **splitting the range was sufficient**. Had the information
+really been gone, no carve-out would have helped and this would have needed a replacement-glyph
+transformation with a length-changing offset map. Small change versus large one, decided by one word.
+
+**The carve-out.** `SpanPlanner.carve` conceals `[markerStart, boxStart)` and leaves `[ ] ` in the
+rendered text; the space after `]` is kept or every task reads `[ ]milk`. The box comes from
+`Token.box`, carried out of `taskAt` rather than re-derived — `markerStart + 2` is right on `- [ ]`
+and wrong on the legal `-   [ ]`, and wrong by *shifting the tap target onto a space* rather than by
+failing. `Token.markers` deliberately stays the full six characters, because `MarkdownFormat.block()`
+removes `markers.first()` when the toolbar's Checkbox toggles.
+
+**`StyleKey` 18 → 20, and the count is deliberately unpinned.** `MarkdownStyles.spanStyle` is an
+exhaustive `when`, so a key nobody painted does not compile — stronger than an assertion and it
+cannot go stale. `duckPairs` needs its count pin because it is a hand-maintained list with no
+compiler behind it; this is not that. `TASK_BOX_DONE` carries an explicit `TextDecoration.None`,
+which is load-bearing: `SpanStyle` merge keeps the underlying value wherever the overriding one is
+null, so omitting it inherits `TASK_DONE`'s `LineThrough` and paints a struck-through checkbox.
+
+**Theme: zero new pairs. `duckPairs` stays 23, `distinguishability` stays 3.** The open box is
+`onSurface` and the done box `accentText`, both already floored against `surface` at 4.5.
+
+**The overlay, not an interceptor.** A transparent `Modifier.toggleable` per box, positioned from
+`TextLayoutResult.getBoundingBox` on rendered offsets that `SpanPlanner.taskBoxes` supplies. Raw
+pointer interception would have to hand-roll slop and timeout to avoid eating scrolls and would
+expose **no accessibility node at all**. `Role.Checkbox` plus the task's own text as
+`contentDescription` is what makes TalkBack say *"count them, checkbox, not checked"*.
+
+**It must sit inside the scroll container.** `toggleable` cancels on drag and lets the drag reach a
+scrollable *ancestor*; as a sibling there is none, so the note does not scroll and it reads as
+"toggleable swallows drags". SETUP.md trap 7.
+
+**Target size: 16.4 × 26.3dp, measured — which is under WCAG 2.5.8's 24 × 24.** The plan assumed it
+would clear that and it does not. It stands on 2.5.8's **`inline` exception** (a target inside a
+sentence, constrained by the line-height of non-target text), which genuinely covers a `[ ]` drawn as
+characters in prose — but that exception is the only thing it passes on, and that is worth knowing.
+Widening is not the fix: vertically it steals the neighbouring lines' taps, horizontally it swallows
+taps meant to place the caret in the task's text. The toolbar's Checkbox button is the 48dp route.
+
+**Three findings the plants produced, none of them the defect the plant was aimed at:**
+
+- **P5b (overlapping conceal) went green.** `ConcealInvariantTest` swept carets `0..body.length`, but
+  a block token spans its whole line, so every swept caret *reveals* it — `> - [ ] x` concealed one
+  range at every position, and the ordering and overlap checks run under `zipWithNext`, which does
+  nothing with one element. **Two block markers had never been checked against each other.** Fixed by
+  adding `CARET_AWAY` to the four sweeps; P5b then went red on overlap alone.
+- **P6 falsified only half of what it was supposed to.** `detectTapGestures(onPress)` toggles on down
+  *and the note still scrolls* — the drag reaches the scroll container anyway. So the "a drag
+  scrolls" half needed its own plant: hoisting the overlay out of the scroll container (trap 7's
+  actual hazard), which gives `Scrolled(false)`. The drag test now asserts both outcomes as one pair,
+  because JUnit stops at the first failure and a sequential version proved only whichever half ran
+  first.
+- **P7 went green because the test was self-referential.** It computed its tap as
+  `overlay.right + 12.dp`, so widening the overlay moved the probe with it. The probe is now anchored
+  to the text field, and the test asserts its own premise — that the probe lands outside the overlay
+  — so P7 fails by reporting that the overlay is too wide.
+
+**A Phase 8a defect found here and pinned, not fixed.** `DuckShellViewModel.adopt` calls
+`setTextAndPlaceCursorAtEnd` unconditionally, including when the body is byte-identical to what the
+buffer holds. `syncBuffer` reaches it on the "same note, buffer clean" branch — the state every
+successful autosave leaves behind — so Room echoes the note back and **the caret jumps to the end of
+the note.** Not specific to task toggling: the same sequence moves the caret after a toolbar press
+and after ordinary typing. It surfaced here only because a checkbox tap is the first edit whose
+contract forbids moving the caret. Pinned by
+`DuckShellAutosaveTest.aSavedBufferIsReAdoptedAndTheCaretJumpsToTheEnd`, which asserts the **wrong**
+behaviour so it goes red the day it is fixed. The fix is one condition in `adopt`, but that is 8a's
+code and 8a's blast radius — **scheduled, not smuggled into this commit.**
+
 ### Still open in 8c
 
-`8c-b` (task toggling) and `8c-c` (section folding) are planned and unbuilt. **8c-b is blocked on a
-Compose spike, not on effort:** task markers are currently concealed to nothing —
-`MarkdownScanner` emits one marker range covering `- [ ] ` entire and `MarkdownStyles` paints
-`TASK_OPEN` as an empty `SpanStyle` — so `- [ ] milk` renders as `milk` and **there is nothing on
-screen to tap.**
+`8c-c` (section folding) is planned and unbuilt.
 
 ---
 

@@ -48,6 +48,16 @@ object MarkdownCorpus {
         // These two do. See TagAgreementTest.WIKI_LINK_CODE_MASKING_DEFECT.
         "wikiLinkInFence" to "```\n[[Hidden]]\n```",
         "wikiLinkInCodeSpan" to "a `[[Hidden]]` span",
+        // 8c-b: the task marker is the only one that now splits into a concealed and a painted half,
+        // so the two cases where the split could go wrong are pinned here rather than in one test.
+        // Every invariant in ConcealInvariantTest — bounds, descending order, non-overlap, and the
+        // rebase — then runs over them at every caret position, for free.
+        //
+        // `taskInFence` is the fence-correctness case: a `- [ ]` inside a block is code, so nothing
+        // may be carved or painted. `taskSpaced` is the case a re-derived `markerStart + 2` gets
+        // wrong — the extra spacing is legal and moves the box three characters right.
+        "taskInFence" to "```\n- [ ] not a task\n```",
+        "taskSpaced" to "-   [ ] extra spacing before the box",
     )
 
     /** A body of roughly [words] words with a realistic spread of markup. */

@@ -81,4 +81,11 @@
     <string name="format_quote">Quote</string>
     <string name="format_task">Checkbox</string>
     <string name="format_link">Link</string>
+
+    <!--
+      Fallback label for a task overlay whose line has no words yet — "- [ ] " with the caret still
+      on it. Normally the task's own text is the contentDescription; an empty one would announce an
+      unnamed control, which is worse than a generic name.
+    -->
+    <string name="task_checkbox">Task</string>
 </resources>

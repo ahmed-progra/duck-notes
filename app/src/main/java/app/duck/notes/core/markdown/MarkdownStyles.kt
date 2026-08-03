@@ -45,6 +45,18 @@ class MarkdownStyles(
         StyleKey.TASK_OPEN -> SpanStyle()
         StyleKey.TASK_DONE ->
             SpanStyle(color = colors.proseMuted, textDecoration = TextDecoration.LineThrough)
+        // The box is painted on top of the task's own span, so these two overrule it. `onSurface` is
+        // the colour body prose already has — stated rather than left to inherit, because the box is
+        // a control and must not drift with whatever TASK_OPEN grows into.
+        StyleKey.TASK_BOX_OPEN -> SpanStyle(color = colors.onSurface)
+        // `TextDecoration.None` is load-bearing, not tidiness. SpanStyle merge keeps the underlying
+        // value wherever the overriding one is null, so leaving it unset lets TASK_DONE's LineThrough
+        // through and paints a struck-through checkbox — the exact bug this key exists to prevent.
+        //
+        // accentText, not accent: 4.25:1 on white is a fill value, and this is a glyph in a text run.
+        // The contract's "checkbox fill" clause governs DuckCheckbox's drawn box, not a character.
+        StyleKey.TASK_BOX_DONE ->
+            SpanStyle(color = colors.accentText, textDecoration = TextDecoration.None)
         StyleKey.DIVIDER -> SpanStyle(color = colors.divider)
         StyleKey.CODE_BLOCK, StyleKey.CODE_SPAN ->
             SpanStyle(

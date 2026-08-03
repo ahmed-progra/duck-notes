@@ -18,12 +18,28 @@ class ConcealInvariantTest {
     private fun plan(body: String, caret: Int): SpanPlan =
         SpanPlanner.plan(MarkdownTextCache.rescan(ScanResult.Empty, body).tokens, caret, caret)
 
+    /**
+     * Every caret **inside** the body, plus one parked far outside it.
+     *
+     * The parked position is not redundant, and leaving it out cost this suite real coverage.
+     * `SpanPlanner` reveals a token whenever the selection touches it, and a block token spans its
+     * **whole line** — so for a single-line sample, every caret in `0..body.length` reveals the block
+     * marker and it never conceals. `> - [ ] x` concealed exactly one range at every swept caret,
+     * which meant the [zipWithNext] ordering and overlap checks below — the ones that need two
+     * ranges to run at all — had never once executed against a pair of *block* markers. Parked, the
+     * same sample yields two.
+     *
+     * Found in 8c-b by a plant that overlapped two block markers and stayed green. `GoldenSpanTest`
+     * had the parked caret from Phase 4 and this suite did not; see SETUP.md trap 6.
+     */
+    private fun carets(body: String): List<Int> = (0..body.length) + CARET_AWAY
+
     @Test
     fun concealRangesAreWellFormedAtEveryCaretPosition() {
         var examined = 0
 
         MarkdownCorpus.samples.forEach { (name, body) ->
-            for (caret in 0..body.length) {
+            for (caret in carets(body)) {
                 val conceal = plan(body, caret).conceal
                 val where = "sample=$name caret=$caret"
 
@@ -61,7 +77,7 @@ class ConcealInvariantTest {
     @Test
     fun descendingApplicationRemovesExactlyTheConcealedRanges() {
         MarkdownCorpus.samples.forEach { (name, body) ->
-            for (caret in 0..body.length) {
+            for (caret in carets(body)) {
                 val conceal = plan(body, caret).conceal
                 val applied = StringBuilder(body).apply {
                     conceal.forEach { delete(it.first, it.last + 1) }
@@ -103,7 +119,7 @@ class ConcealInvariantTest {
     @Test
     fun unclosedMarkersAreNeverConcealed() {
         val body = "a lone ** marker and a lone ` tick"
-        for (caret in 0..body.length) {
+        for (caret in carets(body)) {
             assertEquals(
                 "an unpaired delimiter is inert, so nothing may be hidden (caret=$caret)",
                 emptyList<IntRange>(),
@@ -123,7 +139,7 @@ class ConcealInvariantTest {
         var examined = 0
 
         MarkdownCorpus.samples.forEach { (name, body) ->
-            for (caret in 0..body.length) {
+            for (caret in carets(body)) {
                 val plan = plan(body, caret)
                 val rendered = StringBuilder(body).apply {
                     plan.conceal.forEach { delete(it.first, it.last + 1) }
@@ -178,5 +194,10 @@ class ConcealInvariantTest {
         }
 
         assertTrue("no styled range was examined at all — nothing here was tested", examined > 0)
+    }
+
+    private companion object {
+        /** Far past any sample, so every node counts as "caret elsewhere". Matches `GoldenSpanTest`. */
+        const val CARET_AWAY = Int.MAX_VALUE / 2
     }
 }

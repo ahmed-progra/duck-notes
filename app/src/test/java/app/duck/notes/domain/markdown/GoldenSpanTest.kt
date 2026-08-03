@@ -102,14 +102,56 @@ class GoldenSpanTest {
     @Test
     fun orderedMarkerHides() = assertConceals("a numbered item", "1. a numbered item")
 
+    /**
+     * **Corrected in 8c-b, not loosened.** This read `assertConceals("unfinished", …)` from Phase 4,
+     * when tasks were display-only and pinned the box concealing to nothing *as intended behaviour*.
+     * 8c-b makes the box tappable, so the rendering genuinely changed: `SpanPlanner` now carves the
+     * box out of the marker and only the bullet hides. The expectation moved because the behaviour
+     * moved — the assertion is no weaker than it was, and still names the exact rendered string.
+     *
+     * Same note applies to [doneTaskCheckboxRenders], [stackedMarkersHideAroundTheBox] and
+     * [aRealisticNoteRendersAsExpected].
+     */
     @Test
-    fun taskCheckboxHides() = assertConceals("unfinished", "- [ ] unfinished")
+    fun taskCheckboxRenders() = assertConceals("[ ] unfinished", "- [ ] unfinished")
 
     @Test
-    fun doneTaskCheckboxHides() = assertConceals("finished", "- [x] finished")
+    fun doneTaskCheckboxRenders() = assertConceals("[x] finished", "- [x] finished")
 
+    /** The quote's `> ` still hides entirely; only the task's marker is the one that splits. */
     @Test
-    fun stackedMarkersAllHide() = assertConceals("a task inside a quote", "> - [ ] a task inside a quote")
+    fun stackedMarkersHideAroundTheBox() =
+        assertConceals("[ ] a task inside a quote", "> - [ ] a task inside a quote")
+
+    /** The space after `]` is kept, or every task line would read `[ ]text`. */
+    @Test
+    fun theSpaceAfterTheBoxSurvivesTheCarveOut() =
+        assertConceals("[ ] milk", "-   [ ] milk")
+
+    /** The box is where the scanner put it, not at `markerStart + 2`. */
+    @Test
+    fun theBoxIsPaintedAsItsOwnRange() {
+        assertEquals(
+            listOf(StyleKey.TASK_OPEN to "-   [ ] milk", StyleKey.TASK_BOX_OPEN to "[ ]"),
+            stylesOf("-   [ ] milk"),
+        )
+        assertEquals(
+            listOf(StyleKey.TASK_DONE to "- [x] done", StyleKey.TASK_BOX_DONE to "[x]"),
+            stylesOf("- [x] done"),
+        )
+    }
+
+    /**
+     * A task line must not change shape as the caret arrives on it. The markers reveal, but the box
+     * is painted at every caret position — the overlay is positioned from its rendered offsets, so a
+     * box that appeared only when unfocused would move the tap target under the user.
+     */
+    @Test
+    fun theBoxIsStillPaintedWithTheCaretOnTheLine() {
+        val body = "- [ ] milk"
+        val boxes = SpanPlanner.plan(scan(body), 7, 7).styles.filter { it.style == StyleKey.TASK_BOX_OPEN }
+        assertEquals(listOf("[ ]"), boxes.map { body.substring(it.start, it.end) })
+    }
 
     @Test
     fun dividerKeepsItsRule() = assertConceals("---", "---")
@@ -151,9 +193,10 @@ class GoldenSpanTest {
         )
     }
 
+    /** Corrected in 8c-b with the other three; see [taskCheckboxRenders] for why. */
     @Test
     fun aRealisticNoteRendersAsExpected() = assertConceals(
-        "Notes on ducks\n\nSee Pond and #birds, or code.\n\nfeed them\ncount them",
+        "Notes on ducks\n\nSee Pond and #birds, or code.\n\n[x] feed them\n[ ] count them",
         "# Notes on **ducks**\n\nSee [[Pond]] and #birds, or `code`.\n\n- [x] feed them\n- [ ] count them",
     )
 

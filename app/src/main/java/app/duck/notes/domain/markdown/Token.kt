@@ -31,6 +31,8 @@ enum class TokenKind {
  * no markers (a fence body, a bare `#tag`) is painted but never hides anything.
  *
  * [level] carries the heading depth 1..6, and is 0 for everything else.
+ *
+ * [box] carries the `[ ]` / `[x]` sub-range of a task marker, and is null for everything else.
  */
 data class Token(
     val kind: TokenKind,
@@ -38,4 +40,5 @@ data class Token(
     val end: Int,
     val markers: List<IntRange> = emptyList(),
     val level: Int = 0,
+    val box: IntRange? = null,
 )

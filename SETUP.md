@@ -258,8 +258,8 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 ## Build environment traps on this machine
 
-Four things have cost time here — the first three in Phase 6, the fourth in the 8b audit-fix pass.
-None is a project defect; all are easy to hit again.
+Seven things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
+audit-fix pass, the last two in the 8c-b spike. None is a project defect; all are easy to hit again.
 
 **1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
 absolute paths — these two lines are the ones to copy:
@@ -318,16 +318,6 @@ grep -c $'\0' path                   # or: python -c "print(open(p,'rb').read().
 grep -an pattern path                # -a forces text mode, if you only need to *see* the line
 ```
 
-**5. Plant-then-revert can leave lint's Kotlin index stale, and it fails loudly for the wrong reason.**
-After a few plant → run → revert cycles in one daemon session, `lintAnalyzeDebugUnitTest` and
-`lintAnalyzeDebugAndroidTest` died with a **`FileNotFoundException`** deep in
-`KotlinLocalVirtualFile.contentsToByteArray` — hundreds of lines of `LintDriver` stack and not one
-lint finding. It is an index holding a path whose content moved underneath it, not a problem with the
-code.
-
-**Re-running `lint` on its own passes.** Do that before investigating; a stack trace this large reads
-like a real defect and is not one. If it persists across a fresh invocation, then it is worth reading.
-
 Repair with a byte-level replace rather than a text edit — a tool that mangled the byte once can do it
 again, and `git checkout` of a tracked file is banned by the global contract:
 
@@ -338,3 +328,60 @@ assert d.count(b'\x00')==1
 open(p,'wb').write(d.replace(b'\x00',b''))"
 file path/to/File.kt                 # confirm it reads as UTF-8 text again
 ```
+
+**5. Plant-then-revert can leave lint's Kotlin index stale, and it fails loudly for the wrong reason.**
+After a few plant → run → revert cycles in one daemon session, `lintAnalyzeDebugUnitTest` and
+`lintAnalyzeDebugAndroidTest` died with a **`FileNotFoundException`** deep in
+`KotlinLocalVirtualFile.contentsToByteArray` — hundreds of lines of `LintDriver` stack and not one
+lint finding. It is an index holding a path whose content moved underneath it, not a problem with the
+code.
+
+**Re-running `lint` on its own passes.** Do that before investigating; a stack trace this large reads
+like a real defect and is not one. If it persists across a fresh invocation, then it is worth reading.
+
+**6. A conceal test on a single-line body measures the *revealed* rendering, and looks like a Compose
+finding.** This is a project-wide trap, not a note about one test. `SpanPlanner` reveals a token's
+markers whenever the selection **touches** the token, and a task or heading token spans its **whole
+line** — so if the body is one line, the caret is inside the token no matter where it sits, and the
+conceal never runs.
+
+**Symptom: the concealed field and a raw one lay out at identical width.** In the 8c-b spike that read
+as *"the `OutputTransformation` never reaches layout"* — a Compose finding, written up and nearly
+committed. It was the fixture. Two iterations.
+
+**Fix: give the body a tail and park the caret off the token.** `GoldenSpanTest` has done this since
+Phase 4 via a private `CARET_AWAY = Int.MAX_VALUE / 2`, which is why the convention was invisible to
+everything written after it.
+
+```kotlin
+const val TASK_NOTE = "- [ ] milk\n\nplain tail line"   // the tail is load-bearing
+val CARET_AWAY = TASK_NOTE.length                        // park here between measurements
+```
+
+Re-park **between** taps in a sweep, not just once: the first tap reveals the markers, and every
+later tap is then measuring a different rendering than the first.
+
+**The second form is worse, because it is silent.** `ConcealInvariantTest` swept `0..body.length` and
+looked exhaustive. For a single-line block sample it was not: `> - [ ] x` concealed **one** range at
+every swept caret, and the ordering and overlap checks run under `zipWithNext`, which does nothing
+with one element. Two *block* markers had therefore never been checked against each other — found in
+8c-b by a plant that overlapped them and stayed green. A sweep bounded by the body length cannot
+reach the parked state; add `CARET_AWAY` to the sweep, not just to the spot checks.
+
+Corollary for the assertion itself — a single number cannot tell "the conceal did not run" from "the
+conceal ran and this offset maps back to the deleted range's start". Both give `selection == 0` at the
+left edge. Lay two fields out side by side and assert the results **differ**, or the test passes for
+the wrong reason. (`TaskTapSpikeTest.theSameTapLandsDifferentlyWithAndWithoutTheConceal`.)
+
+**7. A `Modifier.toggleable` placed as a *sibling* of a scroll container appears to swallow drags.**
+`toggleable` builds on `clickable`, which cancels its gesture on drag rather than consuming it — and
+the cancelled drag then travels to a scrollable **ancestor**. A sibling has no such ancestor, so the
+drag reaches nothing and the content does not scroll. That reads as *"toggleable eats scrolls, use a
+raw pointer interceptor instead"*, which is the wrong conclusion and a much larger change.
+
+**Nest the toggleable inside the scroll container.** It then consumes taps and passes drags through
+correctly. Production wants it there regardless: an overlay pinned to text has to scroll with it.
+
+Anything testing "consumes the tap but not the drag" must therefore assert **both halves** — that the
+drag did not toggle *and* that `scrollState.value` moved. Asserting only the first is green on a
+miswired fixture.

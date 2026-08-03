@@ -1,5 +1,6 @@
 package app.duck.notes.presentation.markdown
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -10,9 +11,13 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import app.duck.notes.core.markdown.MarkdownOutputTransformation
@@ -20,6 +25,7 @@ import app.duck.notes.core.markdown.MarkdownStyles
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.domain.markdown.MarkdownFormat
 import app.duck.notes.domain.markdown.MarkdownTextCache
+import app.duck.notes.domain.markdown.SpanPlanner
 
 /**
  * The editor — the markdown engine over a buffer someone else owns.
@@ -47,6 +53,15 @@ import app.duck.notes.domain.markdown.MarkdownTextCache
  * [FormatToolbar] is the `bottomBar`, and `imePadding()` is what floats it over the keyboard rather
  * than under it. Its buttons write through `state.edit`, the same path the keyboard uses, so autosave
  * needs no new entry point — see that file for the argument.
+ *
+ * ## 8c-b hung a tap target on every checkbox
+ *
+ * `SpanPlanner` now leaves `[ ] ` in the rendered text rather than concealing the whole `- [ ] `, and
+ * [TaskBoxOverlay] puts a transparent `toggleable` on each one. Before that carve-out there was
+ * literally nothing to hit: `TaskTapSpikeTest` measured every tap across a task line landing in
+ * `{0} ∪ [6..]` and never on the box, because the six marker offsets collapsed onto one rendered
+ * position. The overlay writes through `state.edit` too, so it is a third caller of one write path
+ * rather than a third write path.
  */
 @Composable
 fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
@@ -77,6 +92,19 @@ fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
     val scan = remember(text) { cache.scan(text.toString()) }
     val writable = MarkdownFormat.isWritable(scan, selection.start, selection.end)
 
+    // The task overlays, and the one thing they need that the toolbar does not: the caret.
+    //
+    // Keyed on the selection as well as the text, because the conceal moves with the caret and the
+    // rendered offsets move with it — a box on the line the caret is on sits two characters further
+    // right, since `- ` is revealed rather than deleted. A stale plan puts the tap target on `] `.
+    //
+    // ponytail: this is a SECOND SpanPlanner.plan per frame, beside the one the transformation runs.
+    // O(tokens) on a surface whose 10k-word scroll claim is still unevidenced. Upgrade path is having
+    // MarkdownOutputTransformation publish the plan it already computed rather than recomputing here.
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    val plan = remember(text, selection) { SpanPlanner.plan(scan.tokens, selection.start, selection.end) }
+    val boxes = remember(plan) { SpanPlanner.taskBoxes(text.toString(), scan.tokens, plan) }
+
     Scaffold(
         // imePadding, so the bar rides above the keyboard instead of behind it.
         modifier = modifier.fillMaxSize().imePadding(),
@@ -89,16 +117,35 @@ fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
                 .padding(horizontal = 20.dp, vertical = 12.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            BasicTextField(
-                state = state,
-                modifier = Modifier.fillMaxSize(),
-                outputTransformation = transformation,
-                // noteBody carries the serif reading font and the size the engine's `em` heading
-                // multiples resolve against.
-                textStyle = type.noteBody.copy(color = colors.onSurface),
-                // accent, not accentText: a caret is a fill, not a glyph.
-                cursorBrush = SolidColor(colors.accent),
-            )
+            // The overlays are children of this Box so they share the text field's coordinate space,
+            // and the Box is INSIDE the scrolling Column so a drag starting on a checkbox still
+            // reaches the scroll. Both are load-bearing; see TaskBoxOverlay's KDoc and SETUP.md trap 7.
+            Box(modifier = Modifier.fillMaxSize()) {
+                BasicTextField(
+                    state = state,
+                    modifier = Modifier.fillMaxSize(),
+                    outputTransformation = transformation,
+                    // noteBody carries the serif reading font and the size the engine's `em` heading
+                    // multiples resolve against.
+                    textStyle = type.noteBody.copy(color = colors.onSurface),
+                    // accent, not accentText: a caret is a fill, not a glyph.
+                    cursorBrush = SolidColor(colors.accent),
+                    onTextLayout = { getResult -> layout = getResult() },
+                )
+
+                val measured = layout
+                if (measured != null) {
+                    boxes.forEach { box ->
+                        // The layout is one frame behind on the frame the text changes, so a box
+                        // computed from the new plan can point past the end of the old layout.
+                        // Skipping it costs one frame of a missing overlay; not skipping it throws
+                        // out of getBoundingBox.
+                        if (box.rendered.last < measured.layoutInput.text.length) {
+                            TaskBoxOverlay(box, measured) { state.toggleTask(box) }
+                        }
+                    }
+                }
+            }
         }
     }
 }
