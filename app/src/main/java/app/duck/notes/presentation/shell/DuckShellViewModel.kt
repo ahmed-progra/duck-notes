@@ -386,10 +386,17 @@ class DuckShellViewModel @Inject constructor(
      *   echoing back the very write that took on the debt — clearing it there means the flush that
      *   should mint the tag finds nothing owed and the tag never appears at all. A different note
      *   retires the debt, because the text it referred to is gone.
+     *
+     * **A Phase 8a defect, found by 8c-b, fixed here.** `syncBuffer`'s "same note, buffer clean"
+     * branch reaches this with [body] equal to what [buffer] already holds — Room echoing back the
+     * write that just landed — on every successful autosave. Adopting unconditionally therefore
+     * re-clamped the caret to the end of the note after every save, not just on a real external
+     * change. The guard below is the whole fix: nothing to adopt, so nothing moves.
      */
     private fun adopt(body: String, keepTagDebt: Boolean = false) {
         lastWritten = body
         if (!keepTagDebt) oweFullWrite = false
+        if (body == buffer.text.toString()) return // nothing to adopt; do not move the caret
         buffer.setTextAndPlaceCursorAtEnd(body)
         // Undo must not walk backwards across a change the user did not make: the result would be
         // text that is neither the pre- nor the post-change body.
