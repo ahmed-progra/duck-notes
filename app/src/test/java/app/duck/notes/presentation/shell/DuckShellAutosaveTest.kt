@@ -1,7 +1,6 @@
 package app.duck.notes.presentation.shell
 
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.SavedStateHandle
@@ -35,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -232,30 +232,61 @@ class DuckShellAutosaveTest {
     }
 
     /**
-     * Positive control for the ceiling, and the evidence behind the amended success bar.
+     * The ceiling fires while typing never pauses, **and** a plain debounce over the identical input
+     * does not. Both halves, one assertion.
      *
-     * This drives a bare `debounce(400)` — the design 8a rejected — over the same input as the test
-     * above, and asserts it saves **nothing**. If someone ever "simplifies" `cappedDebounce` back to
-     * a plain debounce, that test keeps passing on its final-state assertion while the unsaved window
-     * silently becomes unbounded. This is the assertion that says why the ceiling is not optional.
+     * ## What this replaces, and why the old one could not fail
+     *
+     * This was `debounceAloneNeverFiresDuringContinuousTyping`, cited as "the positive control for
+     * the ceiling" and as the evidence behind the amended success bar. It built its **own**
+     * `debounce(400)` inside the test, collected into its own list, and never called
+     * `cappedDebounce` at all — so it asserted a property of `kotlinx.coroutines` and nothing about
+     * Duck. **No edit to `src/main` could turn it red**, including the exact regression its KDoc
+     * described: replacing `cappedDebounce` with a plain debounce left it green. An audit named it
+     * as the one finding for which no plant could be written, and CLAUDE.md's Guards rule —
+     * *drive the real thing* — was written partly from it.
+     *
+     * `cappedDebounce` is now top-level and `internal` so this can call it. The contrast that made
+     * the original worth having survives, and is now falsifiable: the real operator must fire during
+     * continuous typing, the plain one must not.
+     *
+     * **One assertion over a pair, not two calls.** JUnit stops at the first failure, so a sequential
+     * version proves only whichever half runs first — the reason
+     * `TaskToggleUiTest.aDragFromTheBoxScrollsTheNoteAndDoesNotToggle` is written the same way.
      */
     @OptIn(FlowPreview::class)
     @Test
-    fun debounceAloneNeverFiresDuringContinuousTyping() = runTest {
-        val vm = shell()
-        val saves = mutableListOf<String>()
+    fun theCeilingFiresWhileAPlainDebounceNeverDoes() = runTest {
+        val keystrokes = MutableStateFlow("")
+        val capped = mutableListOf<String>()
+        val plain = mutableListOf<String>()
         val scope = CoroutineScope(dispatcher)
-        scope.launch { snapshotFlow { vm.buffer.text }.debounce(400).collect { saves += it.toString() } }
+
+        // The real operator, and the design it replaced, over one input.
+        scope.launch { keystrokes.cappedDebounce().collect { capped += it } }
+        scope.launch { keystrokes.debounce(DuckShellViewModel.IDLE_MS).collect { plain += it } }
         advanceTimeBy(1)
 
+        // Five seconds of typing with no gap longer than the idle window.
         repeat(25) { i ->
-            vm.type("x".repeat(i + 1))
+            keystrokes.value = "x".repeat(i + 1)
             advanceTimeBy(200)
         }
         scope.cancel()
 
-        assertEquals("a plain debounce must never fire while typing continuously", 0, saves.size)
+        assertEquals(
+            "the ceiling must fire during continuous typing (capped=${capped.size}) and a plain " +
+                "debounce must not (plain=${plain.size}) — if capped is 0 the unsaved window is " +
+                "unbounded again, which is what the amended success bar exists to rule out",
+            CappedFired(true) to PlainFired(false),
+            CappedFired(capped.size >= 2) to PlainFired(plain.isNotEmpty()),
+        )
     }
+
+    /** Named wrappers so a failure reads `CappedFired(false)`, not a bare `false`. */
+    private data class CappedFired(val value: Boolean)
+
+    private data class PlainFired(val value: Boolean)
 
     // --- flush ---------------------------------------------------------------
 

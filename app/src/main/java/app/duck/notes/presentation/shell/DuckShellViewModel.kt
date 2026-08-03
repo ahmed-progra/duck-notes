@@ -248,44 +248,6 @@ class DuckShellViewModel @Inject constructor(
     }
 
     /**
-     * Debounce with a ceiling: emits [IDLE_MS] after the last change, **or** [MAX_WAIT_MS] after the
-     * first unsaved one, whichever comes first.
-     *
-     * The ceiling is not a refinement of the debounce, it is what makes the loss window finite. A
-     * debounce fires when typing *stops*; someone typing continuously never stops, so a plain
-     * `debounce(400)` would never fire at all and the unsaved window would be unbounded.
-     * `debounceAloneNeverFiresDuringContinuousTyping` pins that, and it is the reason the phase's
-     * success bar had to be amended rather than simply claimed.
-     *
-     * **Hand-rolled rather than `merge(debounce(400), sample(2000))`, for two reasons.** `sample`
-     * schedules a *perpetual* ticker, so it never lets the scheduler go idle — under
-     * `kotlinx-coroutines-test` that hangs `advanceUntilIdle()` forever, which is most of the shell's
-     * existing suite. And `sample` ticks on a fixed grid from subscription, so a change landing just
-     * before a tick is saved 1ms later while the ceiling it is supposed to enforce silently resets.
-     * This measures the ceiling from the first unsaved change, which is what the bar actually claims.
-     *
-     * Between saves it parks on `receive()` with nothing scheduled, so the scheduler goes idle.
-     */
-    private fun Flow<CharSequence>.cappedDebounce(): Flow<String> = flow {
-        coroutineScope {
-            val changes = produce(capacity = Channel.CONFLATED) {
-                this@cappedDebounce.collect { send(it.toString()) }
-            }
-            while (true) {
-                // Parks here indefinitely while nothing is typed. No timer, so the scheduler idles.
-                var latest = changes.receive()
-                withTimeoutOrNull(MAX_WAIT_MS) {
-                    while (true) {
-                        latest = withTimeoutOrNull(IDLE_MS) { changes.receive() }
-                            ?: return@withTimeoutOrNull
-                    }
-                }
-                emit(latest)
-            }
-        }
-    }
-
-    /**
      * The only write path for a note body in this class. Idempotent: a redundant trigger costs one
      * string comparison, not a write.
      *
@@ -675,5 +637,53 @@ class DuckShellViewModel @Inject constructor(
          * success bar quotes.
          */
         const val MAX_WAIT_MS = 2_000L
+    }
+}
+
+/**
+ * Debounce with a ceiling: emits [DuckShellViewModel.IDLE_MS] after the last change, **or**
+ * [DuckShellViewModel.MAX_WAIT_MS] after the first unsaved one, whichever comes first.
+ *
+ * The ceiling is not a refinement of the debounce, it is what makes the loss window finite. A
+ * debounce fires when typing *stops*; someone typing continuously never stops, so a plain
+ * `debounce(400)` would never fire at all and the unsaved window would be unbounded.
+ *
+ * **Hand-rolled rather than `merge(debounce(400), sample(2000))`, for two reasons.** `sample`
+ * schedules a *perpetual* ticker, so it never lets the scheduler go idle — under
+ * `kotlinx-coroutines-test` that hangs `advanceUntilIdle()` forever, which is most of the shell's
+ * existing suite. And `sample` ticks on a fixed grid from subscription, so a change landing just
+ * before a tick is saved 1ms later while the ceiling it is supposed to enforce silently resets.
+ * This measures the ceiling from the first unsaved change, which is what the bar actually claims.
+ *
+ * Between saves it parks on `receive()` with nothing scheduled, so the scheduler goes idle.
+ *
+ * ## Top-level and `internal` so a test can drive it
+ *
+ * It was `private` inside [DuckShellViewModel], and the guard for it —
+ * `theCeilingFiresWhileAPlainDebounceNeverDoes` — could not reach it, so it built its own
+ * `debounce(400)` and asserted *that* never fired. True of `kotlinx.coroutines` and true of nothing
+ * in this repo: replacing this operator with a plain debounce left that test green, which is the
+ * regression it was cited to catch. CLAUDE.md's Guards rule now forbids the shape.
+ *
+ * Hoisting rather than merely widening the visibility, because it touches no instance state — only
+ * the two companion constants — so it was already a top-level function wearing a costume. Same
+ * argument that made `applyFormat` `internal` for `DuckShellAutosaveTest`.
+ */
+internal fun Flow<CharSequence>.cappedDebounce(): Flow<String> = flow {
+    coroutineScope {
+        val changes = produce(capacity = Channel.CONFLATED) {
+            this@cappedDebounce.collect { send(it.toString()) }
+        }
+        while (true) {
+            // Parks here indefinitely while nothing is typed. No timer, so the scheduler idles.
+            var latest = changes.receive()
+            withTimeoutOrNull(DuckShellViewModel.MAX_WAIT_MS) {
+                while (true) {
+                    latest = withTimeoutOrNull(DuckShellViewModel.IDLE_MS) { changes.receive() }
+                        ?: return@withTimeoutOrNull
+                }
+            }
+            emit(latest)
+        }
     }
 }
