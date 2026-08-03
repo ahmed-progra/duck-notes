@@ -52,8 +52,38 @@ MUST_BE_ABSENT = [
 # Matched case-insensitively against the raw dex, then filtered: `bearingAccuracy` and friends come
 # from the android.location framework stubs and are not ours. Anything surviving the filter is a
 # string or identifier we shipped — that is how "syntax, like Bear" was found in SAMPLE_NOTE.
+#
+# FIND THE HITS, THEN SLICE. Do not go back to a windowed regex like `.{24}[Bb]ear.{24}`, which is
+# what this was and which could not see 8 of the 12 occurrences in the release dex it was passed.
+# Two independent blindnesses, both silent, both reporting PASS:
+#
+# - It never used FORBIDDEN_WORD. The constant declares re.IGNORECASE and the actual search was a
+#   bare inline `re.finditer` without it, so `EXTRA_BEARING_ACCURACY` and `HAS_BEARING_ACCURACY_MASK`
+#   were invisible. A named detector that nothing calls is worse than none: it reads as the check.
+#
+# - `.` does not match a newline without re.DOTALL, and dex strings are ULEB128 length-prefixed, so
+#   every 10-character string carries a literal 0x0A immediately before it. The probe was therefore
+#   blindest for SHORT strings — exactly the shape a rebranding leak takes. `"syntax, like Bear"` is
+#   17 characters and was caught; that was luck of length, not design.
+# - A fixed-width window cannot match within 24 bytes of either end of the blob.
+# - `finditer` is non-overlapping, so two hits inside 48 bytes cost each other a match.
+#   `getBearing`/`getBearingAccuracy` sit 11 bytes apart and did exactly that.
+#
+# Slicing the context by hand has none of those failure modes and is shorter.
+#
+# THE FRAMEWORK FILTER IS ANCHORED TO THE MATCH, NOT TO THE CONTEXT, and that is the whole ballgame.
+# It used to ask "does `bearing` appear anywhere in this 52-byte window?", which is not the question.
+# A dex string table is sorted, so ANY string starting `bear` sorts immediately next to the
+# framework's own `bearingAccuracy` and was filtered as framework. Found by planting `"bear notes"`
+# in src/main: it landed at `\nbear notes\x00\x0fbearingAccuracy` and the probe reported the APK
+# clean. As written, that filter could never report a bear-prefixed string at all — the exact class
+# of name a rebrand leaks. `.match(blob, p)` anchors at the hit, so only a hit that IS `bearing`
+# is exempt.
 FORBIDDEN_WORD = re.compile(rb"[Bb]ear", re.IGNORECASE)
 FRAMEWORK_BEAR = re.compile(rb"[Bb]earing", re.IGNORECASE)
+
+# Bytes of context printed either side of a hit. Display only — never used to decide.
+CONTEXT = 24
 
 
 def load_dex(apk: Path) -> tuple[bytes, list[str]]:
@@ -88,11 +118,13 @@ def main() -> int:
             failures.append(f"{probe} present in release — src/debug leaked into the release build")
 
     print("\nbear references (CLAUDE.md global contract)")
+    hits = [m.start() for m in FORBIDDEN_WORD.finditer(blob)]
     ours = [
-        m.group(0)
-        for m in re.finditer(rb".{24}[Bb]ear.{24}", blob)
-        if not FRAMEWORK_BEAR.search(m.group(0))
+        blob[max(0, p - CONTEXT):p + CONTEXT + 4]
+        for p in hits
+        if not FRAMEWORK_BEAR.match(blob, p)
     ]
+    print(f"  scanned   {len(hits)} occurrence(s) of 'bear', {len(hits) - len(ours)} framework")
     if ours:
         for hit in sorted(set(ours)):
             print(f"  FOUND    {hit.decode('utf-8', 'replace')!r}")

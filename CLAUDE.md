@@ -58,6 +58,45 @@ STEP 4 BUILD — implement smallest correct version
 STEP 5 VERIFY — run build + tests, check success criteria
 STEP 6 REPORT — what changed, what is still open
 
+## Guards
+
+**A guard must not source its threshold, its subject, or its exemption from anything other than
+the thing under test.**
+
+- **Pin the literal.** A test that reads `MAX_WAIT_MS` to build its own bound moves with the
+  constant and can never catch a change to it. Assert the number.
+- **Drive the real thing.** A test that rebuilds its subject locally — its own `AnimatedContent`,
+  its own `debounce`, its own canonicalizer — proves the library works, not that Duck calls it.
+  Make the production symbol `internal` and call it.
+- **Anchor the exemption to the match, never to its neighbourhood.** An exemption scoped wider than
+  the thing it exempts lets an adjacent legitimate value vouch for an illegal one.
+- **Every branch that can suppress a finding owes its own positive control**, not just the branch
+  that produces one. Controls for presence prove the scan runs; they say nothing about whether the
+  filter downstream is eating real hits.
+- Every guard owes a named plant: the edit to `src/main` that turns it red. Run it, watch it fail,
+  revert. A guard with no nameable plant is decoration — say so in its KDoc rather than leaving it
+  to read as cover.
+
+Written down after five checks shipped as five dressings of one defect. `MotionTest` read
+`MAX_DURATION_MS` off the class it policed; the `MAX_WAIT_MS` tests read the constant;
+`PaneTransitionTest` built its own `AnimatedContent`; `debounceAloneNeverFires` built its own
+debounce.
+
+**The fifth is the strongest, and it is the only one nobody reasoned out.** The other four were
+found by reading the tests. `dex_probe.py`'s no-bear check was found by planting `"bear notes"` in
+`src/main`, building a real release APK, and watching the probe pass it. Four cases someone argued
+from a screen read as theory; the one that survived contact with a real dex string table is the
+evidence.
+
+The mechanism generalises well past dex. The framework exemption asked *"does `bearing` appear
+anywhere in this 52-byte window?"* rather than *"is this hit itself `bearing`?"* — the exemption was
+sourced from the window instead of from the match, so a legitimate neighbour vouched for an illegal
+string. A dex string table is **sorted**, which made that adjacency systematic rather than
+accidental: any string beginning `bear` sorts immediately next to the framework's own
+`bearingAccuracy`, so the filter **could never report a bear-prefixed string at all** — the exact
+shape a rebrand leaks. The probe had positive controls for presence and none for the exemption
+path, so nothing was watching the branch that did the suppressing.
+
 ## Git
 
 - Commit only when I say "commit" or at end of an approved phase.
