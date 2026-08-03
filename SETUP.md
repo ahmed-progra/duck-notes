@@ -258,8 +258,9 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 ## Build environment traps on this machine
 
-Seven things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
-audit-fix pass, the last two in the 8c-b spike. None is a project defect; all are easy to hit again.
+Eight things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
+audit-fix pass, the next two in the 8c-b spike, the last in the 8c-b re-verify pass. None is a project
+defect; all are easy to hit again.
 
 **1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
 absolute paths — these two lines are the ones to copy:
@@ -385,3 +386,28 @@ correctly. Production wants it there regardless: an overlay pinned to text has t
 Anything testing "consumes the tap but not the drag" must therefore assert **both halves** — that the
 drag did not toggle *and* that `scrollState.value` moved. Asserting only the first is green on a
 miswired fixture.
+
+**8. A hard-killed emulator corrupts its snapshot; it then "boots" and dies.** An emulator launched as
+a child of an agent/background task is killed by session teardown, not a clean `adb emu kill`. The
+kill lands mid-snapshot-write and `<avd>.avd`'s `default_boot` snapshot comes out internally
+inconsistent. Every boot after that **reports `sys.boot_completed=1` after a single `getprop` poll** —
+far faster than a real boot — **then the device goes `offline` within seconds**, sometimes
+immediately, sometimes mid-suite. A killed instrumentation run with no `INSTRUMENTATION_CODE` /
+`OK (N tests)` line looks like a pass if the log is only tailed rather than grepped for a summary
+line — check for the summary explicitly.
+
+This produced a deterministic false red in `TaskTapSpikeTest.aRenderedOffsetHasABoundingBoxATapCan​BeTestedAgainst`
+in the 8c-b re-verify pass: `Tests run: 56, Failures: 1`, always the same assertion, always
+`got 10` (end-of-text — the tap never focused the field). Cross-class and intra-class contamination
+and a coordinate-space error were both ruled out by controlled re-runs before the snapshot was
+suspected; see the test's own KDoc for the elimination.
+
+Recovery, confirmed stable across 5 consecutive runs after 3 snapshot-boot failures in a row:
+
+```sh
+emulator -avd <name> -no-snapshot-load -no-snapshot-save
+```
+
+Cold boot took 110 polls here, versus 1 for the corrupt snapshot — that gap is itself the tell. Launch
+future emulators **detached from any agent-managed process** (e.g. PowerShell `Start-Process`, not a
+backgrounded shell job) so a session/task teardown can't kill them mid-run in the first place.
