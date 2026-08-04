@@ -215,6 +215,75 @@ class ContrastTest {
         Triple("rename confirm label", "accentText", "chromeMuted"),
     )
 
+    /**
+     * Every [DuckColors] slot, by name, straight off the data class.
+     *
+     * Same de-mangling as [schemeSlots] and for the same reason: `Color` is a `@JvmInline value
+     * class`, so `getAccent()` is compiled as `getAccent-0d7_KjU()` returning a `long`. Written
+     * twice rather than shared because the two read different classes and the receiver types differ;
+     * the transform itself is four lines.
+     *
+     * **The `get` prefix is required, not decoration.** [DuckColors] is a `data class`, so it also
+     * carries `component1()`…`component16()` — nullary, `long`-returning and mangled exactly like the
+     * getters. Without this filter every slot appears twice, once under a positional name that
+     * [slot] has no arm for, and the totality check reports sixteen phantom failures.
+     */
+    private fun reflectedSlots(colors: DuckColors): Map<String, Color> =
+        DuckColors::class.java.methods
+            .filter {
+                it.parameterCount == 0 && it.returnType == java.lang.Long.TYPE &&
+                    '-' in it.name && it.name.startsWith("get")
+            }
+            .associate { m ->
+                val name = m.name.substringBefore('-')
+                    .removePrefix("get")
+                    .replaceFirstChar { it.lowercase() }
+                name to Color((m.invoke(colors) as Long).toULong())
+            }
+
+    /**
+     * **[slot] is a hand-written map that every floor in this file routes through, and this is the
+     * only thing checking it.** Audit finding 6.
+     *
+     * It had no totality check and no control that a name resolved to the field of that name, so
+     * `"selection" -> highlight` was completely silent — every pair still measured *something*, and
+     * a louder swap (`accent` for `accentText`) merely forced a regeneration of two golden strings,
+     * which a reader would do because the test telling them to is the one now measuring the wrong
+     * pair. [detectorCatchesAPlantedFailure] is named as if it covered this; it only checks the WCAG
+     * arithmetic.
+     *
+     * Both halves fall out of one reflection pass:
+     *
+     * - **name accuracy** — `slot(name)` must return the field called `name`. Run over all eight
+     *   palettes, so two slots that happen to share a hex in one of them cannot vouch for a swap.
+     * - **totality** — a new [DuckColors] slot has no `when` arm, so [slot] throws; `runCatching`
+     *   turns that into a reported name rather than an abort on the first one.
+     *
+     * The `>= 16` floor is [reflectionFindsTheSlots]' idiom: a de-mangling that matched nothing would
+     * leave both checks green over an empty map.
+     */
+    @Test
+    fun theSlotMapIsTotalAndResolvesEachNameToItsOwnField() {
+        palettes().forEach { p ->
+            val reflected = reflectedSlots(p.colors)
+            assertTrue(
+                "de-mangling found ${reflected.size} DuckColors slots — a count this low means the " +
+                    "getter name transform is wrong (Color is a value class: getAccent-0d7_KjU, not " +
+                    "getAccent), not that the palette shrank",
+                reflected.size >= 16,
+            )
+            val wrong = reflected.filterNot { (name, value) ->
+                runCatching { p.colors.slot(name) }.getOrNull() == value
+            }.keys
+            assertEquals(
+                "${p.name}: slot(name) must return the field of that name — a missing arm throws " +
+                    "and a mismatched one silently redirects every floor asserted through it",
+                emptySet<String>(),
+                wrong,
+            )
+        }
+    }
+
     private fun DuckColors.slot(name: String): Color = when (name) {
         "accent" -> accent
         "accentPress" -> accentPress

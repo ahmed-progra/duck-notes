@@ -31,8 +31,32 @@ import java.io.File
  * green, which is the failure mode the whole file exists to avoid.
  *
  * The scan is deliberately narrow — `presentation/markdown/` and `presentation/shell/`. The banned
- * call is legitimate elsewhere: `DuckShell` uses `rememberSaveable` for nothing, but a future settings
- * screen saving a scroll position is fine. What must never come back is a *note body* in the Bundle.
+ * call is legitimate elsewhere: a future settings screen saving a scroll position is fine. What must
+ * never come back is a *note body* in the Bundle.
+ *
+ * ## What this file proves, and what it does not — audit finding 5
+ *
+ * It once claimed *"neither the editor nor the shell may hold a note body across process death"*.
+ * That is two channels and this scan sees one of them. Stated precisely, and with the other guards
+ * named so a reader does not have to find them:
+ *
+ * | channel | guard |
+ * |---|---|
+ * | `TextFieldState`'s own saver, either spelling | [neitherTheEditorNorTheShellHoldsASaveableBuffer] — this file |
+ * | any saver at all, in the editor | [theEditorHoldsNoSaveableStateAtAll] — this file |
+ * | `SavedStateHandle` | `ShellStateRestorationTest.noNoteBodyReachesTheSavedStateHandle`, and `AutosaveDurabilityTest` on device |
+ *
+ * **The wide ban stops at the editor, and that boundary is measured rather than chosen.**
+ * `presentation/markdown/` has no `rememberSaveable` of any kind and nothing there has a legitimate
+ * saver — the buffer *is* the note body. `presentation/shell/` cannot carry the same ban:
+ * `TagMenu` saves a half-typed tag name across a rotation twice over, at its rename dialog and its
+ * icon picker, and both are correct. Widening the ban to cover the shell is the easy fix and it is
+ * red on day one, which is why the shell keeps the two-name ban instead.
+ *
+ * **Known limit, not closed:** in `presentation/shell/`, a `rememberSaveable { mutableStateOf(body) }`
+ * would still pass. No textual rule separates it from `TagMenu`'s legitimate calls — the difference
+ * is what is being saved, which a scanner cannot see. The `SavedStateHandle` guard and the shell's
+ * own design (the buffer lives on `DuckShellViewModel`, not in a composable) are what stand there.
  */
 class EditorSaverSourceTest {
 
@@ -112,10 +136,37 @@ class EditorSaverSourceTest {
     }
 
     /**
-     * The assertion proper: neither the editor nor the shell may hold a note body across process death.
+     * A member access split across lines is still one call.
+     *
+     * `TextFieldState.Saver` is two tokens and a dot, so `TextFieldState\n    .Saver` is the same
+     * expression to the compiler and a different string to a substring search — which is what
+     * [BANNED] used to be. An audit named it as a plant that passes. This is that plant reduced to
+     * an assertion, in the same idiom as [aUrlDoesNotHideABannedCallOnTheSameLine], and it is the
+     * whole control for the change from substrings to regexes: no `src/main` edit is needed to make
+     * it fail, because the detector is the thing under test.
+     *
+     * `rememberTextFieldState` needs no equivalent — an identifier cannot be split by whitespace.
+     */
+    @Test
+    fun aBannedNameSplitAcrossLinesIsStillFound() {
+        assertEquals(
+            listOf("TextFieldState.Saver"),
+            offendersIn("val a = rememberSaveable(saver = TextFieldState\n    .Saver) { s }"),
+        )
+        assertEquals(
+            listOf("TextFieldState.Saver"),
+            offendersIn("val a = rememberSaveable(saver = TextFieldState . Saver) { s }"),
+        )
+    }
+
+    /**
+     * The assertion proper: neither the editor nor the shell may spell `TextFieldState`'s saver.
      *
      * `rememberTextFieldState` is banned by name as well as the raw `Saver`, because it *is* the saver
      * — it expands to `rememberSaveable(saver = TextFieldState.Saver)` — and reads as innocuous.
+     *
+     * This is the narrower of the two claims; see the class KDoc for the channel it covers and the
+     * two guards that cover the rest.
      */
     @Test
     fun neitherTheEditorNorTheShellHoldsASaveableBuffer() {
@@ -130,8 +181,37 @@ class EditorSaverSourceTest {
         )
     }
 
+    /**
+     * **The editor holds no saveable state at all** — a stronger claim than [BANNED], and only
+     * defensible here.
+     *
+     * `rememberSaveable { mutableStateOf(body) }` and `rememberSaveable(saver = mapSaver(…))` put a
+     * note body in the Bundle without naming `TextFieldState` once, so the two-name ban waves both
+     * through. Both were listed by an audit as plants that pass.
+     *
+     * Banning the bare identifier closes them, and it costs nothing *in this directory*: three files,
+     * zero saveable state, and the one thing the editor holds is the note body. The same ban over
+     * `presentation/shell/` would be red on `TagMenu` immediately — see the class KDoc.
+     */
+    @Test
+    fun theEditorHoldsNoSaveableStateAtAll() {
+        val offenders = EDITOR_DIR.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .filter { "rememberSaveable" in stripComments(it.readText()) }
+            .map { it.name }
+            .toList()
+        assertEquals(
+            "the editor may not save state across process death by any route — the note body is " +
+                "what it holds, and Room is what remembers it",
+            emptyList<String>(),
+            offenders,
+        )
+    }
+
     private fun offendersIn(source: String): List<String> =
-        stripComments(source).let { code -> BANNED.filter { it in code } }
+        stripComments(source).let { code ->
+            BANNED.filter { (_, pattern) -> pattern.containsMatchIn(code) }.map { it.first }
+        }
 
     /**
      * Comments out, **strings matched first** — the same alternation `TokenSourceTest` uses, and for
@@ -157,13 +237,24 @@ class EditorSaverSourceTest {
         SCANNED.flatMap { dir -> dir.walkTopDown().filter { it.isFile && it.extension == "kt" } }
 
     private companion object {
-        val SCANNED = listOf(
-            File("src/main/java/app/duck/notes/presentation/markdown"),
-            File("src/main/java/app/duck/notes/presentation/shell"),
-        )
+        /** The editor alone, for [theEditorHoldsNoSaveableStateAtAll]'s stronger ban. */
+        val EDITOR_DIR = File("src/main/java/app/duck/notes/presentation/markdown")
 
-        /** Both spellings of the same mechanism. Order is the order [detectorFlagsPlantedOffenders] expects. */
-        val BANNED = listOf("TextFieldState.Saver", "rememberTextFieldState")
+        val SCANNED = listOf(EDITOR_DIR, File("src/main/java/app/duck/notes/presentation/shell"))
+
+        /**
+         * Both spellings of the same mechanism, as label-to-pattern.
+         *
+         * **Patterns rather than substrings**, because `TextFieldState.Saver` is a member access and
+         * Kotlin lets whitespace — including a newline — sit either side of the dot. A substring
+         * search missed the split form, which an audit named as a plant that passes; see
+         * [aBannedNameSplitAcrossLinesIsStillFound]. The labels are what every assertion here
+         * compares against, so widening the match did not touch any of them.
+         */
+        val BANNED = listOf(
+            "TextFieldState.Saver" to Regex("\\bTextFieldState\\s*\\.\\s*Saver\\b"),
+            "rememberTextFieldState" to Regex("\\brememberTextFieldState\\b"),
+        )
 
         /**
          * String literals and comments in **one** alternation, so a string is matched before a `//`

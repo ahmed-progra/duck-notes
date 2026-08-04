@@ -1,5 +1,7 @@
 package app.duck.notes.presentation.shell
 
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.SavedStateHandle
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.fake.FakeNoteRepository
@@ -177,6 +179,60 @@ class ShellStateRestorationTest {
         assertEquals(null, after.state.value.selectedNoteId)
         assertEquals("", after.state.value.selectedNoteBody)
         restored.cancel()
+    }
+
+    /**
+     * **The other Bundle channel**, and the one a source scan cannot see.
+     *
+     * `EditorSaverSourceTest` bans `TextFieldState`'s saver textually, which covers the composition's
+     * `SaveableStateRegistry`. It says nothing about this one: a plain `handle["body"] = text` inside
+     * the ViewModel puts the whole note in the saved-instance `Bundle` without naming a saver, and an
+     * audit listed exactly that as a plant the scan waves through.
+     *
+     * So this asserts the property at runtime rather than in source, which is the only way it can be
+     * seen — and it is what [MAX_HANDLE_VALUE] was named for. The constant sat unused here, residue
+     * of a removed guard, while the only live `512` was a bare literal in `AutosaveDurabilityTest`
+     * with neither the name nor the reason. `AutosaveDurabilityTest` still runs the device half over
+     * real Room; this runs the same claim on every JVM build.
+     *
+     * **Both halves of the buffer's life are driven**, because they reach the handle by different
+     * code: the load, and then a keystroke plus a `flush()`. The precondition assert is what stops it
+     * being vacuous — a handle with nothing large in it proves nothing unless something large
+     * actually went through the ViewModel first.
+     */
+    @Test
+    fun noNoteBodyReachesTheSavedStateHandle() = runTest {
+        val body = "lorem ipsum dolor sit amet ".repeat(2_000)
+        notes.seed(Note(id = "big", title = "big", body = body, createdAt = 0L, modifiedAt = 1L))
+
+        val handle = SavedStateHandle()
+        val vm = shell(handle)
+        val scope = CoroutineScope(dispatcher)
+        scope.launch { vm.state.collect {} }
+        advanceUntilIdle()
+        vm.onSelectNote("big")
+        advanceUntilIdle()
+
+        vm.buffer.setTextAndPlaceCursorAtEnd("$body edited")
+        Snapshot.sendApplyNotifications()
+        vm.flush()
+        advanceUntilIdle()
+
+        assertEquals(
+            "precondition: a body this size must actually have flowed through the ViewModel, or " +
+                "the handle being small below says nothing",
+            "$body edited",
+            vm.buffer.text.toString(),
+        )
+        val oversized = handle.keys()
+            .filter { handle.get<Any?>(it).toString().length > MAX_HANDLE_VALUE }
+        assertEquals(
+            "the note body reached the saved-instance Bundle via SavedStateHandle: $oversized. " +
+                "The handle carries the note id; restore is 'read the id, re-query Room'.",
+            emptyList<String>(),
+            oversized,
+        )
+        scope.cancel()
     }
 
     private companion object {

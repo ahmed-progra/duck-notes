@@ -46,9 +46,12 @@ import org.junit.runner.RunWith
 /**
  * Phase 8a's durability claims, against a real SQLite and the real transaction.
  *
- * The JVM suite (`DuckShellAutosaveTest`, 21 tests) covers the decisions — the debounce, its ceiling,
- * the gate, flush ordering, adoption. What it cannot cover is the part that only exists because there
- * is a database, and that is exactly where this phase's worst failure lives:
+ * The JVM suite `DuckShellAutosaveTest` covers the decisions — the debounce, its ceiling, the gate,
+ * flush ordering, adoption. (It said "21 tests" here for three phases while the real figure walked to
+ * 37. A count in prose has nothing enforcing it, so it only ever rots; the counts worth having are
+ * asserted in tests, where they fail. Same lesson `MarkdownCorpus`' own KDoc records.) What it cannot
+ * cover is the part that only exists because there is a database, and that is exactly where this
+ * phase's worst failure lives:
  *
  * **`ensureTag` resurrecting a deleted tag row.** A stale editor buffer written after a rename does
  * not merely lose the rename — `NoteDao.saveNoteWithTags` re-derives `note_tags` from the body it is
@@ -271,14 +274,30 @@ class AutosaveDurabilityTest {
      *
      * What this does still prove is the half it can see: a body of this size flows through the
      * ViewModel and the handle stays small, so the `SavedStateHandle` channel is not the leak either.
+     * `ShellStateRestorationTest.noNoteBodyReachesTheSavedStateHandle` now makes the same claim over
+     * the fakes, so it runs on every build rather than only when an emulator is up; this is the half
+     * against real Room.
      */
     @Test
     fun aTenThousandWordNoteLoadsAndLeavesOnlyAnIdInTheHandle() {
         val body = "lorem ipsum dolor sit amet ".repeat(2_000)
         withOpenNote("big", body) { vm ->
             assertEquals(body, vm.buffer.text.toString())
-            val oversized = handle.keys().filter { handle.get<Any?>(it).toString().length > 512 }
+            val oversized = handle.keys()
+                .filter { handle.get<Any?>(it).toString().length > MAX_HANDLE_VALUE }
             assertEquals("the note body reached the Bundle: $oversized", emptyList<String>(), oversized)
         }
+    }
+
+    private companion object {
+        /**
+         * Comfortably above any id, filter key or tag path; far below any real note body.
+         *
+         * Declared again rather than shared: `androidTest` cannot import from `test`, where
+         * `ShellStateRestorationTest` holds the same constant for the JVM half of this claim. It was
+         * a bare `512` here, with the name and the reason living on an unused constant over there —
+         * so neither copy carried both. Now each is used where it is declared.
+         */
+        const val MAX_HANDLE_VALUE = 512
     }
 }
