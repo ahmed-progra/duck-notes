@@ -131,8 +131,28 @@ class ConcealInvariantTest {
     // --- Rendered coordinates -----------------------------------------------
 
     /**
-     * Every style range, once rebased, must land inside the concealed text and cover exactly the
-     * characters it covered before — this is what makes it safe to style after deleting.
+     * Every style range, once rebased, lands **inside** the concealed text: non-negative, within
+     * length, not reversed. Corpus-wide, at every caret.
+     *
+     * ## The name overpromises, and the missing half is real and lives below
+     *
+     * It says "the same characters"; the body asserts **bounds**. The two are not the same claim —
+     * a rebase that shifted every style one character left would satisfy every assertion here. This
+     * is [styledRangesStayInBounds] in rendered coordinates, and that is a worthwhile thing to run
+     * across the corpus, but it is not what the name describes.
+     *
+     * The character-level property is guarded by [rebasedStyleCoversTheSameTextAsBefore], two tests
+     * below, which substrings the rendered text and compares it to `"bold"`. **Narrow — one sample,
+     * one style, one caret — where this one is broad and shallow.** Neither subsumes the other, and
+     * deleting either on the grounds that "the other one covers rebasing" loses a real half.
+     *
+     * The name is kept rather than corrected because other checks and commit messages cite it; the
+     * *misnamed* class in `DUCK_NOTES_BUILD_PROMPT.md` says to fix these by KDoc, not by rename.
+     *
+     * **Known weakness, not fixed here:** `examined` is a single counter across the whole corpus, so
+     * it proves *something* was examined, not that anything was examined for a given sample or a
+     * given style kind. Losing block conceal entirely would leave inline styles keeping the count
+     * non-zero. Audit finding 9; the fix is a per-kind control and belongs with the follow-up pass.
      */
     @Test
     fun renderedStylesLandOnTheSameCharacters() {
@@ -168,6 +188,22 @@ class ConcealInvariantTest {
         assertEquals(plan.styles, SpanPlanner.renderedStyles(plan))
     }
 
+    /**
+     * **The character-level half of rebasing, and the only check in the repo that asserts it.**
+     *
+     * [renderedStylesLandOnTheSameCharacters] above is named for this property and does not test it
+     * — it asserts bounds. This one deletes the concealed ranges for real, substrings the result at
+     * the rebased offsets, and requires the bytes to read `"bold"`. A rebase that drifted by one
+     * character passes every assertion up there and fails here.
+     *
+     * One sample and one style is thin, and it is deliberately not widened into the corpus sweep
+     * above: doing that would need an expected-text table per sample per caret, which is
+     * `GoldenSpanTest`'s job in source coordinates. What this holds is the *rendered* coordinate
+     * space, which nothing else on the JVM does — `ConcealMappingTest` covers it on device, through
+     * Compose's own mapping rather than `SpanPlanner.renderedStyles` directly.
+     *
+     * Small and load-bearing. See the *misnamed* class in `DUCK_NOTES_BUILD_PROMPT.md`.
+     */
     @Test
     fun rebasedStyleCoversTheSameTextAsBefore() {
         val body = "some **bold** text"

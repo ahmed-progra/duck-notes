@@ -1270,6 +1270,35 @@ for.** A gap there is the finding.
 tracked tree, run against the real Gradle task, then reverted. A scratch copy cannot test that a
 whole-tree scan resolves the actual source root, which is precisely what such a scan gets wrong.
 
+### The inverse class: **misnamed** — proves the right thing under the wrong label
+
+**Misdirected** proves the wrong thing. **Misnamed** proves the right thing and hides that it does:
+the check guards something real, but its name and KDoc describe a different property, so its
+coverage is invisible to anyone deciding whether it can go.
+
+It is not a documentation nit, and it fails in the one direction the vacuous family cannot. A
+vacuous check rots quietly and costs nothing when deleted. A misnamed one is **load-bearing while
+reading as redundant** — a cleanup pass removes it as a duplicate of the test whose name it appears
+to echo, takes real coverage with it, and **the deletion looks correct in review**. Nothing goes
+red, because the property it was silently holding has no other guard. That makes it the only defect
+class in this list that gets *worse* on its own, with no code change: every rename, every tidy-up,
+every "these two look the same" is another chance to lose it.
+
+**Fix it by KDoc, never by rename.** A rename breaks the link from anything already citing the old
+name — this document, a commit message, another test's comment — and trades an invisible coupling
+for a dangling one. State the second property on the test that carries it, name the finding it
+stands in for, and point back from wherever that finding is discussed. **A coupling has to be
+readable from both ends or it is only half recorded.**
+
+Two are pinned in the tree, found by the post-8c audit and closed in `docs: misnamed guards`:
+
+- `GoldenSpanTest.theBoxIsPaintedAsItsOwnRange` reads as being about the box's *position*. Its
+  assertion is an **ordered list**, so it also pins the emission order that makes
+  `MarkdownStylesTest`'s `task.merge(box)` the production expression rather than a guess.
+- `ConcealInvariantTest.renderedStylesLandOnTheSameCharacters` promises characters in its KDoc and
+  asserts **bounds**. The character property is real and lives two tests below in
+  `rebasedStyleCoversTheSameTextAsBefore`.
+
 ### Fixed
 
 | what | where |

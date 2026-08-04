@@ -29,6 +29,19 @@ class MarkdownStylesTest {
     private val colors = DuckThemeSpec.DuckRed.colors(isDark = false)
     private val styles = MarkdownStyles(colors, duckType())
 
+    /**
+     * **`task.merge(box)` is hard-coded here, and the order it assumes is guarded elsewhere.**
+     *
+     * This file holds no `SpanPlanner`, so it cannot know that production composes the two styles
+     * this way round rather than `box.merge(task)`. The direction comes from the sequence
+     * `SpanPlanner.plan` emits — task first, box second — and the check that pins that sequence is
+     * `GoldenSpanTest.theBoxIsPaintedAsItsOwnRange`, whose name is about the box's *position* and
+     * says nothing about ordering. Its assertion is an ordered list, which is the whole of it.
+     *
+     * So: if the emission order is ever flipped, **that** test goes red and this one stays green
+     * while asserting the wrong composition. Do not delete or reorder it on the grounds that this
+     * file already covers the box. See the *misnamed* class in `DUCK_NOTES_BUILD_PROMPT.md`.
+     */
     @Test
     fun theDoneBoxIsNotStruckThroughByTheTaskItSitsOn() {
         val task = styles.spanStyle(StyleKey.TASK_DONE, 0)

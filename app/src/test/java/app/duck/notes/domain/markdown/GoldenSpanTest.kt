@@ -128,7 +128,25 @@ class GoldenSpanTest {
     fun theSpaceAfterTheBoxSurvivesTheCarveOut() =
         assertConceals("[ ] milk", "-   [ ] milk")
 
-    /** The box is where the scanner put it, not at `markerStart + 2`. */
+    /**
+     * The box is where the scanner put it, not at `markerStart + 2`.
+     *
+     * ## It also carries the emission order, and the name does not say so
+     *
+     * The assertion is an **ordered** list, so it pins a second property nothing else does: the task
+     * style is emitted **before** its box. That is what makes
+     * `MarkdownStylesTest.theDoneBoxIsNotStruckThroughByTheTaskItSitsOn` legitimate — it hard-codes
+     * `task.merge(box)`, and the only reason that expression matches what the screen does is this
+     * ordering in `SpanPlanner.plan`. Flip the emission order and `merge` composes the other way:
+     * `TASK_DONE`'s `LineThrough` would win and the checkbox would paint struck through, which is the
+     * exact defect `TASK_BOX_DONE`'s explicit `TextDecoration.None` exists to prevent. That test
+     * cannot see the flip — it never calls `SpanPlanner` — and **this one goes red.**
+     *
+     * Recorded because the pairing is otherwise invisible from both sides, which is the *misnamed*
+     * class in `DUCK_NOTES_BUILD_PROMPT.md`: a check whose name describes one property while it
+     * quietly holds two. Nothing here should be "simplified" to an unordered comparison, and this
+     * test is not redundant with the `MarkdownStyles` one even though both mention the box.
+     */
     @Test
     fun theBoxIsPaintedAsItsOwnRange() {
         assertEquals(
