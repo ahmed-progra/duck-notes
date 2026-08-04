@@ -149,21 +149,38 @@ class ConcealInvariantTest {
      * The name is kept rather than corrected because other checks and commit messages cite it; the
      * *misnamed* class in `DUCK_NOTES_BUILD_PROMPT.md` says to fix these by KDoc, not by rename.
      *
-     * **Known weakness, not fixed here:** `examined` is a single counter across the whole corpus, so
-     * it proves *something* was examined, not that anything was examined for a given sample or a
-     * given style kind. Losing block conceal entirely would leave inline styles keeping the count
-     * non-zero. Audit finding 9; the fix is a per-kind control and belongs with the follow-up pass.
+     * ## The positive control is per-kind, and the scalar it replaces measured the wrong thing
+     *
+     * `examined > 0` counts *rendered styles*, and **losing block conceal removes no style range at
+     * all** — a heading's `StyledRange` is emitted whether or not its `# ` is hidden. So the counter
+     * was not merely coarse against audit finding 9's example, it could not have seen it: it would
+     * stay non-zero even with every block marker left visible.
+     *
+     * What block conceal does produce is a concealed marker, so that is what [BLOCK_KINDS] counts.
+     * `carve` only ever trims a marker's tail, never moves its `first`, so matching a conceal range
+     * to the token that owns it on that offset is exact.
+     *
+     * **Not the only guard on this, and the sibling is named deliberately.** `GoldenSpanTest` asserts
+     * the concealed rendering of block samples directly and goes red on the same plant. The audit
+     * called that an unnamed coupling; naming it is cheaper than pretending this control is unique.
+     * What it adds is that *this* sweep — bounds at every caret, in rendered coordinates — reached
+     * block markers, which `GoldenSpanTest` says nothing about.
      */
     @Test
     fun renderedStylesLandOnTheSameCharacters() {
         var examined = 0
+        val concealed = mutableSetOf<TokenKind>()
 
         MarkdownCorpus.samples.forEach { (name, body) ->
+            val tokens = MarkdownTextCache.rescan(ScanResult.Empty, body).tokens
             for (caret in carets(body)) {
-                val plan = plan(body, caret)
+                val plan = SpanPlanner.plan(tokens, caret, caret)
                 val rendered = StringBuilder(body).apply {
                     plan.conceal.forEach { delete(it.first, it.last + 1) }
                 }.toString()
+
+                val starts = plan.conceal.mapTo(mutableSetOf()) { it.first }
+                tokens.forEach { t -> if (t.markers.any { it.first in starts }) concealed += t.kind }
 
                 SpanPlanner.renderedStyles(plan).forEach {
                     examined++
@@ -176,6 +193,13 @@ class ConcealInvariantTest {
         }
 
         assertTrue("no rendered style was examined at all — nothing here was tested", examined > 0)
+        assertEquals(
+            "these block markers were never concealed anywhere in the corpus, so the rebase these " +
+                "assertions cover ran on inline markers alone — which is exactly what a single " +
+                "corpus-wide counter cannot see",
+            emptySet<TokenKind>(),
+            BLOCK_KINDS - concealed,
+        )
     }
 
     @Test
@@ -235,5 +259,23 @@ class ConcealInvariantTest {
     private companion object {
         /** Far past any sample, so every node counts as "caret elsewhere". Matches `GoldenSpanTest`. */
         const val CARET_AWAY = Int.MAX_VALUE / 2
+
+        /**
+         * The block kinds that **carry markers**, and therefore the ones block conceal can lose.
+         *
+         * **Curated, not total**, in the same idiom as `ContrastTest.usagePairs()`, and the omissions
+         * are structural rather than an oversight: `DIVIDER`, `FENCE_MARKER` and `FENCE_BODY` are
+         * block kinds that `MarkdownScanner` constructs with no `markers` at all, so they can never
+         * appear in a conceal range and requiring them here would be red forever. Adding a block kind
+         * that does carry markers means adding it here.
+         */
+        val BLOCK_KINDS = setOf(
+            TokenKind.HEADING,
+            TokenKind.QUOTE,
+            TokenKind.BULLET,
+            TokenKind.ORDERED,
+            TokenKind.TASK_OPEN,
+            TokenKind.TASK_DONE,
+        )
     }
 }
