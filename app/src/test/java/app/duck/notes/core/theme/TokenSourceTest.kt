@@ -34,13 +34,31 @@ class TokenSourceTest {
         )
     }
 
+    /**
+     * Every top-level package reaches the scan — **not** a count floor.
+     *
+     * It was `scanned >= 40` against a real 86, and an audit planted
+     * `.filterNot { it.absolutePath.contains("presentation") }` into [sources]: **all 31 presentation
+     * files dropped out of the colour, font and motion bans and the floor still passed at 55.** Half
+     * the tree could vanish silently, which is the failure mode a whole-tree scan is most prone to.
+     *
+     * The expected set comes off the filesystem rather than from a literal, so it cannot go stale the
+     * way a number does — a new package is covered the day it is created — and a failure names the
+     * package that disappeared instead of quoting two numbers.
+     */
     @Test
-    fun scansEveryFileOutsideTheThemePackage() {
-        val scanned = sources().size
-        assertTrue(
-            "scanned $scanned Kotlin files outside core/theme, expected at least $MIN_SOURCES — a " +
-                "scan this small means the path or the exclusion is wrong, not that the app shrank",
-            scanned >= MIN_SOURCES,
+    fun everyPackageOutsideTheThemeReachesTheScan() {
+        val packages = MAIN_DIR.listFiles().orEmpty().filter { it.isDirectory }.map { it.name }.toSet()
+        assertTrue("no packages under ${MAIN_DIR.absolutePath}", packages.isNotEmpty())
+
+        val seen = sources()
+            .map { it.relativeTo(MAIN_DIR).invariantSeparatorsPath.substringBefore('/') }
+            .toSet()
+        assertEquals(
+            "a package under ${MAIN_DIR.name} scanned to nothing — the walk or an exclusion dropped " +
+                "it, and everything in it is silently exempt from every ban in this file",
+            emptySet<String>(),
+            packages - seen,
         )
     }
 
@@ -220,10 +238,13 @@ class TokenSourceTest {
         val THEME_DIR = File(MAIN_DIR, "core/theme")
         val DEBUG_DIR = File("src/debug/java/app/duck/notes")
 
-        /** Well under the real count; catches a broken path rather than tracking the codebase. */
-        const val MIN_SOURCES = 40
-
-        /** The gallery is three files. Two would mean the path is wrong. */
+        /**
+         * The gallery is three files. Two would mean the path is wrong.
+         *
+         * A count floor survives here where the main-source one did not: `src/debug` is one flat
+         * package with no sub-structure to lose, so there is nothing for
+         * [everyPackageOutsideTheThemeReachesTheScan]'s per-package check to be about.
+         */
         const val MIN_DEBUG_SOURCES = 2
 
         /**

@@ -76,8 +76,12 @@ enum class DuckIcon(val keywords: Set<String>) {
          *
          * A canonical form followed by an exact lookup — not fuzzy matching. The transform is
          * deterministic and total; two names either canonicalize to the same string or they do not.
+         *
+         * `internal` rather than `private` so `DuckIconTest.keywordsAreAlreadyCanonical` can call
+         * **this** instead of retyping it. Its copy would have kept passing while this drifted, which
+         * is the shape CLAUDE.md's Guards rule calls *drive the real thing*.
          */
-        private fun canonicalize(segment: String): String =
+        internal fun canonicalize(segment: String): String =
             segment.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
     }
 }

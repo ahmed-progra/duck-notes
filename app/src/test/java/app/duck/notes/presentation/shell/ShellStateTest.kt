@@ -132,6 +132,40 @@ class ShellStateTest {
 
     // --- ShellFilter keys ----------------------------------------------------
 
+    /**
+     * `navRows` holds six and `Trash` is the seventh, rendered below the tag tree.
+     *
+     * **Pinned because two tests below build their entire universe as `navRows + Trash`.** A fixed
+     * row dropped from `navRows` would be covered by neither, and `ShellFilter.fromKey` — which walks
+     * the same `navRows + Trash` — would silently fall back to `All` on a restored bundle, so the
+     * sidebar would come back from process death filtering something the user did not choose. Nothing
+     * asserted the split until now; the counts lived only in prose, in three KDocs.
+     *
+     * **Known limit:** this catches a row *removed* from `navRows`, not a brand-new `ShellFilter`
+     * object never added to it. Enumerating the sealed subtypes needs `kotlin-reflect`, which is not
+     * on the classpath, and adding a dependency for one assertion is not the trade. What does force a
+     * new row to be noticed is the exhaustive `when` in `ShellFilter.label()` — the compiler will not
+     * build without a label for it.
+     */
+    @Test
+    fun theFixedRowsAreSixNavRowsPlusTrash() {
+        assertEquals(
+            "navRows changed size — a row added here also needs a label, and one removed leaves " +
+                "fromKey unable to restore it",
+            6,
+            ShellFilter.navRows.size,
+        )
+        assertFalse(
+            "Trash is rendered below the tag tree, not among the nav rows",
+            ShellFilter.Trash in ShellFilter.navRows,
+        )
+        assertEquals(
+            "a duplicate nav row would collide on its LazyColumn key",
+            ShellFilter.navRows.size,
+            ShellFilter.navRows.distinct().size,
+        )
+    }
+
     @Test
     fun everyFilterRoundTripsThroughItsSavedStateKey() {
         val all = ShellFilter.navRows + ShellFilter.Trash + ShellFilter.Tag("projects/duck")

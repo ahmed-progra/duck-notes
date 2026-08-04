@@ -4,7 +4,13 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * The 20-sample golden suite.
+ * The golden suite: one hand-written body per case, with its expected rendering spelled out.
+ *
+ * Its own case list, **not** a sweep over `MarkdownCorpus` — that is `ConcealInvariantTest`'s job,
+ * and the two are complementary rather than redundant: this one is narrow and exact where that one
+ * is broad and shallow. (This said "the 20-sample golden suite" for several phases while holding
+ * neither 20 cases nor any corpus samples. A count in prose has nothing enforcing it and only rots;
+ * see `MarkdownCorpus`' own KDoc, which records the same lesson from the other direction.)
  *
  * Asserts the [SpanPlan] rather than a rendered `AnnotatedString`. A rendered comparison would pin
  * these tests to theme colours and font sizes, so Phase 5 and Phase 14 would break them without any

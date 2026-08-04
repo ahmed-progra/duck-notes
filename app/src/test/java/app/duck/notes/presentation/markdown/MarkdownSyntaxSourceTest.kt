@@ -19,17 +19,30 @@ import java.io.File
  *
  * ## Scope, and why it stops where it does
  *
- * `presentation/` and `core/` only. `domain/` is **not** scanned, and that is deliberate rather than
- * an oversight: the two known duplicate wiki-link regexes live in `domain/usecase`, they are pinned
- * by `TagAgreementTest.aWikiLinkInsideCodeIsResolvedButNotPainted` as an asserted defect, and
- * retiring them is scheduled for Phase 9. A guard that went red on day one would be turned off on day
- * two. This one holds the line that is currently clean.
+ * The headline says *"no layer above `domain/markdown`"* and the two scans stop in different places,
+ * so both boundaries are argued rather than left to be inferred from a list.
+ *
+ * **The syntax-literal ban covers `presentation/`, `core/` and `data/`.** `data/` was originally
+ * absent with no reason given — exempt by omission — and it is the layer holding `TagRepositoryImpl`,
+ * which *rewrites note bodies*. A `"**"` there would be as much a second implementation as one in a
+ * composable. Audit finding 14.
+ *
+ * **The regex ban stops at `presentation/` and `core/`.** `NoteDao` splits an FTS search term on
+ * `Regex("\\s+")`, which is a query tokeniser and not the start of a second markdown parser — the
+ * thing this ban is for. Widening it would mean an allow-list naming one of the files most worth
+ * watching, so the narrower scope is stated instead.
+ *
+ * `domain/` is **not** scanned by either, and that is deliberate rather than an oversight: the two
+ * known duplicate wiki-link regexes live in `domain/usecase`, they are pinned by
+ * `TagAgreementTest.aWikiLinkInsideCodeIsResolvedButNotPainted` as an asserted defect, and retiring
+ * them is scheduled for Phase 9. A guard that went red on day one would be turned off on day two.
+ * This one holds the line that is currently clean.
  */
 class MarkdownSyntaxSourceTest {
 
     @Test
     fun noSyntaxLiteralAppearsAboveTheScanner() {
-        val offenders = sources().flatMap { file ->
+        val offenders = filesIn(SYNTAX_SCANNED).flatMap { file ->
             syntaxLiteralsIn(file.readText()).map { "${file.name}: $it" }
         }
         assertEquals(
@@ -42,7 +55,7 @@ class MarkdownSyntaxSourceTest {
 
     @Test
     fun noRegexIsBuiltAboveTheScanner() {
-        val offenders = sources()
+        val offenders = filesIn(REGEX_SCANNED)
             .filter { Regex("\\bRegex\\s*\\(").containsMatchIn(stripStringsAndComments(it.readText())) }
             .map { it.name }
         assertEquals(
@@ -59,14 +72,35 @@ class MarkdownSyntaxSourceTest {
      * dead — the failure mode a whole-tree scan is most prone to, and the one an audit of this suite
      * already caught once. So: the tree really has files, one of them really is the toolbar, and the
      * detector really fires on a planted string.
+     *
+     * **Reach is checked per sub-package, not by a count.** It was `files.size >= 10` against a real
+     * 31; `TokenSourceTest` had the same shape and an audit proved there that half a tree can drop
+     * out of a scan while a count floor stays green. The expected set comes off the filesystem, so it
+     * cannot go stale and a failure names the package that vanished.
      */
     @Test
     fun theScanIsPointedAtRealFilesAndTheDetectorWorks() {
-        val files = sources()
-        assertTrue("the source walk found nothing — check SCANNED", files.size >= 10)
+        val files = filesIn(SYNTAX_SCANNED)
+        assertTrue("the source walk found nothing — check SYNTAX_SCANNED", files.isNotEmpty())
+        SYNTAX_SCANNED.forEach { root ->
+            val packages = root.listFiles().orEmpty().filter { it.isDirectory }.map { it.name }.toSet()
+            val seen = filesIn(listOf(root))
+                .map { it.relativeTo(root).invariantSeparatorsPath.substringBefore('/') }
+                .toSet()
+            assertEquals(
+                "a sub-package of ${root.name} scanned to nothing — everything in it is silently " +
+                    "exempt from the syntax-literal ban",
+                emptySet<String>(),
+                packages - seen,
+            )
+        }
         assertTrue(
             "FormatToolbar.kt is the file this guard exists for and it is not being scanned",
             files.any { it.name == "FormatToolbar.kt" },
+        )
+        assertTrue(
+            "TagRepositoryImpl.kt rewrites note bodies and is why data/ is in the syntax scan",
+            files.any { it.name == "TagRepositoryImpl.kt" },
         )
         // The exact shape the plant takes: a task marker spelled out in a composable.
         assertEquals(
@@ -81,10 +115,14 @@ class MarkdownSyntaxSourceTest {
     }
 
     private companion object {
-        val SCANNED = listOf(
-            File("src/main/java/app/duck/notes/presentation"),
-            File("src/main/java/app/duck/notes/core"),
-        )
+        val PRESENTATION = File("src/main/java/app/duck/notes/presentation")
+        val CORE = File("src/main/java/app/duck/notes/core")
+
+        /** Includes `data/`, which holds `TagRepositoryImpl`. See the class KDoc for the argument. */
+        val SYNTAX_SCANNED = listOf(PRESENTATION, CORE, File("src/main/java/app/duck/notes/data"))
+
+        /** Excludes `data/`: `NoteDao`'s FTS term split is a tokeniser, not a parser. Same KDoc. */
+        val REGEX_SCANNED = listOf(PRESENTATION, CORE)
 
         /**
          * String literals and comments, in one alternation, string-first.
@@ -124,7 +162,7 @@ class MarkdownSyntaxSourceTest {
          */
         const val MAX_LITERAL = 24
 
-        fun sources(): List<File> = SCANNED.flatMap { dir ->
+        fun filesIn(roots: List<File>): List<File> = roots.flatMap { dir ->
             dir.walkTopDown().filter { it.isFile && it.extension == "kt" }
         }
 

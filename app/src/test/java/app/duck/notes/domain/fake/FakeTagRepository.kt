@@ -30,8 +30,24 @@ import kotlinx.coroutines.flow.MutableStateFlow
  * artefact, not a defect.
  *
  * This is still not a reimplementation. The rewriting goes through [TagScanner], the same single
- * implementation `TagRepositoryImpl` calls; what the fake omits is the transaction, which is exactly
- * the part a JVM test cannot speak to and `TagRewriteTest` covers on device.
+ * implementation `TagRepositoryImpl` calls.
+ *
+ * ## What it omits is the transaction **and the whole tag-row half**
+ *
+ * This used to say only "the transaction", which undersold it. [rewriteAll] returns
+ * `BodySnapshot(previous, emptyList())` and [restore] never reads `snapshot.tags` or
+ * `snapshot.createdNames`, so **every JVM undo test here exercises a body-only restore.** Three real
+ * behaviours are therefore invisible to this class:
+ *
+ * - a restored tag row keeping its **pin and icon**, which `NoteDao.ensureTag` cannot recover because
+ *   it mints a fresh UUID with no customization;
+ * - the **orphan sweep** over `createdNames`, without which an undone rename leaves a pinned, empty
+ *   `job` in the sidebar;
+ * - and `ensureTag` **resurrecting** a row the transaction just deleted.
+ *
+ * `TagRewriteTest` and `AutosaveDurabilityTest` cover all three on device, against real SQLite, and
+ * that is where they belong: modelling tag rows here would be the reimplementation this KDoc's own
+ * argument forbids, and it would be asserted against rather than the thing that ships.
  */
 class FakeTagRepository(
     initial: List<Tag> = emptyList(),

@@ -24,13 +24,27 @@ class DomainPurityTest {
         )
     }
 
+    /**
+     * Every sub-package of `domain/` reaches the scan — **not** a count floor.
+     *
+     * It was `scanned >= 20` against a real 40, so an exclusion could drop half of `domain/` and stay
+     * green; `TokenSourceTest` had the same shape and an audit proved it there by planting one.
+     * The expected set is read off the filesystem, so a new sub-package is covered the day it exists
+     * and a failure names what disappeared.
+     */
     @Test
-    fun scansEveryDomainFile() {
-        val scanned = sources().size
-        assertTrue(
-            "scanned $scanned Kotlin files under ${DOMAIN_DIR.absolutePath}, expected at least " +
-                "$MIN_SOURCES — a scan this small means the path is wrong, not that the package shrank",
-            scanned >= MIN_SOURCES,
+    fun everyDomainSubPackageReachesTheScan() {
+        val packages = DOMAIN_DIR.listFiles().orEmpty().filter { it.isDirectory }.map { it.name }.toSet()
+        assertTrue("no sub-packages under ${DOMAIN_DIR.absolutePath}", packages.isNotEmpty())
+
+        val seen = sources()
+            .map { it.relativeTo(DOMAIN_DIR).invariantSeparatorsPath.substringBefore('/') }
+            .toSet()
+        assertEquals(
+            "a sub-package of domain/ scanned to nothing — everything in it is silently exempt " +
+                "from the Android-import ban",
+            emptySet<String>(),
+            packages - seen,
         )
     }
 
@@ -76,9 +90,6 @@ class DomainPurityTest {
 
     private companion object {
         val DOMAIN_DIR = File("src/main/java/app/duck/notes/domain")
-
-        /** Models, repositories, use cases and the Clock port. Well under the real count. */
-        const val MIN_SOURCES = 20
 
         val ANDROID_IMPORT = Regex("^import\\s+(?:android|androidx)\\.[^\\s]*", RegexOption.MULTILINE)
 

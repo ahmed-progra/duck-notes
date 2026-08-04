@@ -117,12 +117,20 @@ class DuckIconTest {
         assertEquals(listOf(DuckIcon.Tag), empty)
     }
 
+    /**
+     * A keyword the canonicalizer would rewrite could never be matched — `forTag` canonicalizes the
+     * *input* and then looks it up exactly, so `"to-do"` in the table is a row nothing can reach.
+     *
+     * **Calls the real [DuckIcon.canonicalize]**, which is `internal` for this. It used to retype the
+     * transform as `it.lowercase().filter(Char::isLetterOrDigit)`, so it asserted that the table
+     * matched a copy rather than the lookup that ships: any drift in the production canonicalizer
+     * would have left this green while every keyword quietly stopped resolving. Same defect and same
+     * fix as `cappedDebounce` and `applyFormat`.
+     */
     @Test
     fun keywordsAreAlreadyCanonical() {
-        // A keyword the canonicalizer would rewrite could never be matched. Cheap, catches a typo
-        // like "to-do" being added to the table instead of "todo".
         val offenders = DuckIcon.entries.flatMap { it.keywords }
-            .filter { it != it.lowercase().filter(Char::isLetterOrDigit) }
+            .filter { it != DuckIcon.canonicalize(it) }
         assertEquals(emptyList<String>(), offenders)
     }
 }

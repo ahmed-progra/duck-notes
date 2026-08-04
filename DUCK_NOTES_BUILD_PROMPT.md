@@ -1329,6 +1329,24 @@ Stated here so the next audit does not re-raise them.
   wire it to `LocalTextSelectionColors` only if custom selection styling is ever wanted, at which
   point those two floors start doing work.
 
+### Two counts the audit itself got wrong
+
+Same spirit as the slot rules above, and for a sharper reason: the audit that produced finding 18 —
+*stale prose counts* — quoted two counts of its own, and both were wrong.
+
+| the audit said | measured |
+|---|---|
+| `TagRewriteTest:36` cites "29 cases" while `TagScannerRewriteTest` holds 26 | **29 is correct.** The citation was right and the audit was not; no edit was needed. |
+| `AutosaveDurabilityTest:52` says "21 tests", "34 after this pass" | **37.** Both figures stale — the file's and the audit's. |
+
+**A finding that quotes a number is doing the thing it objects to.** Count before acting on a cited
+count; `grep -c '@Test'` is two seconds and it saved an unnecessary edit to a line that was already
+right. The general form: an audit is a source like any other, and its numbers rot at the same rate as
+the prose it is criticising.
+
+Calibration: of 18 findings, two overstated, both toward *more* wrong than reality — the safe
+direction for an audit to err and the expensive one for anyone acting on it unchecked.
+
 ### Carried from Phase 7 — merge undo leaves the target pinned. Unscheduled.
 
 `carryCustomization` writes `isPinned = current.isPinned || old.isPinned` onto the destination row on
