@@ -752,6 +752,23 @@ class DuckShellAutosaveTest {
     }
 
     /**
+     * Types [text] and leaves a **range** selected, so `save` sees a non-collapsed selection.
+     *
+     * The text and the selection have to move in the **same** edit, and that is the whole reason
+     * this exists rather than a bare `buffer.edit { selection = … }`. The autosave loop watches
+     * `snapshotFlow { buffer.text }`, so a selection change on its own emits nothing and no save
+     * runs at all — see [aRangeSelectionOverATagSuppressesNothing], which is the test that was
+     * written that way and could not reach the guard it was named for.
+     */
+    private fun DuckShellViewModel.typeWithSelection(text: String, start: Int, end: Int) {
+        buffer.edit {
+            replace(0, length, text)
+            selection = TextRange(start, end)
+        }
+        Snapshot.sendApplyNotifications()
+    }
+
+    /**
      * **The reported defect.** Typing `#work` one character at a time, pausing past the idle window
      * on each, used to mint `w`, `wo` and `wor` as real tag rows — each visible in the sidebar for
      * the moment it existed.
@@ -880,26 +897,54 @@ class DuckShellAutosaveTest {
         assertEquals(listOf("work"), notes.savedTags["n1"])
     }
 
-    /** A range selection is someone selecting, not someone typing: nothing is in progress. */
+    /**
+     * A range selection is someone selecting, not someone typing: nothing is in progress.
+     *
+     * ## What this replaces, and why the old one could not fail
+     *
+     * `save` suppresses only when `suppressInProgressTag && selection.collapsed`, and this test is
+     * named for that second conjunct. The previous version never reached it, by three separate
+     * routes — deleting `&& selection.collapsed` left the whole suite green:
+     *
+     * 1. it moved the selection with a bare `buffer.edit { selection = … }`, which changes no text,
+     *    so `snapshotFlow { buffer.text }` never emitted and **no save ran at all**;
+     * 2. the `type("#work!")` that followed minted the tag because the typed `!` put the caret at 6
+     *    against a span ending at 5 — arithmetic, not any selection rule;
+     * 3. and the closing `flush()` passes `suppressInProgressTag = false`, so `caret` is null
+     *    whatever the selection is.
+     *
+     * So the text and the selection now move in **one** edit, via [typeWithSelection]. The offset is
+     * held fixed across both halves and only the collapsed-ness changes, which is what makes the
+     * conjunct the single variable.
+     *
+     * The case it now covers is the one nothing covered: a range whose `start` lands exactly on a
+     * **finished** tag's span end. Without the guard `ParseTags` drops the span whose `end == caret`
+     * and a completed tag is silently never minted.
+     */
     @Test
     fun aRangeSelectionOverATagSuppressesNothing() = withOpenNote(body = "") { vm ->
-        vm.type("#work")
+        // A COLLAPSED caret at offset 5 — the end of `#work` — suppresses. The control for the half
+        // below, and the reason the offset rather than the text is what has to stay fixed.
+        vm.typeWithCaret("#work more", caret = 5)
         advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
         advanceUntilIdle()
-        assertEquals("precondition: the collapsed caret suppressed it", emptyList<String>(), notes.savedTags["n1"])
+        assertEquals(
+            "precondition: a collapsed caret at the span end suppresses",
+            emptyList<String>(),
+            notes.savedTags["n1"],
+        )
 
-        // Same text, so only the selection can move the outcome.
-        vm.buffer.edit { selection = TextRange(0, 5) }
-        Snapshot.sendApplyNotifications()
-        vm.type("#work!")
+        // The same offset 5, now the START of a range. Only `selection.collapsed` differs.
+        vm.typeWithSelection("#work more!", start = 5, end = 11)
         advanceTimeBy(DuckShellViewModel.IDLE_MS + 1)
         advanceUntilIdle()
-        vm.buffer.edit { selection = TextRange(0, 6) }
-        Snapshot.sendApplyNotifications()
-        vm.flush()
-        advanceUntilIdle()
 
-        assertEquals(listOf("work"), notes.savedTags["n1"])
+        assertEquals(
+            "a range selection starting at a finished tag's span end suppressed it — selecting is " +
+                "not typing, and there is nothing in progress to wait for",
+            listOf("work"),
+            notes.savedTags["n1"],
+        )
     }
 
     /** The caret suppresses; it never moves the text. */

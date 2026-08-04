@@ -266,7 +266,11 @@ class DuckShellViewModel @Inject constructor(
         val text = buffer.text.toString()
         val selection = buffer.selection
         // A non-collapsed selection is someone selecting, not someone typing — nothing is in
-        // progress, so nothing is suppressed.
+        // progress, so nothing is suppressed. Held by
+        // `DuckShellAutosaveTest.aRangeSelectionOverATagSuppressesNothing`, which drives a range
+        // whose `start` lands on a finished tag's span end; without `collapsed` that tag is dropped.
+        // Naming it here because the test that was named for this conjunct spent a phase unable to
+        // reach it — a selection change alone emits nothing, so no save runs at all.
         val caret = selection.start.takeIf { suppressInProgressTag && selection.collapsed }
 
         // The buffer holds [loadedId]'s text, which is NOT always the selected id: between a row
