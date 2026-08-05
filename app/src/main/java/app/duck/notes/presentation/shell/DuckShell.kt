@@ -120,6 +120,7 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
             onAddTagToNote = viewModel::onAddTagToNote,
             onUndo = viewModel::onUndo,
             onUndoShown = viewModel::onUndoShown,
+            onToggleSection = viewModel::onToggleSection,
             tagsOfNote = viewModel::tagsOfNote,
         ),
         modifier = modifier,
@@ -219,7 +220,11 @@ fun DuckShell(
                             onTagClick = { actions.onFilter(ShellFilter.Tag(it)) },
                         )
                     }
-                    MarkdownEditorScreen(state = buffer)
+                    MarkdownEditorScreen(
+                        state = buffer,
+                        collapsedSections = state.collapsedSections,
+                        onToggleSection = actions.onToggleSection,
+                    )
                 }
             }
         }

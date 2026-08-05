@@ -3,6 +3,7 @@ package app.duck.notes.core.markdown
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import app.duck.notes.domain.markdown.MarkdownTextCache
+import app.duck.notes.domain.markdown.SectionFolding
 import app.duck.notes.domain.markdown.SpanPlanner
 
 /**
@@ -24,12 +25,16 @@ import app.duck.notes.domain.markdown.SpanPlanner
 class MarkdownOutputTransformation(
     private val cache: MarkdownTextCache,
     private val styles: MarkdownStyles,
+    private val foldedSections: Set<String> = emptySet(),
 ) : OutputTransformation {
 
     override fun TextFieldBuffer.transformOutput() {
         val scan = cache.scan(originalText.toString())
         val selection = originalSelection
-        val plan = SpanPlanner.plan(scan.tokens, selection.start, selection.end)
+        val folds = SectionFolding.ranges(
+            originalText.toString(), scan.tokens, foldedSections, selection.start, selection.end,
+        )
+        val plan = SpanPlanner.plan(scan.tokens, selection.start, selection.end, folds)
 
         // Conceal first, back-to-front. This ordering is REQUIRED FOR CORRECTNESS, not a
         // micro-optimisation: every range was computed against the original text, and removing one

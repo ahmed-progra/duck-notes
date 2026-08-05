@@ -25,6 +25,7 @@ import app.duck.notes.core.markdown.MarkdownStyles
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.domain.markdown.MarkdownFormat
 import app.duck.notes.domain.markdown.MarkdownTextCache
+import app.duck.notes.domain.markdown.SectionFolding
 import app.duck.notes.domain.markdown.SpanPlanner
 
 /**
@@ -64,7 +65,12 @@ import app.duck.notes.domain.markdown.SpanPlanner
  * rather than a third write path.
  */
 @Composable
-fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
+fun MarkdownEditorScreen(
+    state: TextFieldState,
+    collapsedSections: Set<String> = emptySet(),
+    onToggleSection: (String) -> Unit = {},
+    modifier: Modifier = Modifier,
+) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
     // The cache is unkeyed, so the incremental scan survives everything — a fresh one per frame
@@ -78,7 +84,9 @@ fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
     val colors = DuckTheme.colors
     val type = DuckTheme.type
     val styles = remember(colors, type) { MarkdownStyles(colors, type) }
-    val transformation = remember(styles) { MarkdownOutputTransformation(cache, styles) }
+    val transformation = remember(styles, collapsedSections) {
+        MarkdownOutputTransformation(cache, styles, collapsedSections)
+    }
 
     // The toolbar's enabled state, off the SAME incremental scan the transformation renders from.
     //
@@ -102,8 +110,16 @@ fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
     // O(tokens) on a surface whose 10k-word scroll claim is still unevidenced. Upgrade path is having
     // MarkdownOutputTransformation publish the plan it already computed rather than recomputing here.
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val plan = remember(text, selection) { SpanPlanner.plan(scan.tokens, selection.start, selection.end) }
+    val folds = remember(text, collapsedSections, selection) {
+        SectionFolding.ranges(
+            text.toString(), scan.tokens, collapsedSections, selection.start, selection.end,
+        )
+    }
+    val plan = remember(text, collapsedSections, selection) {
+        SpanPlanner.plan(scan.tokens, selection.start, selection.end, folds)
+    }
     val boxes = remember(plan) { SpanPlanner.taskBoxes(text.toString(), scan.tokens, plan) }
+    val sections = remember(text) { SectionFolding.sections(text.toString(), scan.tokens) }
 
     Scaffold(
         // imePadding, so the bar rides above the keyboard instead of behind it.
@@ -135,6 +151,17 @@ fun MarkdownEditorScreen(state: TextFieldState, modifier: Modifier = Modifier) {
 
                 val measured = layout
                 if (measured != null) {
+                    sections.forEach { section ->
+                        if (section.content != null && section.headingStart < measured.layoutInput.text.length) {
+                            SectionFoldOverlay(
+                                section = section,
+                                plan = plan,
+                                layout = measured,
+                                collapsed = section.key in collapsedSections,
+                                onToggle = { onToggleSection(section.key) },
+                            )
+                        }
+                    }
                     boxes.forEach { box ->
                         // The layout is one frame behind on the frame the text changes, so a box
                         // computed from the new plan can point past the end of the old layout.

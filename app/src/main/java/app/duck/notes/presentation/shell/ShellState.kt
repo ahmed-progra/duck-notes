@@ -272,6 +272,8 @@ data class ShellUiState(
     val selectedNoteTags: List<String> = emptyList(),
     /** All known tag paths, for the "Add tag" picker. */
     val allTagPaths: List<String> = emptyList(),
+    /** Heading fold keys for the selected note, persisted by note id in [DuckShellViewModel]. */
+    val collapsedSections: Set<String> = emptySet(),
     val undo: TagPrompt? = null,
 )
 
@@ -289,6 +291,7 @@ data class ShellActions(
     val onAddTagToNote: (noteId: String, name: String) -> Unit = { _, _ -> },
     val onUndo: () -> Unit = {},
     val onUndoShown: () -> Unit = {},
+    val onToggleSection: (String) -> Unit = {},
     /**
      * The tags already on a note, so the "Add tag" picker can omit them.
      *

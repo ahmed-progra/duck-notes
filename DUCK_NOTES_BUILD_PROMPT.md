@@ -1505,9 +1505,26 @@ contract forbids moving the caret. Pinned by
 behaviour so it goes red the day it is fixed. The fix is one condition in `adopt`, but that is 8a's
 code and 8a's blast radius — **scheduled, not smuggled into this commit.**
 
-### Still open in 8c
+### 8c-c — section folding
 
-`8c-c` (section folding) is planned and unbuilt.
+Section folding shipped with one pure range planner and one editor overlay. A heading stays visible;
+folding removes the lines after it through the first following heading of equal or higher level. A
+parent therefore owns nested headings, and folding a parent plus a child returns one outer deletion
+instead of overlapping ranges. Markdown syntax inside that body is merged into the same conceal range
+before `OutputTransformation` applies it, preserving the existing descending, non-overlapping offset
+contract.
+
+The fold key is `level + occurrence among equal title/level headings + title`. The ViewModel stores the
+set under a SavedStateHandle key scoped by note id, so switching notes, rotation, resize, and process
+restore cannot leak a fold to another note. Entering a folded body with the caret reveals that body for
+editing without discarding the saved collapsed state. The gutter chevron is a semantic button inside
+the scrolling editor, positioned from the same rendered offsets as the text.
+
+Pure tests cover peer boundaries, nested sections, duplicate heading keys, caret reveal, and parent /
+child overlap. The existing 8c tests remain green. The editor's deferred caret re-clamp defect from
+8a remains pinned and unscheduled; folding does not broaden that fix.
+
+**Phase 8c is closed.**
 
 ---
 

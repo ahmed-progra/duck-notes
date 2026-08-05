@@ -88,4 +88,6 @@
       unnamed control, which is worse than a generic name.
     -->
     <string name="task_checkbox">Task</string>
+    <string name="editor_expand_section">Show %1$s section</string>
+    <string name="editor_collapse_section">Hide %1$s section</string>
 </resources>

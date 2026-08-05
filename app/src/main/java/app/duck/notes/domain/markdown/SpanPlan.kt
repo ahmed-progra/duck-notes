@@ -94,7 +94,12 @@ object SpanPlanner {
      * the closing `**` still reveals it — otherwise the markers would vanish out from under you at
      * the exact moment you were trying to type next to them.
      */
-    fun plan(tokens: List<Token>, selectionStart: Int, selectionEnd: Int): SpanPlan {
+    fun plan(
+        tokens: List<Token>,
+        selectionStart: Int,
+        selectionEnd: Int,
+        foldedRanges: List<IntRange> = emptyList(),
+    ): SpanPlan {
         val styles = mutableListOf<StyledRange>()
         val conceal = mutableListOf<IntRange>()
         val from = minOf(selectionStart, selectionEnd)
@@ -119,8 +124,22 @@ object SpanPlanner {
             // the node style and a revealed MARKER.
             token.box?.let { styles += StyledRange(it.first, it.last + 1, boxStyleFor(token.kind)) }
         }
+        conceal += foldedRanges
+        // A folded body also contains markdown markers. Merge the two sources before returning: two
+        // overlapping deletes would corrupt OutputTransformation's offset map and would make a fold
+        // look like a malformed conceal plan to the invariant suite.
+        val merged = conceal.sortedBy { it.first }.fold(mutableListOf<IntRange>()) { ranges, next ->
+            val previous = ranges.lastOrNull()
+            if (previous != null && next.first <= previous.last + 1) {
+                ranges[ranges.lastIndex] = previous.first..maxOf(previous.last, next.last)
+            } else {
+                ranges += next
+            }
+            ranges
+        }
         // Descending, so that applying a deletion never shifts a range still waiting to be applied.
-        conceal.sortByDescending { it.first }
+        conceal.clear()
+        conceal += merged.asReversed()
         return SpanPlan(styles, conceal)
     }
 
@@ -169,9 +188,12 @@ object SpanPlanner {
             val box = token.box ?: return@mapNotNull null
             // The last marker, not the first: `> - [ ] x` stacks a quote marker before the task's.
             val marker = token.markers.lastOrNull() ?: return@mapNotNull null
+            val renderedStart = rebase(box.first, cuts)
+            val renderedEnd = rebase(box.last + 1, cuts)
+            if (renderedEnd <= renderedStart) return@mapNotNull null
             TaskBox(
                 source = box,
-                rendered = rebase(box.first, cuts) until rebase(box.last + 1, cuts),
+                rendered = renderedStart until renderedEnd,
                 done = token.kind == TokenKind.TASK_DONE,
                 text = body.substring(marker.last + 1, token.end),
             )
@@ -185,6 +207,8 @@ object SpanPlanner {
      * a second, subtly different rebase would sit next to the box instead of on it, and the two
      * would drift the first time the conceal rules changed — which is exactly what 8c-b did.
      */
+    internal fun renderedOffset(offset: Int, cuts: List<IntRange>): Int = rebase(offset, cuts)
+
     private fun rebase(offset: Int, cuts: List<IntRange>): Int {
         var removed = 0
         for (cut in cuts) {

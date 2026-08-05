@@ -104,6 +104,13 @@ class DuckShellViewModel @Inject constructor(
     private val expanded: Flow<Set<String>> =
         handle.getStateFlow(KEY_EXPANDED, ArrayList<String>()).map { it.toSet() }
 
+    /** Fold state is keyed by note id, so switching notes cannot leak a heading collapse. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val collapsedSections: Flow<Set<String>> = selectedId.flatMapLatest { id ->
+        if (id == null) flowOf(emptySet())
+        else handle.getStateFlow(foldedKey(id), ArrayList<String>()).map { it.toSet() }
+    }
+
     private val tree: Flow<List<TagNode>> = observeTagTree()
 
     private val counts: Flow<Map<String, TagCount>> = observeTagCounts()
@@ -157,19 +164,25 @@ class DuckShellViewModel @Inject constructor(
     /** Three flows bundled into one, because `combine` tops out at five. */
     private val tagState: Flow<TagState> = combine(tree, counts, undo, ::TagState)
 
+    private val editorState: Flow<EditorState> =
+        combine(filter, notes, selection, expanded, collapsedSections) { f, n, sel, exp, collapsed ->
+            EditorState(f, n, sel, exp, collapsed)
+        }
+
     val state: StateFlow<ShellUiState> =
-        combine(filter, notes, selection, expanded, tagState) { f, n, sel, exp, tg ->
+        combine(editorState, tagState) { editor, tg ->
             ShellUiState(
-                filter = f,
-                notes = n,
-                selectedNoteId = sel.id,
-                selectedNoteBody = sel.body,
+                filter = editor.filter,
+                notes = editor.notes,
+                selectedNoteId = editor.selection.id,
+                selectedNoteBody = editor.selection.body,
                 pinnedTags = tg.tree.pinned(tg.counts),
-                tagRows = tg.tree.flatten(exp, tg.counts),
+                tagRows = tg.tree.flatten(editor.expanded, tg.counts),
                 // Derived from the body already in hand, not queried. The chip row and the
                 // note_tags rows therefore cannot disagree — they come from one scanner.
-                selectedNoteTags = parseTags(sel.body),
+                selectedNoteTags = parseTags(editor.selection.body),
                 allTagPaths = tg.tree.tagPaths(),
+                collapsedSections = editor.collapsedSections,
                 undo = tg.undo,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
@@ -426,6 +439,14 @@ class DuckShellViewModel @Inject constructor(
         handle[KEY_EXPANDED] = ArrayList(if (path in current) current - path else current + path)
     }
 
+    /** Persists a heading fold for the currently selected note in the same saved-state channel as shell UI. */
+    fun onToggleSection(key: String) {
+        val id = selectedId.value ?: return
+        val stateKey = foldedKey(id)
+        val current = handle.get<ArrayList<String>>(stateKey).orEmpty().toSet()
+        handle[stateKey] = ArrayList(if (key in current) current - key else current + key)
+    }
+
     // --- tag actions ---------------------------------------------------------
 
     fun onPinTag(tagId: String, pinned: Boolean) {
@@ -613,6 +634,14 @@ class DuckShellViewModel @Inject constructor(
 
     private data class Selection(val id: String? = null, val body: String = "")
 
+    private data class EditorState(
+        val filter: ShellFilter,
+        val notes: List<Note>,
+        val selection: Selection,
+        val expanded: Set<String>,
+        val collapsedSections: Set<String>,
+    )
+
     private data class TagState(
         val tree: List<TagNode>,
         val counts: Map<String, TagCount>,
@@ -625,6 +654,8 @@ class DuckShellViewModel @Inject constructor(
         private const val KEY_FILTER = "shell.filter"
         private const val KEY_SELECTED = "shell.selectedNoteId"
         private const val KEY_EXPANDED = "shell.expandedTagPaths"
+
+        private fun foldedKey(noteId: String) = "shell.foldedSections.$noteId"
 
         /** Outlives a rotation, so Room's flows are not torn down and rebuilt for one. */
         private const val STOP_TIMEOUT_MS = 5_000L

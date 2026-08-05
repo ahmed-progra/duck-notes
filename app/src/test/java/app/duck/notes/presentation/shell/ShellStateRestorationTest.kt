@@ -105,6 +105,7 @@ class ShellStateRestorationTest {
         before.onFilter(ShellFilter.Tag("projects/duck"))
         before.onSelectNote("n1")
         before.onToggleTag("projects")
+        before.onToggleSection("1:0:Heading")
         advanceUntilIdle()
         scope.cancel()
 
@@ -121,6 +122,7 @@ class ShellStateRestorationTest {
             listOf("projects", "projects/duck"),
             after.state.value.tagRows.map { it.path },
         )
+        assertEquals(setOf("1:0:Heading"), after.state.value.collapsedSections)
         restored.cancel()
     }
 
