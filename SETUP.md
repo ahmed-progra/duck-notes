@@ -258,9 +258,9 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 ## Build environment traps on this machine
 
-Eight things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
-audit-fix pass, the next two in the 8c-b spike, the last in the 8c-b re-verify pass. None is a project
-defect; all are easy to hit again.
+Nine things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
+audit-fix pass, the next two in the 8c-b spike, the eighth in the 8c-b re-verify pass, the ninth in
+the 8c-c-fix pass. None is a project defect; all are easy to hit again.
 
 **1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
 absolute paths — these two lines are the ones to copy:
@@ -411,3 +411,27 @@ emulator -avd <name> -no-snapshot-load -no-snapshot-save
 Cold boot took 110 polls here, versus 1 for the corrupt snapshot — that gap is itself the tell. Launch
 future emulators **detached from any agent-managed process** (e.g. PowerShell `Start-Process`, not a
 backgrounded shell job) so a session/task teardown can't kill them mid-run in the first place.
+
+**9. Redirect an instrumented run to a file. Never filter the stream inline.** Trap 8 says to grep
+explicitly for the summary line rather than tailing the log. Do that **against a file**, not against
+the live stream:
+
+```powershell
+$out = "instrument_full.log"
+& $ADB shell am instrument -w -r app.duck.notes.test/androidx.test.runner.AndroidJUnitRunner > $out
+Select-String -Path $out -Pattern "^OK \(|^Tests run|^FAILURES|INSTRUMENTATION_CODE"
+Select-String -Path $out -Pattern "^\d+\) "      # the failing test NAMES
+```
+
+**A stream can be read once; a file can be read as many times as the question changes.** Piping
+`am instrument` straight into `Select-String` decides, before you have seen anything, which lines are
+worth keeping — and when the run comes back red the interesting lines are exactly the ones the filter
+was not written to expect.
+
+**What it cost.** In the 8c-c-fix pass a full run reported `Tests run: 62, Failures: 3` while the
+filter caught the summary and **not the numbered failure list**. Three cold-boot re-runs afterwards
+were all green, so the failures could not be reproduced and their names were never recovered. The
+result had to be written into the commit as unexplained flakiness rather than diagnosed — a
+conclusion the log almost certainly contained and the pipe threw away.
+
+The same rule covers `logcat` and `dumpsys`. Redirect first, ask questions second.
