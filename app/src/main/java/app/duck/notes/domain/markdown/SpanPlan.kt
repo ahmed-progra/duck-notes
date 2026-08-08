@@ -125,12 +125,20 @@ object SpanPlanner {
             token.box?.let { styles += StyledRange(it.first, it.last + 1, boxStyleFor(token.kind)) }
         }
         conceal += foldedRanges
-        // A folded body also contains markdown markers. Merge the two sources before returning: two
-        // overlapping deletes would corrupt OutputTransformation's offset map and would make a fold
-        // look like a malformed conceal plan to the invariant suite.
+        // A folded body also contains markdown markers, so a fold range genuinely can enclose marker
+        // ranges. Merge the two sources: applying two OVERLAPPING deletes back-to-front corrupts the
+        // offset map, because the first delete shifts text the second was measured against.
+        //
+        // The test is `next.first <= previous.last`, i.e. a true overlap. It is deliberately NOT
+        // `previous.last + 1`, which would also coalesce merely ADJACENT ranges. Adjacent ranges are
+        // already safe — descending deletion of [6..25] then [26..27] touches disjoint text — so
+        // coalescing them buys no correctness and costs something real: it changes `conceal`'s shape
+        // for every note in the app, folded or not, and it does so by making the invariant suite's
+        // ordering and overlap assertions *easier* to satisfy. That is the direction that hides
+        // defects, which is why the wider form is not worth its convenience.
         val merged = conceal.sortedBy { it.first }.fold(mutableListOf<IntRange>()) { ranges, next ->
             val previous = ranges.lastOrNull()
-            if (previous != null && next.first <= previous.last + 1) {
+            if (previous != null && next.first <= previous.last) {
                 ranges[ranges.lastIndex] = previous.first..maxOf(previous.last, next.last)
             } else {
                 ranges += next

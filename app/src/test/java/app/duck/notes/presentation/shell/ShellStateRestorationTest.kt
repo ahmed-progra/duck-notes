@@ -33,6 +33,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -234,11 +235,82 @@ class ShellStateRestorationTest {
             emptyList<String>(),
             oversized,
         )
+
+        // The general net. Per-value size cannot see a key FAMILY that grows: 8c-c's fold keys were
+        // each a couple of short strings and there was no bound on how many of them existed, so
+        // every one passed the check above while the Bundle grew without limit.
+        val total = handle.keys().sumOf { handle.get<Any?>(it).toString().length }
+        assertTrue(
+            "the handle totals $total chars across ${handle.keys().size} keys, over $MAX_HANDLE_TOTAL " +
+                "— something in the ViewModel is writing a key family that scales with use. The " +
+                "Bundle shares a 1MB Binder buffer; 8a's invariant is that it holds filter, note id " +
+                "and expanded tag paths.",
+            total <= MAX_HANDLE_TOTAL,
+        )
+        scope.cancel()
+    }
+
+    /**
+     * **At most one note's folds are ever in the handle.**
+     *
+     * 8c-c wrote `shell.foldedSections.<noteId>` and never removed it, so a key accumulated per note
+     * folded, for the life of the process, inside the saved-instance `Bundle`. That is the same 1MB
+     * Binder buffer Phase 8a dropped the editor's saver to protect, and 8a's invariant is explicit
+     * that the `Bundle` carries the filter, the note id and the expanded tag paths — nothing that
+     * scales with how much of the app you have touched.
+     *
+     * This asserts the **structural** bound rather than a size threshold: exactly one fold key, and
+     * it belongs to the open note. [noNoteBodyReachesTheSavedStateHandle]'s total-size assertion is
+     * the general net underneath it; this is the exact statement.
+     *
+     * The second `assertEquals` is not decoration — a sweep that removed *every* fold key, including
+     * the one just written, would satisfy a count of one only by accident of ordering. Naming the
+     * surviving key pins which one survived.
+     */
+    @Test
+    fun theHandleHoldsFoldStateForAtMostOneNote() = runTest {
+        notes.seed(Note(id = "n1", title = "n1", body = "# A\nbody", createdAt = 0L, modifiedAt = 2L))
+        notes.seed(Note(id = "n2", title = "n2", body = "# B\nbody", createdAt = 0L, modifiedAt = 1L))
+
+        val handle = SavedStateHandle()
+        val vm = shell(handle)
+        val scope = CoroutineScope(dispatcher)
+        scope.launch { vm.state.collect {} }
+        advanceUntilIdle()
+
+        vm.onSelectNote("n1")
+        advanceUntilIdle()
+        vm.onToggleSection("1:0:A")
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        vm.onToggleSection("1:0:B")
+        advanceUntilIdle()
+
+        val foldKeys = handle.keys().filter { it.startsWith("shell.foldedSections.") }
+        assertEquals(
+            "one fold key per note folded accumulates in the saved-instance Bundle: $foldKeys",
+            1,
+            foldKeys.size,
+        )
+        assertEquals(
+            "the surviving fold key must be the OPEN note's, not whichever survived by ordering",
+            listOf("shell.foldedSections.n2"),
+            foldKeys,
+        )
         scope.cancel()
     }
 
     private companion object {
         /** Comfortably above any id, filter key or tag path; far below any real note body. */
         const val MAX_HANDLE_VALUE = 512
+
+        /**
+         * Every value in the handle, added up. Catches a key *family* that grows without any single
+         * value getting large — which is exactly how 8c-c's fold keys escaped [MAX_HANDLE_VALUE],
+         * since each held two or three short strings and there was simply no limit on how many.
+         *
+         * Generous on purpose: the point is to catch unbounded growth, not to police the filter key.
+         */
+        const val MAX_HANDLE_TOTAL = 2_048
     }
 }

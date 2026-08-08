@@ -755,7 +755,12 @@ An earlier version of that test asserted the opposite from imagination and faile
   is a button that does nothing. `code` and `quote` were not on the original list and are here because
   the scanner already produces both and the toolbar cost is one entry each.
 - Tasks: `- [ ]` / `- [x]`, tap toggles, thin progress line under note card in list.
-- Section folding by heading. Persist fold state per note.
+- Section folding by heading. **Fold state is session-scoped, not persistent, and the original
+  wording of this line ("Persist fold state per note") promised something `SavedStateHandle` does not
+  deliver.** It survives rotation, resize and process death, because that is what the handle is for.
+  It does **not** survive a cold launch, and only the open note's folds are kept — switching notes
+  evicts the previous note's, which is what stops the saved-instance `Bundle` growing without bound.
+  Durable folds would be a Room column, and that belongs to a phase rather than to this line.
 - Images: pick, insert, Coil render inline, tap to zoom, resize, delete.
 - Paste handling: URL → link, image → attachment, markdown → raw.
 - Undo/redo stack. **Pulled out of the toolbar phase and left unscheduled**, correcting the note
@@ -1521,8 +1526,71 @@ editing without discarding the saved collapsed state. The gutter chevron is a se
 the scrolling editor, positioned from the same rendered offsets as the text.
 
 Pure tests cover peer boundaries, nested sections, duplicate heading keys, caret reveal, and parent /
-child overlap. The existing 8c tests remain green. The editor's deferred caret re-clamp defect from
-8a remains pinned and unscheduled; folding does not broaden that fix.
+child overlap. The editor's deferred caret re-clamp defect from 8a remains pinned and unscheduled;
+folding does not broaden that fix.
+
+### 8c-c-fix — what shipped unverified, and what it cost
+
+**8c-c was committed without a gate**: no plants, no test tally, no lint, no `assembleRelease`, no
+`dex_probe`, no instrumented run. Its report claimed ADB and the emulator were not installed, which is
+SETUP.md trap 1 verbatim — both are installed and off `PATH`. Run afterwards, every gate passed: 437
+JVM, 0 lint errors, release dex clean, `OK (56 tests)`. **Nothing was red, and four real defects were
+sitting under the green.** That is the argument for the gate, not against it.
+
+- **The saved-instance `Bundle` grew without bound.** Nothing removed `shell.foldedSections.<noteId>`,
+  so a key accumulated per note folded, for the life of the process, in the 1MB Binder buffer 8a's
+  saver drop exists to protect — a straight regression of 8a's "filter, note id and expanded tag
+  paths" invariant. Now swept on write, so at most one note's folds exist. Consolidating into one
+  map-valued key was rejected: it relocates the growth instead of bounding it.
+- **The invariant suite could not see a fold.** Every `SpanPlanner.plan` call in
+  `ConcealInvariantTest` used the 3-argument overload, so `foldedRanges` was always empty — while the
+  merge that reconciles folds with markers carried a comment about not wanting to "look like a
+  malformed conceal plan to the invariant suite". The suite now sweeps folded and unfolded, with
+  `theFoldedSweepActuallyFolds` as the control, because most corpus samples fold to nothing and a
+  silent no-op reads exactly like coverage.
+- **The merge coalesced *adjacent* ranges, not only overlapping ones.** Adjacent ranges are already
+  safe to delete back-to-front, so this bought no correctness and changed `conceal`'s shape for every
+  note in the app — in the direction that makes the invariant assertions *easier* to satisfy.
+  Narrowed to true overlaps.
+- **No instrumented coverage at all**, on the same overlay mechanism 8c-b needed four device tests and
+  three plants to get right. `SectionFoldUiTest` adds tap, the trap-7 drag/scroll pair, the TalkBack
+  node, and the rebased-position claim — **and the first run of it found the chevron was untappable.**
+
+**The chevron could not be tapped at all, and that is what shipped.** `SectionFoldOverlay` positioned
+itself at `bounds.left - 24.dp` inside the *text* Box. For a heading at column 0 — the normal case,
+not an edge case — `bounds.left` is 0, so its parent-space bounds were `[-24dp, 0dp]`: entirely left
+of its parent's origin. Compose hit-tests within ancestor layout bounds, so no touch could reach it
+while its semantics node stayed perfect and TalkBack worked fine. Measured on device at
+`-3.81dp..20.19dp` against an editor starting at `20.19dp`. Section folding was in the release APK
+doing nothing, and every gate passed.
+
+The fix is **a real gutter column, not another coordinate adjustment**: the editor is now a `Row` of a
+fixed-width gutter Box and the text Box, so the chevron is a sibling in its own layout slot with
+`IntOffset(0, bounds.top)` and no x arithmetic left to get wrong. Chosen over insetting the text field
+because it leaves `TaskBoxOverlay`'s coordinate math untouched — the text Box is still exactly the
+text field's coordinate space, which is what that overlay's rebased offsets assume.
+`MarkdownScanner`/`SpanPlanner` were confirmed, not assumed, to have no dependency on layout
+coordinates: they are pure character-offset code.
+
+A **second** source-vs-rendered confusion fell out of the same test.
+`MarkdownEditorScreen` gated each chevron on `section.headingStart < measured.layoutInput.text.length`
+— a *source* offset against the *rendered* length — so once an earlier section folded and the rendered
+text shortened, every later heading's chevron silently vanished. `SectionFoldOverlay` already guards
+its own rebased offset, so the outer check was both wrong and redundant.
+
+**Two numbers to read from `MarkdownEditorScreen.FOLD_GUTTER` rather than from here:** the gutter is
+**48dp**, Android's documented minimum touch target, and the reading column therefore starts **48dp**
+from the pane edge, where it started 20dp before the gutter existed. 48 and not 24 because
+*reachability* and *target size* are different properties — `theChevronStaysInsideTheGutter` proves
+the first, and Compose's `click()` lands on exact bounds, so a 24dp target passes every check in this
+repo while remaining an unreliable thumb target. Unlike the task checkbox (16.4 × 26.3dp, standing on
+WCAG 2.5.8's `inline` exception because it is drawn as characters inside a sentence), a control in its
+own gutter has no such excuse.
+
+Plus: the `ModifierParameter` lint warning 8c-c introduced, its three new classes added to
+`dex_probe.py`'s `MUST_BE_PRESENT`, a test for the `renderedEnd <= renderedStart` guard, and a
+correction to `SectionFolding`'s KDoc, which claimed fold keys "survive edits elsewhere in the note"
+without noting that retyping a heading drops its fold.
 
 **Phase 8c is closed.**
 

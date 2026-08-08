@@ -1,6 +1,11 @@
 package app.duck.notes.presentation.markdown
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
@@ -17,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -67,9 +73,9 @@ import app.duck.notes.domain.markdown.SpanPlanner
 @Composable
 fun MarkdownEditorScreen(
     state: TextFieldState,
+    modifier: Modifier = Modifier,
     collapsedSections: Set<String> = emptySet(),
     onToggleSection: (String) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -130,45 +136,84 @@ fun MarkdownEditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 20.dp, vertical = 12.dp)
+                // start is 0 because [FOLD_GUTTER] supplies the left inset now: the text begins
+                // 48dp in, where it began 20dp in before the gutter existed.
+                .padding(start = 0.dp, end = 20.dp, top = 12.dp, bottom = 12.dp)
                 .verticalScroll(rememberScrollState()),
         ) {
-            // The overlays are children of this Box so they share the text field's coordinate space,
-            // and the Box is INSIDE the scrolling Column so a drag starting on a checkbox still
-            // reaches the scroll. Both are load-bearing; see TaskBoxOverlay's KDoc and SETUP.md trap 7.
-            Box(modifier = Modifier.fillMaxSize()) {
-                BasicTextField(
-                    state = state,
-                    modifier = Modifier.fillMaxSize(),
-                    outputTransformation = transformation,
-                    // noteBody carries the serif reading font and the size the engine's `em` heading
-                    // multiples resolve against.
-                    textStyle = type.noteBody.copy(color = colors.onSurface),
-                    // accent, not accentText: a caret is a fill, not a glyph.
-                    cursorBrush = SolidColor(colors.accent),
-                    onTextLayout = { getResult -> layout = getResult() },
-                )
-
+            // Two columns, and the split is the fix for a defect 8c-c shipped.
+            //
+            // The fold chevron used to be an absolutely-positioned child of the text Box at
+            // `bounds.left - 24.dp`. For a heading at column 0 — the normal case — that put its
+            // parent-space bounds at [-24dp, 0dp], entirely left of its parent's origin. Compose
+            // hit-tests within ancestor layout bounds, so the control was **permanently untappable**
+            // while its semantics node still looked perfect. Measured on device at -3.81dp against
+            // an editor starting at 20.19dp.
+            //
+            // A real gutter column fixes it by construction rather than by another coordinate
+            // adjustment: the chevron is a sibling in its own layout slot, so its x is 0 within a
+            // parent that actually contains it and there is no left-of-origin arithmetic to get
+            // wrong again. It also leaves [TaskBoxOverlay]'s coordinate math completely untouched —
+            // the text Box is still exactly the text field's coordinate space, which is what that
+            // overlay's rebased offsets assume.
+            //
+            // Both Boxes stay INSIDE the scrolling Column so a drag starting on either overlay still
+            // reaches the scroll. Load-bearing; SETUP.md trap 7.
+            Row(modifier = Modifier.fillMaxWidth()) {
                 val measured = layout
-                if (measured != null) {
-                    sections.forEach { section ->
-                        if (section.content != null && section.headingStart < measured.layoutInput.text.length) {
-                            SectionFoldOverlay(
-                                section = section,
-                                plan = plan,
-                                layout = measured,
-                                collapsed = section.key in collapsedSections,
-                                onToggle = { onToggleSection(section.key) },
-                            )
+
+                // The gutter is given the text's own height. A chevron offset past its parent's
+                // bottom would be unhittable for exactly the reason the old one was unhittable to
+                // the left — same defect, one axis over.
+                Box(
+                    modifier = Modifier
+                        .width(FOLD_GUTTER)
+                        .height(with(LocalDensity.current) { (measured?.size?.height ?: 0).toDp() }),
+                ) {
+                    if (measured != null) {
+                        sections.forEach { section ->
+                            // Only "does this section have a body to hide". The bounds check that
+                            // used to sit here compared `section.headingStart` — a SOURCE offset —
+                            // against the RENDERED text length, so once an earlier section folded
+                            // and the rendered text got shorter, every later heading's chevron
+                            // silently vanished. SectionFoldOverlay already guards the right
+                            // quantity, its own rebased offset, so this one was both wrong and
+                            // redundant. Same source-vs-rendered confusion as the offset defect.
+                            if (section.content != null) {
+                                SectionFoldOverlay(
+                                    section = section,
+                                    plan = plan,
+                                    layout = measured,
+                                    collapsed = section.key in collapsedSections,
+                                    onToggle = { onToggleSection(section.key) },
+                                )
+                            }
                         }
                     }
-                    boxes.forEach { box ->
-                        // The layout is one frame behind on the frame the text changes, so a box
-                        // computed from the new plan can point past the end of the old layout.
-                        // Skipping it costs one frame of a missing overlay; not skipping it throws
-                        // out of getBoundingBox.
-                        if (box.rendered.last < measured.layoutInput.text.length) {
-                            TaskBoxOverlay(box, measured) { state.toggleTask(box) }
+                }
+
+                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                    BasicTextField(
+                        state = state,
+                        modifier = Modifier.fillMaxSize(),
+                        outputTransformation = transformation,
+                        // noteBody carries the serif reading font and the size the engine's `em`
+                        // heading multiples resolve against.
+                        textStyle = type.noteBody.copy(color = colors.onSurface),
+                        // accent, not accentText: a caret is a fill, not a glyph.
+                        cursorBrush = SolidColor(colors.accent),
+                        onTextLayout = { getResult -> layout = getResult() },
+                    )
+
+                    if (measured != null) {
+                        boxes.forEach { box ->
+                            // The layout is one frame behind on the frame the text changes, so a box
+                            // computed from the new plan can point past the end of the old layout.
+                            // Skipping it costs one frame of a missing overlay; not skipping it
+                            // throws out of getBoundingBox.
+                            if (box.rendered.last < measured.layoutInput.text.length) {
+                                TaskBoxOverlay(box, measured) { state.toggleTask(box) }
+                            }
                         }
                     }
                 }
@@ -183,6 +228,27 @@ fun MarkdownEditorScreen(
  * `internal` rather than private since Phase 6: the preview below and the debug gallery's Editor
  * page are both fixtures for the same thing, and two copies of this would drift.
  */
+/**
+ * The leading column the fold chevrons live in, the editor's left inset, **and the chevron's own
+ * touch target** — `SectionFoldOverlay` sizes itself from this, so the three cannot drift apart.
+ *
+ * **48dp is Android's documented minimum touch target**, and the reason it is not 24dp is a real
+ * distinction the earlier gate could not see. `SectionFoldUiTest.theChevronStaysInsideTheGutter`
+ * proves the target is *reachable* — that its bounds lie inside a parent that hit-tests it — and
+ * Compose's `click()` lands on exact bounds, so a 24dp target passes every check while still being
+ * an unreliable thumb target on glass. Reachability and size are different properties and nothing
+ * here measures the second.
+ *
+ * Unlike the task checkbox, which is 16.4 × 26.3dp and stands on WCAG 2.5.8's `inline` exception
+ * because it is drawn as characters inside a sentence, this control sits in its own gutter with no
+ * such excuse — so it takes the full 48.
+ *
+ * The reading column starts immediately after it: text now begins **48dp** from the pane edge,
+ * having been 20dp before the gutter existed. Anything asserting or documenting that number reads
+ * it from here.
+ */
+internal val FOLD_GUTTER = 48.dp
+
 internal val SAMPLE_NOTE = """
     # Duck Notes
 

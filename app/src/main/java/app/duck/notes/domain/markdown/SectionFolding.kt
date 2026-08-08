@@ -15,8 +15,24 @@ data class FoldSection(
  *
  * A heading remains visible when its section is folded. The fold removes the following lines up to
  * the next heading of the same or a higher level; a nested heading therefore belongs to its parent's
- * body. Fold keys use the heading's level, title, and occurrence among equal headings, so they survive
- * edits elsewhere in the note and remain scoped to the note by the ViewModel's handle key.
+ * body.
+ *
+ * ## What the key does and does not survive
+ *
+ * A fold key is `level:occurrence:title`, where occurrence counts among headings sharing the same
+ * level *and* title. It survives edits to **body text** — typing in a section does not move any
+ * key — and it is scoped to the note by the ViewModel's handle key.
+ *
+ * It does **not** survive edits to headings themselves, and an earlier version of this KDoc claimed
+ * it survived "edits elsewhere in the note" without qualifying that:
+ *
+ * - retyping a heading changes its title, so its fold key changes and the section quietly expands
+ * - inserting a heading that duplicates an existing level and title shifts the later one's
+ *   occurrence, so a fold moves to a different section
+ *
+ * Both are acceptable for a cosmetic, session-scoped control, and neither is worth a positional or
+ * synthetic id — which would have to be stored in the body or in Room to be stable at all. The claim
+ * is what was wrong, not the key.
  */
 object SectionFolding {
 

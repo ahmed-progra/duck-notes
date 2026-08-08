@@ -439,10 +439,35 @@ class DuckShellViewModel @Inject constructor(
         handle[KEY_EXPANDED] = ArrayList(if (path in current) current - path else current + path)
     }
 
-    /** Persists a heading fold for the currently selected note in the same saved-state channel as shell UI. */
+    /**
+     * Persists a heading fold for the currently selected note in the same saved-state channel as
+     * shell UI, **and keeps only the open note's folds**.
+     *
+     * The sweep is not tidiness. Without it one `shell.foldedSections.<id>` key accumulates per note
+     * folded, for the life of the process, and [handle] is written into the saved-instance `Bundle`
+     * — the 1MB per-process Binder buffer that Phase 8a's saver drop exists to protect. Unbounded
+     * growth there regresses 8a's own invariant, that the `Bundle` carries the filter, the note id
+     * and the expanded tag paths and nothing that scales with content.
+     *
+     * **Evicting rather than consolidating into one map-valued key** is deliberate: a map still
+     * gains an entry per note and puts the same bytes through the same transaction, so it relocates
+     * the growth instead of bounding it. This bounds it structurally at one key, which is a property
+     * a test can state exactly rather than a threshold someone has to defend.
+     *
+     * **Swept on write, not on selection change.** [onFilter] clears the selection without flushing
+     * — the leak path 8a-fix documents — so anything hung off the transition inherits that hole.
+     * Keying off the write cannot miss.
+     *
+     * Cost, stated rather than hidden: folding a section in note A, moving to B and coming back
+     * finds A expanded. Fold state is cosmetic and it never survived a cold launch either way.
+     */
     fun onToggleSection(key: String) {
         val id = selectedId.value ?: return
         val stateKey = foldedKey(id)
+        // toList() first: handle.keys() is a live view, and removing through it would throw.
+        handle.keys().toList()
+            .filter { it.startsWith(FOLD_PREFIX) && it != stateKey }
+            .forEach { handle.remove<Any>(it) }
         val current = handle.get<ArrayList<String>>(stateKey).orEmpty().toSet()
         handle[stateKey] = ArrayList(if (key in current) current - key else current + key)
     }
@@ -655,7 +680,13 @@ class DuckShellViewModel @Inject constructor(
         private const val KEY_SELECTED = "shell.selectedNoteId"
         private const val KEY_EXPANDED = "shell.expandedTagPaths"
 
-        private fun foldedKey(noteId: String) = "shell.foldedSections.$noteId"
+        /**
+         * One prefix, two consumers — [foldedKey] mints them and [onToggleSection]'s sweep reaps
+         * them. Separate literals would drift, and the failure mode of a drifted sweep is silence.
+         */
+        private const val FOLD_PREFIX = "shell.foldedSections."
+
+        private fun foldedKey(noteId: String) = "$FOLD_PREFIX$noteId"
 
         /** Outlives a rotation, so Room's flows are not torn down and rebuilt for one. */
         private const val STOP_TIMEOUT_MS = 5_000L

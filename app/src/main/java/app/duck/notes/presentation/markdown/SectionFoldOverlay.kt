@@ -9,8 +9,8 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -26,10 +26,30 @@ import app.duck.notes.domain.markdown.SpanPlanner
 import kotlin.math.roundToInt
 
 /**
- * The heading's disclosure control, placed in the editor gutter so it never steals caret taps.
+ * The heading's disclosure control, living in the editor's leading gutter column so it never steals
+ * caret taps.
  *
- * It is inside the same scrolling Box as the text and uses the heading's rendered offset after all
- * preceding folds. That keeps it attached to the heading when a parent section hides its children.
+ * It uses the heading's rendered offset after all preceding folds, so it stays attached to its
+ * heading when an earlier section hides its lines.
+ *
+ * ## Only the y comes from the text layout, and that is the fix for a shipped defect
+ *
+ * 8c-c positioned this as an absolutely-positioned child of the **text** Box at
+ * `bounds.left - 24.dp`. For a heading at column 0 — the normal case — `bounds.left` is 0, so the
+ * control's parent-space bounds were `[-24dp, 0dp]`: entirely left of its parent's origin. Compose
+ * hit-tests within ancestor layout bounds, so **no touch could ever reach it**, while its semantics
+ * node stayed perfect and TalkBack could. Measured on device at -3.81dp against an editor starting
+ * at 20.19dp. Section folding shipped in the release APK and did nothing.
+ *
+ * The control now sits in its own layout slot, so its x is simply 0 inside a parent that contains
+ * it. **Do not reintroduce an x offset here.** Horizontal placement is the gutter's job; this
+ * composable's only claim on the text layout is the line's `top`, which is what keeps it aligned
+ * with its heading. `SectionFoldUiTest.theChevronStaysInsideTheGutter` is the guard.
+ *
+ * The target is [FOLD_GUTTER] square — 48dp, Android's documented minimum — rather than the glyph's
+ * own 20dp. Reachability and target *size* are different properties: the guard above proves the
+ * first, and Compose's `click()` lands on exact bounds, so nothing in the suite would notice a
+ * target too small for a thumb.
  */
 @Composable
 internal fun SectionFoldOverlay(
@@ -44,23 +64,22 @@ internal fun SectionFoldOverlay(
     if (rendered >= layout.layoutInput.text.length) return
 
     val bounds = layout.getBoundingBox(rendered)
-    val density = LocalDensity.current
     val label = stringResource(
         if (collapsed) R.string.editor_expand_section else R.string.editor_collapse_section,
         section.title,
     )
 
     Box(
-        Modifier
-            .offset {
-                IntOffset(
-                    (bounds.left - with(density) { 24.dp.toPx() }).roundToInt(),
-                    bounds.top.roundToInt(),
-                )
-            }
-            .size(24.dp)
+        modifier = Modifier
+            .offset { IntOffset(0, bounds.top.roundToInt()) }
+            // Sized from the gutter itself, so the touch target fills the column rather than
+            // sitting in one corner of it, and so the two numbers cannot drift apart.
+            .size(FOLD_GUTTER)
             .selectable(selected = collapsed, role = Role.Button, onClick = onToggle)
             .semantics { contentDescription = label },
+        // The glyph is 20dp inside a 48dp target: centred, not pinned to the corner the way an
+        // unaligned Box would leave it.
+        contentAlignment = Alignment.Center,
     ) {
         Icon(
             imageVector = if (collapsed) {

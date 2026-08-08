@@ -37,6 +37,11 @@ MUST_BE_PRESENT = [
     "DuckNoteCard",
     "DuckTagChip",
     "MarkdownScanner",
+    # 8c-c. SETUP.md asks for a phase's new classes to be added here permanently rather than passed
+    # as arguments once; 8c-c shipped without doing it, so nothing proved folding reached release.
+    "SectionFolding",
+    "SectionFoldOverlay",
+    "FoldSection",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

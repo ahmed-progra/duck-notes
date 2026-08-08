@@ -15,8 +15,64 @@ import org.junit.Test
  */
 class ConcealInvariantTest {
 
-    private fun plan(body: String, caret: Int): SpanPlan =
-        SpanPlanner.plan(MarkdownTextCache.rescan(ScanResult.Empty, body).tokens, caret, caret)
+    /**
+     * [foldAll] collapses **every** heading in the sample, so the sweeps below run over the plan a
+     * folded note actually produces.
+     *
+     * Without it this whole suite tested a code path folding never takes: 8c-c added a fourth
+     * `foldedRanges` parameter to [SpanPlanner.plan] and every call here used the 3-argument
+     * overload, so `foldedRanges` was always empty. The merge that reconciles fold ranges with
+     * marker ranges carried a comment about not wanting to "look like a malformed conceal plan to
+     * the invariant suite" — a plan this suite was structurally unable to see. Now it does.
+     */
+    private fun plan(body: String, caret: Int, foldAll: Boolean = false): SpanPlan {
+        val tokens = MarkdownTextCache.rescan(ScanResult.Empty, body).tokens
+        val folds = if (!foldAll) {
+            emptyList()
+        } else {
+            val keys = SectionFolding.sections(body, tokens).map { it.key }.toSet()
+            SectionFolding.ranges(body, tokens, keys, caret, caret)
+        }
+        return SpanPlanner.plan(tokens, caret, caret, folds)
+    }
+
+    /**
+     * The positive control for [MODES]' folded half, and it is not optional.
+     *
+     * Most corpus samples fold to nothing — `"heading"` is `"# A heading"`, where the heading *is*
+     * the body, so `content` is null and there is no range. A folded sweep over a corpus that never
+     * folds is a no-op that reads exactly like coverage, which is the defect class this project has
+     * now hit five times. So: prove some sample folds, and prove at least one fold genuinely
+     * **encloses a marker conceal**, since reconciling those two is the only thing the merge does.
+     *
+     * `"mixed"` is the load-bearing sample — its fold spans `**bold**`, `[[Pond]]`, `#birds`,
+     * a code span and two task markers.
+     */
+    @Test
+    fun theFoldedSweepActuallyFolds() {
+        var folding = 0
+        var enclosingAMarker = 0
+
+        MarkdownCorpus.samples.forEach { (_, body) ->
+            val tokens = MarkdownTextCache.rescan(ScanResult.Empty, body).tokens
+            val keys = SectionFolding.sections(body, tokens).map { it.key }.toSet()
+            val folds = SectionFolding.ranges(body, tokens, keys, CARET_AWAY, CARET_AWAY)
+            if (folds.isEmpty()) return@forEach
+            folding++
+
+            val markers = SpanPlanner.plan(tokens, CARET_AWAY, CARET_AWAY).conceal
+            if (markers.any { m -> folds.any { f -> m.first >= f.first && m.last <= f.last } }) {
+                enclosingAMarker++
+            }
+        }
+
+        assertTrue("only $folding corpus samples produce a fold range; the folded sweep is a no-op", folding >= 2)
+        assertTrue(
+            "no sample has a fold enclosing a marker conceal, so the merge in SpanPlanner.plan is " +
+                "never exercised by the sweeps and its guard is decoration",
+            enclosingAMarker >= 1,
+        )
+    }
 
     /**
      * Every caret **inside** the body, plus one parked far outside it.
@@ -39,9 +95,9 @@ class ConcealInvariantTest {
         var examined = 0
 
         MarkdownCorpus.samples.forEach { (name, body) ->
-            for (caret in carets(body)) {
-                val conceal = plan(body, caret).conceal
-                val where = "sample=$name caret=$caret"
+            for (folded in MODES) for (caret in carets(body)) {
+                val conceal = plan(body, caret, folded).conceal
+                val where = "sample=$name caret=$caret folded=$folded"
 
                 conceal.forEach {
                     examined++
@@ -77,14 +133,14 @@ class ConcealInvariantTest {
     @Test
     fun descendingApplicationRemovesExactlyTheConcealedRanges() {
         MarkdownCorpus.samples.forEach { (name, body) ->
-            for (caret in carets(body)) {
-                val conceal = plan(body, caret).conceal
+            for (folded in MODES) for (caret in carets(body)) {
+                val conceal = plan(body, caret, folded).conceal
                 val applied = StringBuilder(body).apply {
                     conceal.forEach { delete(it.first, it.last + 1) }
                 }.toString()
 
                 val expected = body.filterIndexed { i, _ -> conceal.none { i in it } }
-                assertEquals("sample=$name caret=$caret", expected, applied)
+                assertEquals("sample=$name caret=$caret folded=$folded", expected, applied)
             }
         }
     }
@@ -173,6 +229,7 @@ class ConcealInvariantTest {
 
         MarkdownCorpus.samples.forEach { (name, body) ->
             val tokens = MarkdownTextCache.rescan(ScanResult.Empty, body).tokens
+            val foldKeys = SectionFolding.sections(body, tokens).map { it.key }.toSet()
             for (caret in carets(body)) {
                 val plan = SpanPlanner.plan(tokens, caret, caret)
                 val rendered = StringBuilder(body).apply {
@@ -188,6 +245,28 @@ class ConcealInvariantTest {
                     assertTrue("$where: start ${it.start} < 0", it.start >= 0)
                     assertTrue("$where: end ${it.end} > ${rendered.length}", it.end <= rendered.length)
                     assertTrue("$where: reversed", it.end > it.start)
+                }
+
+                // The same bounds, with every section folded — the rebase has to survive whole
+                // sections being deleted, not just markers.
+                //
+                // [concealed] above is computed from the UNFOLDED plan on purpose: a fold that
+                // merges with a marker range changes which offsets appear as conceal starts, so
+                // feeding folded plans to the per-kind control would corrupt the control rather
+                // than strengthen it. Bounds are safe to check either way; kind attribution is not.
+                val foldedPlan = SpanPlanner.plan(
+                    tokens, caret, caret, SectionFolding.ranges(body, tokens, foldKeys, caret, caret),
+                )
+                val foldedRendered = StringBuilder(body).apply {
+                    foldedPlan.conceal.forEach { delete(it.first, it.last + 1) }
+                }.toString()
+                SpanPlanner.renderedStyles(foldedPlan).forEach {
+                    val where = "sample=$name caret=$caret folded style=${it.style}"
+                    assertTrue("$where: start ${it.start} < 0", it.start >= 0)
+                    assertTrue(
+                        "$where: end ${it.end} > ${foldedRendered.length}",
+                        it.end <= foldedRendered.length,
+                    )
                 }
             }
         }
@@ -259,6 +338,15 @@ class ConcealInvariantTest {
     private companion object {
         /** Far past any sample, so every node counts as "caret elsewhere". Matches `GoldenSpanTest`. */
         const val CARET_AWAY = Int.MAX_VALUE / 2
+
+        /**
+         * Unfolded, then every section folded. The conceal-contract sweeps run over both.
+         *
+         * `styledRangesStayInBounds` deliberately does **not** use this: folds add conceal ranges
+         * and never touch `plan.styles`, so a folded pass there would be a literal no-op — the
+         * kind of "coverage" that reads as thorough and tests nothing.
+         */
+        val MODES = listOf(false, true)
 
         /**
          * The block kinds that **carry markers**, and therefore the ones block conceal can lose.
