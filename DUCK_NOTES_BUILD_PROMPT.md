@@ -1596,6 +1596,57 @@ without noting that retyping a heading drops its fold.
 
 ---
 
+## PHASE 8d-a — RTL
+
+**Goal:** make the editor correct under a right-to-left layout direction. This is the first slice of
+**8d** (images, paste, focus mode, RTL); it ships first because 8c-c's **fixed-left gutter created the
+dependency** — a `Row` with a leading gutter is only "leading" if the framework mirrors it, and 8c-c
+asserted that mirroring rather than measuring it. Images, paste and focus mode remain for the rest of 8d.
+
+**Two RTL defects, both in shipped code, both measured on device — not guessed.**
+
+**1. `TaskBoxOverlay` mirrored an already-resolved coordinate.** Its `left` comes from
+`getBoundingBox(...).left`, an absolute visual coordinate that already accounts for bidi.
+`Modifier.offset` *also* mirrors x under RTL, so it mirrored a value that was already correct. →
+`absoluteOffset`.
+
+**2. The overlay's base placement was direction-dependent, and `absoluteOffset` alone did not fix it.**
+`Box`'s default `TopStart` resolves to the **right** edge under RTL, so the overlay was based at the
+right edge and then offset rightward again. → `contentAlignment = AbsoluteAlignment.TopLeft`. The
+measured progression for the RTL task box is the whole story: `673.9dp` (original, off the device) →
+`−306.7dp` (with `absoluteOffset` alone) → `347.05..363.43dp` inside a field of `20.19..363.43` (both
+fixes). It now sits at the line's end, which under RTL is the right edge.
+
+**The fold gutter itself needed no change — and that claim is now evidence, not assertion.** `Row`
+mirrors its children by `LocalLayoutDirection`: LTR chevron `0..48` before the field `48..391`; RTL
+chevron `363..411` after the field `20..363`. 8c-c's "the gutter will mirror" is measured at last.
+
+**The guard was wrong first, in the instructive direction.** The original assertion asked "is the box
+in the trailing half under RTL?" and **passed — because `682 > 191`**, i.e. it passed *because* the box
+had flown off the right edge. A control proving something other than what it was cited for: MISDIRECTED
+by this document's own vocabulary, written one session after the chevron-containment fix taught the same
+lesson. It now asserts **containment**, not half-of-screen. `RtlLayoutTest` is 2 instrumented tests; the
+full instrumented suite is **`OK (64 tests)`**, up from 62.
+
+**Two process failures worth naming, both now written into SETUP.md.**
+
+- **A plant produced a false green (→ trap 10).** Plant A restored a pre-fix defect but also changed an
+  import, so it did not compile; the install was **not gated on the build**, so the runner ran the
+  *previous* APK and reported `OK (2 tests)` against bytes the plant never reached. `Select-Object -First
+  N` on a live gradle pipeline had also corrupted the exit code. Every install now gates on
+  `$LASTEXITCODE`, captured before any filter. This is the silent, green-reporting form of the global
+  contract's "a plant is code, and can be wrong in the direction that fakes a red".
+- **An editing shortcut corrupted a source file (→ trap 4).** `Get-Content -Raw` + `Set-Content -Encoding
+  utf8` on `MarkdownEditorScreen.kt` read BOM-less UTF-8 as cp1252 and re-encoded the mojibake — and it
+  would have compiled fine. Repaired at byte level (`git checkout` of a tracked file is banned): BOM
+  removed, 19 em-dashes restored, and the 2 irrecoverable `U+FFFD` characters (`∪` on line 70, `×` in the
+  `16.4 × 26.3dp` note) retyped by hand and afterwards verified byte-for-byte against `180d7e5`
+  (`×` = `U+00D7`, `c3 97`).
+
+**Phase 8d-a is closed. The rest of 8d (images, paste, focus mode) is unstarted.**
+
+---
+
 ## PHASE 9 — LINKING + INFO PANEL
 
 **Goal:** Personal wiki without a graph database.

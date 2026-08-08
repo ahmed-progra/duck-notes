@@ -1,7 +1,7 @@
 package app.duck.notes.presentation.markdown
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.absoluteOffset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.input.TextFieldState
@@ -79,7 +79,18 @@ internal fun TaskBoxOverlay(box: TaskBox, layout: TextLayoutResult, onToggle: ()
 
     Box(
         Modifier
-            .offset { IntOffset(left.roundToInt(), top.roundToInt()) }
+            // absoluteOffset, NOT offset, and the difference is the whole of RTL support here.
+            //
+            // `left` comes from TextLayoutResult.getBoundingBox, which returns where bidi actually
+            // put the glyph — an absolute visual coordinate that already accounts for direction.
+            // Modifier.offset mirrors its x under RTL, so handing it a coordinate that is already
+            // resolved mirrors it a second time and moves the overlay off the characters it
+            // represents. absoluteOffset is the variant that leaves an absolute value alone.
+            //
+            // This is the opposite of the rule everywhere else in the file tree — start/end over
+            // left/right — and it is opposite for a reason: those describe intent, this reports a
+            // measurement. Pinned by RtlLayoutTest.theTaskBoxTracksItsGlyphsInBothDirections.
+            .absoluteOffset { IntOffset(left.roundToInt(), top.roundToInt()) }
             .size(with(density) { width.toDp() }, with(density) { height.toDp() })
             // No background: the box's glyphs are what the user sees, painted by MarkdownStyles as
             // TASK_BOX_OPEN / TASK_BOX_DONE. A tint here would be a fourth painted pair.

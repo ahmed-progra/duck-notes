@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
@@ -192,7 +193,19 @@ fun MarkdownEditorScreen(
                     }
                 }
 
-                Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                // AbsoluteAlignment.TopLeft, not the default TopStart, and it is half of RTL support
+                // for the overlays. Both TaskBoxOverlay and its offsets are expressed in the text
+                // layout's own absolute pixel space, where x grows rightward whatever the reading
+                // direction. Box's default TopStart resolves to the RIGHT edge under RTL, so the
+                // overlay was being based at the right edge and then offset rightward again by the
+                // glyph's x: measured at 673.9dp against a field ending at 363.4dp, i.e. off the
+                // device. Basing them at the absolute left makes `absoluteOffset` mean what it says.
+                //
+                // The text field fills this Box, so its own placement is unaffected either way.
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    contentAlignment = AbsoluteAlignment.TopLeft,
+                ) {
                     BasicTextField(
                         state = state,
                         modifier = Modifier.fillMaxSize(),

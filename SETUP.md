@@ -258,9 +258,9 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 ## Build environment traps on this machine
 
-Nine things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
+Ten things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
 audit-fix pass, the next two in the 8c-b spike, the eighth in the 8c-b re-verify pass, the ninth in
-the 8c-c-fix pass. None is a project defect; all are easy to hit again.
+the 8c-c-fix pass, the tenth in the 8d-a pass. None is a project defect; all are easy to hit again.
 
 **1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
 absolute paths — these two lines are the ones to copy:
@@ -435,3 +435,44 @@ result had to be written into the commit as unexplained flakiness rather than di
 conclusion the log almost certainly contained and the pipe threw away.
 
 The same rule covers `logcat` and `dumpsys`. Redirect first, ask questions second.
+
+**10. Gate every device install on the build's own exit code. Never trust `adb install`'s "Success".**
+`adb install` prints `Success` when the APK file exists and installs cleanly — it says **nothing** about
+whether that file was just rebuilt from the source in front of you or is a stale artifact left by a
+build that failed a second earlier. If the `assembleDebug` / `assembleDebugAndroidTest` step ahead of
+it failed and the install runs anyway, the runner exercises the *previous* APK and the suite reports
+against bytes your edit never reached.
+
+Capture the exit code **before** any filter, and make the install unreachable on a non-zero build:
+
+```powershell
+$build = & $G -p $R assembleDebugAndroidTest; $code = $LASTEXITCODE
+"gradle exit=$code"; ($build | Select-String -Pattern "^e:") -join "`n"
+if ($code -ne 0) { "BUILD FAILED"; return }        # the gate — install cannot run on a red build
+& $ADB install -r -t "$R\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk" | Select-Object -Last 1
+```
+
+Two mistakes compound here, and both were live at once. `& $G … | Select-String … | Select-Object -First N`
+runs the build *inside* a pipeline, and `Select-Object -First N` tears that pipeline down the moment it
+has N lines — which both hides the trailing `BUILD SUCCESSFUL` / `BUILD FAILED` line **and** corrupts
+`$LASTEXITCODE`, because you then read the exit of the terminated pipe, not of gradle. Assign the build
+output to a variable first (`$build = & $G …`) so gradle runs to completion and `$LASTEXITCODE` is its
+real code; filter `$build` afterwards, when the exit is already banked.
+
+**This is strictly worse than trap 9, because it reports green.** Trap 9 *loses* the failure names — you
+know something is wrong, you just can't see what. A stale-bytes install is affirmative: the guard runs,
+passes, and prints `OK`, and nothing on screen looks like a lie you'd catch by looking harder. It is the
+silent form of the global contract's *"a plant is code, and can be wrong in the direction that fakes a
+red"* — except here it faked a **green**.
+
+**What it cost.** In the 8d-a pass, Plant A restored a pre-fix defect but also changed an import, so it
+**did not compile**. The install ran unconditionally on the previous debug APK, `Select-Object -First N`
+had already zeroed the exit code, and `RtlLayoutTest` reported `OK (2 tests)` — a pass certified against
+a binary that did not contain the plant. A plant exists to prove the guard *can* go red; this one proved
+only that the harness would call stale bytes green. Every install from that point gates on
+`$LASTEXITCODE`. The same ungated `assembleDebug | Select-Object -First 3` + unconditional-install shape
+ran throughout the 8c-c-fix plant cycles too and did **not** bite there — but only because a containment
+plant is expected to go *red*, and its red carried the guard's freshly-computed geometry (at the 48dp
+gutter, `the chevron spans -24.0.dp..24.0.dp, the text starts at 48.0.dp`), a signature stale bytes
+cannot forge. The hazard was equally present; it simply had nothing green to hide behind until a plant
+whose correct result was a pass.
