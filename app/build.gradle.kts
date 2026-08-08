@@ -68,6 +68,9 @@ dependencies {
     // Disclosure chevrons for the sidebar tag tree. material3 pulls this at runtime only.
     implementation(libs.androidx.material.icons.core)
 
+    // Attachment strip thumbnails. Local files only — no coil-network artifact needed.
+    implementation(libs.coil.compose)
+
     implementation(libs.hilt.android)
     // hiltViewModel() only. No NavHost — Phase 6 derives panes from state, not from routes.
     implementation(libs.hilt.navigation.compose)

@@ -11,12 +11,17 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.data.local.DuckDatabase
 import app.duck.notes.data.local.DuckDatabaseCallback
 import app.duck.notes.data.local.entity.NoteEntity
+import app.duck.notes.data.repository.AttachmentRepositoryImpl
+import app.duck.notes.data.repository.AttachmentStorageImpl
 import app.duck.notes.data.repository.NoteRepositoryImpl
 import app.duck.notes.data.repository.TagRepositoryImpl
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.AttachImage
+import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
 import app.duck.notes.domain.usecase.DeriveTitle
+import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
@@ -89,6 +94,8 @@ class AutosaveDurabilityTest {
         val notes = NoteRepositoryImpl(db.noteDao())
         val tags = TagRepositoryImpl(db, db.tagDao(), db.noteDao(), DeriveTitle(), parseTags)
         val saveNote = SaveNote(notes, DeriveTitle(), parseTags, Clock { System.currentTimeMillis() })
+        val attachments = AttachmentRepositoryImpl(db.attachmentDao())
+        val attachStorage = AttachmentStorageImpl(ApplicationProvider.getApplicationContext())
         return DuckShellViewModel(
             handle = handle,
             observeNotes = ObserveNotes(notes),
@@ -103,6 +110,9 @@ class AutosaveDurabilityTest {
             setTagIcon = SetTagIcon(tags),
             addTagToNote = AddTagToNote(notes, parseTags, saveNote),
             undoTagChange = UndoTagChange(tags),
+            attachImage = AttachImage(attachStorage, attachments, notes, saveNote, Clock { System.currentTimeMillis() }),
+            deleteAttachment = DeleteAttachment(attachStorage, attachments, notes, saveNote),
+            observeAttachments = ObserveAttachments(attachments),
             clock = Clock { System.currentTimeMillis() },
         )
     }

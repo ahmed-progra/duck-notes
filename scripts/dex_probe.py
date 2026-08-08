@@ -42,6 +42,16 @@ MUST_BE_PRESENT = [
     "SectionFolding",
     "SectionFoldOverlay",
     "FoldSection",
+    # 8d-b attachments. The strip, its use cases, DAO and data-layer impls — each a distinct class
+    # name, so a rename or a stripped feature shows up as one MISSING line. isMinifyEnabled=false in
+    # release keeps every name, so a present class is a present string.
+    "AttachmentStrip",
+    "AttachImage",
+    "DeleteAttachment",
+    "ObserveAttachments",
+    "AttachmentDao",
+    "AttachmentRepositoryImpl",
+    "AttachmentStorageImpl",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

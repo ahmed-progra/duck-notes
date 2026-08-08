@@ -1,6 +1,9 @@
 package app.duck.notes.presentation.shell
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -39,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -118,6 +122,8 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
             onDeleteTag = viewModel::onDeleteTag,
             onSetTagIcon = viewModel::onSetTagIcon,
             onAddTagToNote = viewModel::onAddTagToNote,
+            onAttachImage = viewModel::onAttachImage,
+            onDeleteAttachment = viewModel::onDeleteAttachment,
             onUndo = viewModel::onUndo,
             onUndoShown = viewModel::onUndoShown,
             onToggleSection = viewModel::onToggleSection,
@@ -213,6 +219,20 @@ fun DuckShell(
             if (state.selectedNoteId == null) {
                 DuckEmptyState(stringResource(R.string.shell_no_note_selected), m)
             } else {
+                // The system photo picker. Its content:// grant is revocable and process-scoped, which
+                // is exactly why AttachImage copies the bytes into filesDir rather than storing the uri
+                // — the copy runs in the same session, moments after this callback, while the grant
+                // still holds. The mime is read here because the picker's uri is the only place it is
+                // authoritative; a null type (rare) falls back to a generic image type.
+                val context = LocalContext.current
+                val picker = rememberLauncherForActivityResult(
+                    ActivityResultContracts.PickVisualMedia(),
+                ) { uri ->
+                    if (uri != null) {
+                        val mime = context.contentResolver.getType(uri) ?: "image/*"
+                        actions.onAttachImage(uri.toString(), mime)
+                    }
+                }
                 Column(m) {
                     if (state.selectedNoteTags.isNotEmpty()) {
                         EditorTagRow(
@@ -224,6 +244,13 @@ fun DuckShell(
                         state = buffer,
                         collapsedSections = state.collapsedSections,
                         onToggleSection = actions.onToggleSection,
+                        attachments = state.selectedNoteAttachments,
+                        onAddImage = {
+                            picker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                        onDeleteAttachment = { actions.onDeleteAttachment(it.id) },
                     )
                 }
             }

@@ -10,13 +10,17 @@ import androidx.lifecycle.viewModelScope
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.markdown.MarkdownScanner
 import app.duck.notes.domain.markdown.TagScanner
+import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.model.BodySnapshot
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
 import app.duck.notes.domain.usecase.AddTagResult
 import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.AttachImage
+import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
+import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
@@ -93,6 +97,9 @@ class DuckShellViewModel @Inject constructor(
     private val setTagIcon: SetTagIcon,
     private val addTagToNote: AddTagToNote,
     private val undoTagChange: UndoTagChange,
+    private val attachImage: AttachImage,
+    private val deleteAttachment: DeleteAttachment,
+    observeAttachments: ObserveAttachments,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -161,6 +168,16 @@ class DuckShellViewModel @Inject constructor(
         else observeNote(id).map { note -> note?.let { Selection(id, it.body) } ?: Selection() }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), Selection())
 
+    /**
+     * The open note's attachments, followed by id like [selection] is. A cold `Flow`, not a shared
+     * `StateFlow`: it has one consumer ([state]'s `combine`), so `WhileSubscribed` on the outer state
+     * is the only sharing it needs, and `flatMapLatest` cancels the old note's Room query on a switch.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val selectedAttachments: Flow<List<Attachment>> = selectedId.flatMapLatest { id ->
+        if (id == null) flowOf(emptyList()) else observeAttachments(id)
+    }
+
     /** Three flows bundled into one, because `combine` tops out at five. */
     private val tagState: Flow<TagState> = combine(tree, counts, undo, ::TagState)
 
@@ -170,7 +187,7 @@ class DuckShellViewModel @Inject constructor(
         }
 
     val state: StateFlow<ShellUiState> =
-        combine(editorState, tagState) { editor, tg ->
+        combine(editorState, tagState, selectedAttachments) { editor, tg, attachments ->
             ShellUiState(
                 filter = editor.filter,
                 notes = editor.notes,
@@ -181,6 +198,7 @@ class DuckShellViewModel @Inject constructor(
                 // Derived from the body already in hand, not queried. The chip row and the
                 // note_tags rows therefore cannot disagree — they come from one scanner.
                 selectedNoteTags = parseTags(editor.selection.body),
+                selectedNoteAttachments = attachments,
                 allTagPaths = tg.tree.tagPaths(),
                 collapsedSections = editor.collapsedSections,
                 undo = tg.undo,
@@ -544,6 +562,46 @@ class DuckShellViewModel @Inject constructor(
                 pendingUndo = null
                 undo.value = TagPrompt(TagPrompt.Kind.AddFailed, name)
             }
+        }
+    }
+
+    // --- attachments ---------------------------------------------------------
+
+    /**
+     * Copies a picked image into the note and appends its `![](attachment:id)` reference.
+     *
+     * The exact shape of [onAddTagToNote], for the exact reason: `AttachImage` appends through
+     * `SaveNote`, so the reference reaches the buffer only because [flush] leaves it clean and the
+     * sync collector then **adopts** the appended body. There is no matching [rewriteBuffer] because
+     * `MarkdownFormat.appendImage` — the one home for the `![` literal — lives inside the use case,
+     * and re-applying it here would be a second implementation of image syntax. Same ceiling as the
+     * tag append: a keystroke landing between the flush and the adoption shadows it.
+     *
+     * Best-effort, not atomic: the file is copied, then the row inserted, then the body rewritten, and
+     * a crash between leaves a benign partial state (a stored file with no reference, GC'd next scan).
+     * `AttachImage` returns null if the note is gone or the copy fails; nothing here needs the result.
+     */
+    fun onAttachImage(sourceUri: String, mime: String) {
+        val noteId = selectedId.value ?: return
+        viewModelScope.launch {
+            flush()
+            attachImage(noteId, sourceUri, mime)
+        }
+    }
+
+    /**
+     * Removes an attachment: file, row, and body reference. The shape of [onDeleteTag].
+     *
+     * `DeleteAttachment` deletes the file and row and rewrites Room via `SaveNote`; the matching
+     * [rewriteBuffer] applies the same `removeImageRef` to the live buffer so unsaved typing keeps the
+     * reference from being resurrected by the next autosave. No undo snapshot — deletion is
+     * best-effort, decided for the phase.
+     */
+    fun onDeleteAttachment(id: String) {
+        viewModelScope.launch {
+            flush()
+            deleteAttachment(id)
+            rewriteBuffer { MarkdownScanner.removeImageRef(it, id) }
         }
     }
 

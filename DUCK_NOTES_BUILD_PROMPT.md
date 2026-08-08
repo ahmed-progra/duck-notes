@@ -1643,7 +1643,117 @@ full instrumented suite is **`OK (64 tests)`**, up from 62.
   `16.4 × 26.3dp` note) retyped by hand and afterwards verified byte-for-byte against `180d7e5`
   (`×` = `U+00D7`, `c3 97`).
 
-**Phase 8d-a is closed. The rest of 8d (images, paste, focus mode) is unstarted.**
+**Phase 8d-a is closed.**
+
+---
+
+## PHASE 8d-b — IMAGES (ATTACHMENT STRIP)
+
+**Goal:** attach images to a note. **A strip of thumbnails under the editor, not bitmaps spliced into
+the rendered markdown.** The body carries a plain `![alt](attachment:<id>)` reference; the strip is the
+*view* of the files those references point at. Tap the leading **+** tile to pick from the system photo
+picker, tap a thumbnail to zoom, long-press to delete.
+
+**Dependency order built: DAO → repository/storage ports → use cases → Coil → strip → shell wiring.**
+Room `attachments` table and `Attachment` model already existed (empty since a prior phase), so **no
+migration** — the DB stayed at version 1.
+
+**Three deviations, all recorded here rather than left to be discovered.**
+
+**1. Strip, not inline rendering.** Inline would mean an `InlineTextContent` keyed off a
+`TokenKind.IMAGE` span, sized from the decoded bitmap, re-measured inside the same
+`MarkdownOutputTransformation` the caret, task overlays and fold overlays already contend over — the
+one surface whose 10k-word cost is still unevidenced (8a). The strip keeps images entirely out of that
+path. The reference in the body is the durable/export half; the strip is the rendered half. Same
+split-the-concern move as the tag chip row in Phase 7.
+
+**2. The placeholder is a bordered `surfaceElevated` tile, not a muted glyph.** The obvious choice —
+a placeholder icon in `proseMuted` (the token whose KDoc names "image placeholders") — is *heavier*
+than the 64dp thumbnail it stands in for, and `chromeMuted`, the lighter grey, is barred from carrying
+anything readable at all. So the empty tile owes neither and uses neither: a `surfaceElevated` fill
+under a `divider` hairline, which is what shows while Coil decodes or if the file is gone. `duckPairs`
+stays 23, distinguishability stays 3 — **no new colour pairing**, which is the whole reason for the
+choice. Flagged because it contradicts a literal reading of `proseMuted`'s own doc.
+
+**3. Coil pinned to 3.2.0, not the current 3.5.0.** Coil 3.3.0+ set `CheckAarMetadata` to require
+`compileSdk 36`; Duck is on 35 this phase, and the build fails at `CheckAarMetadataWorkAction` with
+*"requires … compile against version 36 or later"*. 3.2.0 predates that bump and its `AsyncImage(File)`
+API is identical. `coil-compose` only — no `coil-network`, since local files need no fetcher. Recorded
+in `libs.versions.toml` beside the pin.
+
+**Atomicity: best-effort, decided on purpose.** `AttachImage` does store-file → insert-row →
+append-reference, **not** one transaction. The order makes the only reachable mid-kill partial state
+benign: a stored file with no row (a few KB, the same category as the accepted hard-delete orphan), or
+a row with no body reference (usable in the strip, merely absent from exported markdown). Neither
+corrupts a note. A crash-safe version is one Room transaction over the row and the note-body write —
+deferred to Phase 14's orphan sweep, which already owns hard-delete leftovers. `DeleteAttachment`
+removes all three (file, row, reference); a missing row is a no-op, matching `DeleteNote`'s idempotence.
+
+**The picker grant, and why the copy exists.** `PickVisualMedia` returns a **revocable, process-scoped**
+`content://` read grant. `AttachmentStorageImpl` copies the bytes into `filesDir/attachments/<id>` and
+records that path, so the attachment outlives the grant. The copy runs synchronously moments after the
+pick, well inside the grant's lifetime.
+
+**RTL: the strip mirrors for free, and that is now evidence.** A `LazyRow` lays items start-to-end per
+`LocalLayoutDirection`, so the **+** tile (first item) leads — left in LTR, right in RTL — with no
+production code doing anything. `RtlLayoutTest.theAttachmentStripMirrorsWithLayoutDirection` measures
+it: LTR add-tile `right ≤` first-thumb `left`; RTL add-tile `left ≥` first-thumb `right`. Its plant
+(`reverseLayout = true`) fails **both** halves with real geometry (LTR add at `80..144` vs thumb
+`8..72`; RTL add `267..331` vs thumb `339..403`), which is what distinguishes a true red from a stale
+one.
+
+**Six plants, each run red then reverted.**
+
+1. `MarkdownSyntaxSourceTest` — `SYNTAX += "!["`. Plant: a `"![]("` literal in `AttachmentStrip`
+   (swapped for the **+** glyph) → `noSyntaxLiteralAppearsAboveTheScanner` red. The one home for `![`
+   is `MarkdownScanner.imageRef`, round-tripped by `MarkdownFormatTest`.
+2. `AttachImageTest` — strip-vs-body agreement. Plant: `AttachImage` returns `note.body` instead of
+   `appendImage(...)` → both agreement assertions red (the id is in the row but not the body).
+3. `DeleteAttachmentTest` — no orphan. Plant: `DeleteAttachment` skips `storage.delete(row.uri)` →
+   the file-orphan assertion red.
+4. `AttachmentDurabilityTest` (instrumented) — the real copy. Plant: `AttachmentStorageImpl` returns
+   `sourceUri.path` instead of the copy's path → *"stored under filesDir/attachments"* red. **Honest
+   scope:** it proves copy-independence (delete the source, the copy survives byte-for-byte), **not**
+   `content://` grant revocation — no instrumented test can drive the real picker grant, and calling
+   the file-delete "grant revocation" would be a *misdirected* control. Stated in the test's KDoc.
+5. `dex_probe.py` — `MUST_BE_PRESENT` gains the seven new classes. See its own subsection below; the
+   plant taught something.
+6. `RtlLayoutTest` strip mirror — described above.
+
+### The dex-probe plant taught two things, both process failures the fifth-plant lesson predicts
+
+**A class-only rename did not turn `MUST_BE_PRESENT` red.** Renaming `AttachmentRepositoryImpl` →
+`AttachmentRepoImpl` (class + DI binding) left the probe reporting it **present, count 6** — a false
+green. The class rename *did* take (`AttachmentRepoImpl` appeared 14× in the dex), but all 6 hits of
+the old name were the **source-file name `AttachmentRepositoryImpl.kt`** embedded in the dex debug info
+(`SourceFile` / Kotlin `SMAP`). `blob.count("AttachmentRepositoryImpl")` is a substring match, and the
+filename contains the string. **So `MUST_BE_PRESENT` really tests "a class of this name OR a `.kt` file
+of this name compiled into the dex."** For every entry whose class name equals its filename — which is
+all of them — a positive control passes as long as the *file* is in the build. The valid plant had to
+rename the **file** too; then the string vanished and the probe went `MISSING … 0`, exit 1. This is not
+a defect introduced this phase — it is a property the probe always had — but no prior plant had renamed
+a class without also deleting its file, so it had never surfaced.
+
+**`org.gradle.caching=true` can serve a stale dex to the probe.** During the same investigation, a
+plain `assembleRelease` — and even `clean assembleRelease` — returned a byte-identical dex from the
+build cache in 6 s. The probe read whatever dex the cache handed back. **Run the probe against a
+`--no-build-cache` (or `--rerun-tasks`) release build**, or it can certify bytes your edit never
+reached — the exact shape of trap 10, one layer down. Both findings are written into SETUP.md as trap 11.
+
+### Verification
+
+- **JVM unit:** `452 tests, 0 failures` across 41 classes (was ~440). New: `AttachImageTest`,
+  `DeleteAttachmentTest`, `MarkdownFormatTest` image round-trip, `FakeAttachmentRepository`,
+  `FakeAttachmentStorage`.
+- **Instrumented:** full suite `OK (75 tests)` (was 64). New: `AttachmentDaoTest` (ordering, scoping,
+  FK cascade + its positive control), `AttachmentStripUiTest` (add-tile click, thumbnail long-press,
+  both-shown control), `AttachmentDurabilityTest`, `RtlLayoutTest` strip mirror.
+- **Lint:** 0 errors; the one new-code warning (`UseKtx` on `Uri.parse`) fixed via `String.toUri`.
+  Remaining 40 are pre-existing project-wide (`GradleDependency`, `NewerVersionAvailable`, …).
+- **Release:** `assembleRelease --no-build-cache` green; `dex_probe.py` **PASS** — 15 positive
+  controls present, 4 debug-only classes absent, no bear references outside `bearingAccuracy`.
+
+**Phase 8d-b is closed. The rest of 8d (paste, focus mode) is unstarted.**
 
 ---
 

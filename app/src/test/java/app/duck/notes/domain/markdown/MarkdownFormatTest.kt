@@ -75,6 +75,33 @@ class MarkdownFormatTest {
         }
     }
 
+    // --- images (8d-b) -------------------------------------------------------
+
+    /**
+     * The image round trip, the analogue of [everyMarkerScansBackAsItsOwnKind] for attachments:
+     * `appendImage` writes exactly what `attachmentIdsIn` reads back. This is what lets
+     * `MarkdownSyntaxSourceTest` forbid the `![` literal everywhere above `domain/markdown` — the one
+     * home is `MarkdownScanner.imageRef`, and this proves the scanner recognises its own output.
+     */
+    @Test
+    fun anAppendedImageScansBackAsOneAttachment() {
+        val body = MarkdownFormat.appendImage("buy milk", "abc-123", alt = "photo")
+        assertEquals("buy milk\n![photo](attachment:abc-123)", body)
+        assertEquals(setOf("abc-123"), MarkdownScanner.attachmentIdsIn(body))
+    }
+
+    @Test
+    fun appendImageOntoAnEmptyBodyHasNoLeadingNewline() {
+        assertEquals("![](attachment:x)", MarkdownFormat.appendImage("", "x"))
+    }
+
+    /** Removal is the mirror of the append: the whole line and its adjoining newline go together. */
+    @Test
+    fun removingTheAppendedImageLeavesNoBlankLine() {
+        val body = MarkdownFormat.appendImage("buy milk", "abc-123")
+        assertEquals("buy milk", MarkdownScanner.removeImageRef(body, "abc-123"))
+    }
+
     // --- inline: wrap, unwrap, caret -----------------------------------------
 
     @Test

@@ -13,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.core.theme.DuckTheme
+import app.duck.notes.domain.model.Attachment
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
 import org.junit.Assert.assertEquals
 import org.junit.Rule
@@ -127,6 +128,53 @@ class RtlLayoutTest {
         )
     }
 
+    /**
+     * The attachment strip is a `LazyRow` whose first item is the add tile, so it must lead — sit at
+     * the left in LTR and the right in RTL, with the thumbnails trailing it either way.
+     *
+     * Expected to pass without a production change: `LazyRow` lays items start-to-end per
+     * `LocalLayoutDirection`, so the add tile moves to the trailing... no — to the *leading* edge,
+     * which is the right under RTL, on its own. `AttachmentStrip` adds nothing to make that happen.
+     * That is a claim about Compose, and — like the fold gutter above — this is what turns it into
+     * evidence rather than an assumption. The plant that proves it can fail is a hardcoded
+     * `LocalLayoutDirection provides Ltr` inside the strip.
+     *
+     * Its own `setContent`, because the shared [editor] helper passes no attachments. The thumbnail's
+     * uri is bogus and never loads; the tile is `.size`, so it has bounds regardless.
+     */
+    @Test
+    fun theAttachmentStripMirrorsWithLayoutDirection() {
+        rule.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                DuckTheme {
+                    MarkdownEditorScreen(
+                        state = TextFieldState(NOTE),
+                        attachments = listOf(SAMPLE_ATTACHMENT),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        val ltrAdd = rule.onNodeWithContentDescription(ADD_IMAGE).getUnclippedBoundsInRoot()
+        val ltrThumb = rule.onNodeWithContentDescription(ATTACHMENT).getUnclippedBoundsInRoot()
+        println("DUCK rtl: LTR add=$ltrAdd thumb=$ltrThumb")
+
+        flipToRtl()
+        val rtlAdd = rule.onNodeWithContentDescription(ADD_IMAGE).getUnclippedBoundsInRoot()
+        val rtlThumb = rule.onNodeWithContentDescription(ATTACHMENT).getUnclippedBoundsInRoot()
+        println("DUCK rtl: RTL add=$rtlAdd thumb=$rtlThumb")
+
+        assertEquals(
+            "the add tile must lead the strip in both directions: left of the first thumbnail in LTR " +
+                "($ltrAdd vs $ltrThumb), right of it in RTL ($rtlAdd vs $rtlThumb). LazyRow lays items " +
+                "start-to-end per LocalLayoutDirection; this is what proves it rather than assuming it.",
+            AddBeforeThumb(true) to AddAfterThumb(true),
+            AddBeforeThumb(ltrAdd.right <= ltrThumb.left) to
+                AddAfterThumb(rtlAdd.left >= rtlThumb.right),
+        )
+    }
+
     /** Named wrappers so failures read `GutterAfterText(false)`, not a bare `false`. */
     private data class GutterBeforeText(val value: Boolean)
 
@@ -136,12 +184,30 @@ class RtlLayoutTest {
 
     private data class InsideRtl(val value: Boolean)
 
+    private data class AddBeforeThumb(val value: Boolean)
+
+    private data class AddAfterThumb(val value: Boolean)
+
     private companion object {
         /** "Hide <title> section" — the collapse label, with the Arabic heading as its argument. */
         const val HIDE_SECTION = "Hide ملاحظات section"
 
         /** The task's own text becomes its contentDescription. */
         const val TASK = "حليب"
+
+        /** The strip's two contentDescriptions, from `strings.xml`. */
+        const val ADD_IMAGE = "Add image"
+
+        const val ATTACHMENT = "Attachment"
+
+        /** Bogus uri on purpose — the tile is fixed-size, so it lays out without a bitmap. */
+        val SAMPLE_ATTACHMENT = Attachment(
+            id = "a1",
+            noteId = "n1",
+            uri = "/nope/a1",
+            mime = "image/png",
+            createdAt = 0L,
+        )
 
         /**
          * Arabic, with a foldable section (a heading that has a body) and a task line.

@@ -117,6 +117,97 @@ object MarkdownScanner {
         else -> null
     }
 
+    // --- attachments (8d-b) -------------------------------------------------
+
+    /**
+     * Marks a Duck-owned attachment inside an image reference: `![alt](attachment:<id>)`. A
+     * `content://` or `https://` image is not one and is left alone by [attachmentIdsIn].
+     */
+    const val ATTACHMENT_SCHEME = "attachment:"
+
+    /**
+     * The markdown reference for attachment [id] — **the one place `![` and `](` are written.**
+     *
+     * Round-tripped by `MarkdownFormatTest`: scanning this yields exactly one [TokenKind.IMAGE] whose
+     * destination [attachmentIdsIn] reads back as [id]. That round trip is what lets
+     * `MarkdownSyntaxSourceTest` forbid the literal everywhere above `domain/markdown`.
+     */
+    fun imageRef(id: String, alt: String = ""): String = "![$alt](" + ATTACHMENT_SCHEME + id + ")"
+
+    /**
+     * Every attachment id referenced by an `![…](attachment:<id>)` in [body], in first-seen order.
+     *
+     * Walks [scanLine], so it is fence-correct for free — a reference inside a fenced block scans as
+     * `FENCE_BODY` and never counts — and a non-`attachment:` image falls out on the scheme. The single
+     * parser the strip-vs-body agreement rests on; a second regex up in `presentation/` is exactly what
+     * `MarkdownSyntaxSourceTest` bans.
+     */
+    fun attachmentIdsIn(body: String): Set<String> {
+        val ids = LinkedHashSet<String>()
+        forEachImage(body) { dest, _, _ ->
+            if (dest.startsWith(ATTACHMENT_SCHEME)) ids += dest.removePrefix(ATTACHMENT_SCHEME)
+        }
+        return ids
+    }
+
+    /**
+     * [body] without the reference to attachment [id] — the mirror of the append, used by
+     * `DeleteAttachment` and the editor buffer alike.
+     *
+     * When the reference is the whole line — the shape the append produces — the line and one adjoining
+     * newline go with it, so a delete leaves no blank line behind. Otherwise only the token span is
+     * removed. An unmatched id returns [body] unchanged.
+     */
+    fun removeImageRef(body: String, id: String): String {
+        val target = ATTACHMENT_SCHEME + id
+        var ref: IntRange? = null
+        var line: IntRange? = null
+        forEachImage(body) { dest, token, lineRange ->
+            if (ref == null && dest == target) {
+                ref = token.start until token.end
+                line = lineRange
+            }
+        }
+        val span = ref ?: return body
+        val ls = line!!.first
+        val le = line!!.last
+        val wholeLine = body.substring(ls, span.first).isBlank() &&
+            body.substring(span.last + 1, le + 1).isBlank()
+        return if (wholeLine) {
+            val from = if (ls > 0) ls - 1 else ls
+            val to = if (ls > 0) le + 1 else minOf(le + 2, body.length)
+            body.removeRange(from, to)
+        } else {
+            body.removeRange(span.first, span.last + 1)
+        }
+    }
+
+    /** Walks every IMAGE token in [body], with its destination string, the token, and its line's range. */
+    private inline fun forEachImage(
+        body: String,
+        action: (dest: String, token: Token, line: IntRange) -> Unit,
+    ) {
+        var carry = LineCarry()
+        var base = 0
+        for (line in body.lineSequence()) {
+            val (tokens, next) = scanLine(line, base, carry)
+            for (t in tokens) {
+                if (t.kind != TokenKind.IMAGE) continue
+                destOf(body, t)?.let { action(it, t, base until base + line.length) }
+            }
+            carry = next
+            base += line.length + 1
+        }
+    }
+
+    /** The destination of an IMAGE/LINK token — the text between `](` and `)`. */
+    private fun destOf(body: String, token: Token): String? {
+        val tail = token.markers.getOrNull(1) ?: return null // `](dest)`
+        val open = tail.first + 2 // past `](`
+        val close = tail.last // at `)`
+        return if (open <= close && close <= body.length) body.substring(open, close) else null
+    }
+
     /** Scans [line], which starts at absolute [base], under [carry]. Returns its tokens and the next carry. */
     fun scanLine(line: String, base: Int, carry: LineCarry): Pair<List<Token>, LineCarry> {
         val tokens = mutableListOf<Token>()

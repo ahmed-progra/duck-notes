@@ -144,8 +144,13 @@ class MarkdownSyntaxSourceTest {
          *
          * Block prefixes carry their trailing space, which is what keeps them from matching ordinary
          * prose — `"- "` is a bullet marker, while a bare `"-"` is a hyphen and matches everything.
+         *
+         * `"!["` joined in 8d-b: the attachment reference `![alt](attachment:id)` is written in exactly
+         * one place, `MarkdownScanner.imageRef`, and `MarkdownFormatTest` round-trips it through the
+         * parser. A `"!["` in a composable or repository is the same second implementation `"**"` is.
          */
-        val SYNTAX = listOf("**", "__", "~~", "==", "`", "[[", "]]", "# ", "> ", "- ", "[ ]", "[x]")
+        val SYNTAX =
+            listOf("**", "__", "~~", "==", "`", "[[", "]]", "# ", "> ", "- ", "[ ]", "[x]", "![")
 
         /**
          * Only **short** literals are offenders, and that is the whole exemption mechanism.

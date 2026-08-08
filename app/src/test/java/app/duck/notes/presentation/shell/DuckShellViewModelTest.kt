@@ -2,13 +2,18 @@ package app.duck.notes.presentation.shell
 
 import androidx.lifecycle.SavedStateHandle
 import app.duck.notes.domain.Clock
+import app.duck.notes.domain.fake.FakeAttachmentRepository
+import app.duck.notes.domain.fake.FakeAttachmentStorage
 import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FakeTagRepository
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.Tag
 import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.AttachImage
+import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
 import app.duck.notes.domain.usecase.DeriveTitle
+import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
@@ -49,6 +54,8 @@ class DuckShellViewModelTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
     private val notes = FakeNoteRepository()
+    private val attachments = FakeAttachmentRepository()
+    private val attachStorage = FakeAttachmentStorage()
     private val tags = FakeTagRepository(
         listOf(
             Tag(id = "work", name = "work"),
@@ -101,6 +108,15 @@ class DuckShellViewModelTest {
         setTagIcon = SetTagIcon(tags),
         addTagToNote = AddTagToNote(notes, parseTags, SaveNote(notes, DeriveTitle(), parseTags, Clock { now })),
         undoTagChange = UndoTagChange(tags),
+        attachImage = AttachImage(
+            attachStorage, attachments, notes,
+            SaveNote(notes, DeriveTitle(), parseTags, Clock { now }), Clock { now },
+        ),
+        deleteAttachment = DeleteAttachment(
+            attachStorage, attachments, notes,
+            SaveNote(notes, DeriveTitle(), parseTags, Clock { now }),
+        ),
+        observeAttachments = ObserveAttachments(attachments),
         clock = Clock { now },
     )
 

@@ -32,6 +32,7 @@ import app.duck.notes.core.markdown.MarkdownStyles
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.domain.markdown.MarkdownFormat
 import app.duck.notes.domain.markdown.MarkdownTextCache
+import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.markdown.SectionFolding
 import app.duck.notes.domain.markdown.SpanPlanner
 
@@ -77,6 +78,9 @@ fun MarkdownEditorScreen(
     modifier: Modifier = Modifier,
     collapsedSections: Set<String> = emptySet(),
     onToggleSection: (String) -> Unit = {},
+    attachments: List<Attachment> = emptyList(),
+    onAddImage: () -> Unit = {},
+    onDeleteAttachment: (Attachment) -> Unit = {},
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -131,7 +135,18 @@ fun MarkdownEditorScreen(
     Scaffold(
         // imePadding, so the bar rides above the keyboard instead of behind it.
         modifier = modifier.fillMaxSize().imePadding(),
-        bottomBar = { FormatToolbar(state = state, enabled = writable) },
+        // The strip sits above the format toolbar: both are editor chrome over the keyboard, and the
+        // strip is always present so the leading add tile is the entry point to the first image.
+        bottomBar = {
+            Column {
+                AttachmentStrip(
+                    attachments = attachments,
+                    onAddImage = onAddImage,
+                    onDeleteAttachment = onDeleteAttachment,
+                )
+                FormatToolbar(state = state, enabled = writable)
+            }
+        },
     ) { innerPadding ->
         Column(
             modifier = Modifier

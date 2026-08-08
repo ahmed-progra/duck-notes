@@ -96,6 +96,22 @@ object MarkdownFormat {
         }
     }
 
+    /**
+     * Appends an attachment reference on its own line at the end of [body] — the entry `AttachImage`
+     * routes through so no caller spells `![` out loud. The literal comes from [MarkdownScanner.imageRef];
+     * this only decides *where* it lands.
+     *
+     * Its own line, and `trimEnd` first, for the same reasons as `AddTagToNote`'s tag append: it never
+     * disturbs prose the user is reading, and it does not accumulate ragged blank lines on repeated adds.
+     * Since the strip renders from rows rather than inline, the reference's position is durable-copy
+     * bookkeeping, not layout — the end of the body is the one place that needs no caret.
+     */
+    fun appendImage(body: String, id: String, alt: String = ""): String {
+        val ref = MarkdownScanner.imageRef(id, alt)
+        val trimmed = body.trimEnd()
+        return if (trimmed.isEmpty()) ref else "$trimmed\n$ref"
+    }
+
     // --- inline: wrap and unwrap --------------------------------------------
 
     /**

@@ -11,6 +11,10 @@ hiltNavigationCompose = "1.2.0"
 composeBom = "2025.10.01"
 room = "2.7.2"
 androidxSqlite = "2.5.2"
+# Coil 3: coil-core drops the network fetcher, so loading local Files needs no network artifact.
+# Pinned to 3.2.0, not the newer 3.5.0: 3.3.0+ require compileSdk 36 and Duck stays on 35 this phase.
+# The AsyncImage(File) API is identical across 3.x.
+coil = "3.2.0"
 coroutines = "1.9.0"
 commonmark = "0.29.0"
 junit = "4.13.2"
@@ -42,6 +46,8 @@ room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
 androidx-sqlite-bundled = { group = "androidx.sqlite", name = "sqlite-bundled", version.ref = "androidxSqlite" }
+# Local-only image loading for the attachment strip. AsyncImage takes a java.io.File directly.
+coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
 commonmark = { group = "org.commonmark", name = "commonmark", version.ref = "commonmark" }
 commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-gfm-tables", version.ref = "commonmark" }
 commonmark-ext-gfm-strikethrough = { group = "org.commonmark", name = "commonmark-ext-gfm-strikethrough", version.ref = "commonmark" }

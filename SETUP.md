@@ -476,3 +476,28 @@ plant is expected to go *red*, and its red carried the guard's freshly-computed 
 gutter, `the chevron spans -24.0.dp..24.0.dp, the text starts at 48.0.dp`), a signature stale bytes
 cannot forge. The hazard was equally present; it simply had nothing green to hide behind until a plant
 whose correct result was a pass.
+
+**11. Run `dex_probe.py` against a `--no-build-cache` release build, and know that `MUST_BE_PRESENT`
+matches source *filenames*, not only class descriptors.** Two ways the probe can certify a dex that
+does not say what you think, both found in the 8d-b pass by a `MUST_BE_PRESENT` plant that renamed a
+class and refused to go red:
+
+- **`MUST_BE_PRESENT` is a substring match, and a class's `.kt` filename is embedded in the dex debug
+  info (`SourceFile` / Kotlin `SMAP`).** Renaming `class AttachmentRepositoryImpl` → `AttachmentRepoImpl`
+  left the probe reporting `AttachmentRepositoryImpl` **present, count 6** — every hit was the string
+  `AttachmentRepositoryImpl.kt`, not the type. The class rename had taken (`AttachmentRepoImpl` appeared
+  14×); the *filename* had not. So a positive control here means **"a class of this name, or a file of
+  this name, reached the dex"** — for every entry whose class name equals its filename, the file alone
+  satisfies it. A plant that renames a class **must rename the file too**, or it fakes a green. (This is
+  a property of the probe, not a bug to fix: for a *presence* control, "the file compiled in" is a
+  reasonable signal. It is written down so the next plant is designed knowing it.)
+- **`org.gradle.caching=true`, so a plain `assembleRelease` — even `clean assembleRelease` — can return
+  a byte-identical dex from the build cache in ~6 s, and the probe reads whatever the cache hands back.**
+  Add `--no-build-cache` (or `--rerun-tasks`) to the release build the probe runs against:
+
+  ```
+  gradle -p . assembleRelease --no-build-cache
+  python scripts/dex_probe.py
+  ```
+
+  Without it, the probe is trap 10 one layer down: it certifies bytes your edit never reached.

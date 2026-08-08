@@ -4,13 +4,18 @@ import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.SavedStateHandle
 import app.duck.notes.domain.Clock
+import app.duck.notes.domain.fake.FakeAttachmentRepository
+import app.duck.notes.domain.fake.FakeAttachmentStorage
 import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FakeTagRepository
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.Tag
 import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.AttachImage
+import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
 import app.duck.notes.domain.usecase.DeriveTitle
+import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
@@ -56,6 +61,8 @@ class ShellStateRestorationTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
     private val notes = FakeNoteRepository()
+    private val attachments = FakeAttachmentRepository()
+    private val attachStorage = FakeAttachmentStorage()
     private val tags = FakeTagRepository(
         listOf(
             Tag(id = "projects", name = "projects"),
@@ -87,6 +94,15 @@ class ShellStateRestorationTest {
             SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }),
         ),
         undoTagChange = UndoTagChange(tags),
+        attachImage = AttachImage(
+            attachStorage, attachments, notes,
+            SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }), Clock { 0L },
+        ),
+        deleteAttachment = DeleteAttachment(
+            attachStorage, attachments, notes,
+            SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }),
+        ),
+        observeAttachments = ObserveAttachments(attachments),
         clock = Clock { 0L },
     )
 

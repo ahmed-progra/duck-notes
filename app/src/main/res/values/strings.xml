@@ -90,4 +90,12 @@
     <string name="task_checkbox">Task</string>
     <string name="editor_expand_section">Show %1$s section</string>
     <string name="editor_collapse_section">Hide %1$s section</string>
+
+    <!--
+      Phase 8d-b attachment strip. Both are contentDescription read aloud: the add tile names the
+      action, each thumbnail names what it is. There is no per-image alt yet, so every thumbnail
+      shares one label — the strip's job is "these are the note's images", not describing each.
+    -->
+    <string name="attachment_add">Add image</string>
+    <string name="attachment_image">Attachment</string>
 </resources>

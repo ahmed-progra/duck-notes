@@ -3,6 +3,7 @@ package app.duck.notes.presentation.shell
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
@@ -270,6 +271,8 @@ data class ShellUiState(
     val tagRows: List<TagRow> = emptyList(),
     /** Every tag on the open note, for the chip row above the editor. Derived, never queried. */
     val selectedNoteTags: List<String> = emptyList(),
+    /** The open note's attachments, for the strip under the editor. Empty when no note is selected. */
+    val selectedNoteAttachments: List<Attachment> = emptyList(),
     /** All known tag paths, for the "Add tag" picker. */
     val allTagPaths: List<String> = emptyList(),
     /** Heading fold keys for the selected note, persisted by note id in [DuckShellViewModel]. */
@@ -289,6 +292,10 @@ data class ShellActions(
     val onDeleteTag: (path: String) -> Unit = {},
     val onSetTagIcon: (tagId: String, iconKey: String?) -> Unit = { _, _ -> },
     val onAddTagToNote: (noteId: String, name: String) -> Unit = { _, _ -> },
+    /** A picked image's durable-copy source and its mime, to attach to the open note. */
+    val onAttachImage: (sourceUri: String, mime: String) -> Unit = { _, _ -> },
+    /** Remove an attachment: its file, its row, and its `![](attachment:id)` reference. */
+    val onDeleteAttachment: (id: String) -> Unit = {},
     val onUndo: () -> Unit = {},
     val onUndoShown: () -> Unit = {},
     val onToggleSection: (String) -> Unit = {},

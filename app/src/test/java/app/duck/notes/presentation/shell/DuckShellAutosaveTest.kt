@@ -5,13 +5,18 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.SavedStateHandle
 import app.duck.notes.domain.Clock
+import app.duck.notes.domain.fake.FakeAttachmentRepository
+import app.duck.notes.domain.fake.FakeAttachmentStorage
 import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FakeTagRepository
 import app.duck.notes.domain.model.Note
 import app.duck.notes.domain.model.Tag
 import app.duck.notes.domain.usecase.AddTagToNote
+import app.duck.notes.domain.usecase.AttachImage
+import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
 import app.duck.notes.domain.usecase.DeriveTitle
+import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
@@ -75,6 +80,8 @@ class DuckShellAutosaveTest {
     // `notes` passed in: 8a's subject is two writers racing over one body, so the fake has to rewrite
     // bodies for real (through TagScanner) rather than only recording the call. See its KDoc.
     private val tags = FakeTagRepository(listOf(Tag(id = "work", name = "work")), notes = notes)
+    private val attachments = FakeAttachmentRepository()
+    private val attachStorage = FakeAttachmentStorage()
     private val parseTags = ParseTags()
 
     /**
@@ -112,6 +119,15 @@ class DuckShellAutosaveTest {
             SaveNote(notes, DeriveTitle(), parseTags, clock),
         ),
         undoTagChange = UndoTagChange(tags),
+        attachImage = AttachImage(
+            attachStorage, attachments, notes,
+            SaveNote(notes, DeriveTitle(), parseTags, clock), clock,
+        ),
+        deleteAttachment = DeleteAttachment(
+            attachStorage, attachments, notes,
+            SaveNote(notes, DeriveTitle(), parseTags, clock),
+        ),
+        observeAttachments = ObserveAttachments(attachments),
         clock = clock,
     )
 
