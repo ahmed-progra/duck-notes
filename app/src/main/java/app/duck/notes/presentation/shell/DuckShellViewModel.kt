@@ -581,11 +581,22 @@ class DuckShellViewModel @Inject constructor(
      * a crash between leaves a benign partial state (a stored file with no reference, GC'd next scan).
      * `AttachImage` returns null if the note is gone or the copy fails; nothing here needs the result.
      */
-    fun onAttachImage(sourceUri: String, mime: String) {
+    fun onAttachImage(sourceUri: String, mime: String) = onAttachImages(listOf(sourceUri to mime))
+
+    /**
+     * Attaches several images in **one** coroutine, in order. Paste can deliver more than one at once,
+     * and that is exactly where the single-image path would race: each `AttachImage` reads the note
+     * body, appends its reference and saves, so two concurrent attaches both read the pre-append body
+     * and the second clobbers the first's reference. Flushing once and looping sequentially makes each
+     * append see the previous one's save — the fix 8d-c's plan calls out. The picker's [onAttachImage]
+     * is the singleton case of this, so there is one attach path, not two.
+     */
+    fun onAttachImages(images: List<Pair<String, String>>) {
+        if (images.isEmpty()) return
         val noteId = selectedId.value ?: return
         viewModelScope.launch {
             flush()
-            attachImage(noteId, sourceUri, mime)
+            images.forEach { (sourceUri, mime) -> attachImage(noteId, sourceUri, mime) }
         }
     }
 

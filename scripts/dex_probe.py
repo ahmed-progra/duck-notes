@@ -52,6 +52,8 @@ MUST_BE_PRESENT = [
     "AttachmentDao",
     "AttachmentRepositoryImpl",
     "AttachmentStorageImpl",
+    # 8d-c paste. The image-paste receiver + its extracted decision (isAttachableImage/shouldAttach).
+    "ImagePaste",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

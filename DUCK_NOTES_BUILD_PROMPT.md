@@ -1753,7 +1753,89 @@ reached — the exact shape of trap 10, one layer down. Both findings are writte
 - **Release:** `assembleRelease --no-build-cache` green; `dex_probe.py` **PASS** — 15 positive
   controls present, 4 debug-only classes absent, no bear references outside `bearingAccuracy`.
 
-**Phase 8d-b is closed. The rest of 8d (paste, focus mode) is unstarted.**
+**Phase 8d-b is closed.**
+
+---
+
+## PHASE 8d-c — PASTE
+
+**Goal:** paste a clipboard image into the editor and attach it exactly as the picker does — the image
+to the strip, its `![](attachment:<id>)` reference into the body, written by the **same** `AttachImage`
+path, so there is no second implementation of image syntax. **Deferred, stated up front:** HTML paste
+and link-over-selection paste — both out of scope this phase.
+
+**One modifier, one listener, no new attach path.** `MarkdownEditorScreen`'s `BasicTextField` gains
+`Modifier.contentReceiver(imagePasteReceiver(...))`. The receiver pulls image items out of a paste (or
+drag-and-drop, or keyboard rich content), resolves each `content://` MIME through the `ContentResolver`
+— exactly as the picker reads it — and routes them to `onAttachImages`, the same use case the **+** tile
+calls. Text pastes fall through untouched.
+
+**The clobber race, fixed by sequencing (the 1a decision).** Paste can deliver more than one image at
+once. Each `AttachImage` reads the body, appends its reference and saves; two concurrent attaches both
+read the pre-append body and the second clobbers the first's reference. `onAttachImages` flushes once
+and loops **sequentially**, so each append sees the previous one's save. The picker's `onAttachImage` is
+the singleton case of this — one attach path, not two.
+
+**API verified against the artifact, not from memory — and it forced the test design.**
+`TransferableContent`'s only constructor is **private** (checked against Foundation 1.9.4's bytecode,
+the version BOM 2025.10.01 resolves), so a test cannot synthesise one to drive
+`imagePasteReceiver.onReceive`. The classifying decision was therefore split into `shouldAttach` /
+`isAttachableImage`, which take an ordinary `ClipData.Item` / `String` a test *can* build. The listener's
+remaining body — the `hasMediaType` gate and `consume` mechanics — is three framework lines with no
+branch of its own, covered by a one-time manual on-device paste rather than an automated test faking an
+unconstructable type.
+
+**Two plants, each run red then reverted.**
+
+1. `ImagePasteTest` (JVM) + `ImagePasteReceiverTest` (instrumented) — the MIME rule. Plant: invert
+   `isAttachableImage` (`!startsWith("image/")`) → the JVM test goes 4/4 red and the instrumented
+   `shouldAttach` test 2/4 red, both on the one predicate.
+2. `dex_probe.py` — `MUST_BE_PRESENT += "ImagePaste"`. Plant: rename the `ImagePaste.kt` **file** (not
+   just the class — trap-11's lesson from 8d-b) → the probe goes `MISSING … 0`, exit 1.
+
+### The required manual verification came back negative — and that is the phase's real finding
+
+**Performed by hand, negative, and the cause is upstream of Duck.** On the Pixel_7 / Android 15 (API 35)
+emulator a human copied a real image via Chrome's "Copy image" — a genuine live-grant source — then
+long-press → Paste into a note body. Nothing attached: no strip thumbnail, no `![](attachment:<id>)`,
+no error.
+
+**The receiver fired; the clip was empty.** Temporary logging in `imagePasteReceiver.onReceive` (added,
+read, reverted) showed it fires on **every** paste and is handed an empty clip —
+`mimes=[text/plain] items=1 item0uri=null item0text="" item0html=false`: no image, no URI, no content
+of any kind. So `hasMediaType(MediaType.Image)` is correctly `false`. **Confirmed independent of Duck:**
+Android's own Gboard clipboard history, after the same "Copy image", also shows no image, with Duck not
+involved at all. Chrome is not placing the image on this emulator's system clipboard for any consumer.
+
+**What is verified, and what is deferred.** Everything Duck's code controls is proven: the receiver
+fires; `hasMediaType` classifies correctly; and `shouldAttach` plus the downstream attach path (`store`
+→ row → `appendImage`) is the same `onAttachImages` / `AttachImage` path 8d-b's working picker
+exercises, plus the JVM and instrumented suites. The single link not exercisable here — a real image
+clip actually reaching the receiver — is blocked by the emulator's clipboard, not by Duck. A true
+end-to-end image-paste confirmation is **deferred to a physical device**.
+
+**Two latent silent-failure sinks, found during the investigation, left for a hardening pass.**
+`AttachmentStorageImpl.store` wraps its copy in `runCatching { … }.getOrNull()` and `AttachImage`
+returns `null` on a failed copy — so a *real* image that failed to read would attach nothing with no
+user feedback. Not the cause here (the clip is empty; nothing reaches them) and out of scope for 8d-c,
+but recorded: the upgrade path is surfacing a copy failure to the user, the shape `onAddTagToNote`'s
+`NotWritable` snackbar already uses.
+
+### Verification
+
+- **JVM unit:** `456 tests, 0 failures` (was 452). New: `ImagePasteTest` — the `image/` MIME boundary,
+  incl. `imagexml` is **not** an image.
+- **Instrumented:** full suite `OK (79 tests)` (was 75). New: `ImagePasteReceiverTest` — drives the real
+  `shouldAttach` against real `ClipData.Item`s (image → uri+mime; non-image, plain-text, and untyped →
+  null).
+- **Lint:** 0 errors; 40 pre-existing warnings, none on the paste files.
+- **Release:** `assembleRelease --rerun-tasks --no-build-cache` green; `dex_probe.py` **PASS** — 16
+  positive controls present (now incl. `ImagePaste`), 4 debug-only absent, no bear references outside
+  `bearingAccuracy`.
+
+**Phase 8d-c is closed** for everything the code controls; the one link that could not be exercised on
+the emulator — a real image clip reaching the receiver — is deferred to a physical device, per the note
+above. **Focus mode is the remaining piece of 8d.**
 
 ---
 

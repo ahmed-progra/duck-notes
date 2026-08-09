@@ -123,6 +123,7 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
             onSetTagIcon = viewModel::onSetTagIcon,
             onAddTagToNote = viewModel::onAddTagToNote,
             onAttachImage = viewModel::onAttachImage,
+            onAttachImages = viewModel::onAttachImages,
             onDeleteAttachment = viewModel::onDeleteAttachment,
             onUndo = viewModel::onUndo,
             onUndoShown = viewModel::onUndoShown,
@@ -251,6 +252,7 @@ fun DuckShell(
                             )
                         },
                         onDeleteAttachment = { actions.onDeleteAttachment(it.id) },
+                        onAttachImages = actions.onAttachImages,
                     )
                 }
             }

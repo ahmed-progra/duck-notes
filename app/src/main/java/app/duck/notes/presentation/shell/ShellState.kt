@@ -294,6 +294,8 @@ data class ShellActions(
     val onAddTagToNote: (noteId: String, name: String) -> Unit = { _, _ -> },
     /** A picked image's durable-copy source and its mime, to attach to the open note. */
     val onAttachImage: (sourceUri: String, mime: String) -> Unit = { _, _ -> },
+    /** Pasted images as `sourceUri to mime` pairs, attached in order — see `onAttachImages`. */
+    val onAttachImages: (images: List<Pair<String, String>>) -> Unit = {},
     /** Remove an attachment: its file, its row, and its `![](attachment:id)` reference. */
     val onDeleteAttachment: (id: String) -> Unit = {},
     val onUndo: () -> Unit = {},

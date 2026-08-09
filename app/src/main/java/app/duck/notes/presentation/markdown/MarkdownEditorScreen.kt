@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
@@ -23,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.tooling.preview.Preview
@@ -81,6 +83,7 @@ fun MarkdownEditorScreen(
     attachments: List<Attachment> = emptyList(),
     onAddImage: () -> Unit = {},
     onDeleteAttachment: (Attachment) -> Unit = {},
+    onAttachImages: (images: List<Pair<String, String>>) -> Unit = {},
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -131,6 +134,14 @@ fun MarkdownEditorScreen(
     }
     val boxes = remember(plan) { SpanPlanner.taskBoxes(text.toString(), scan.tokens, plan) }
     val sections = remember(text) { SectionFolding.sections(text.toString(), scan.tokens) }
+
+    // Paste (and drag-and-drop, and keyboard rich content): image items route to onAttachImages, the
+    // same AttachImage path the picker uses. The ContentResolver is the authoritative source of a
+    // content:// uri's MIME, exactly as the picker reads it. Text pastes fall through untouched.
+    val context = LocalContext.current
+    val pasteReceiver = remember(context, onAttachImages) {
+        imagePasteReceiver({ context.contentResolver.getType(it) }, onAttachImages)
+    }
 
     Scaffold(
         // imePadding, so the bar rides above the keyboard instead of behind it.
@@ -223,7 +234,7 @@ fun MarkdownEditorScreen(
                 ) {
                     BasicTextField(
                         state = state,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize().contentReceiver(pasteReceiver),
                         outputTransformation = transformation,
                         // noteBody carries the serif reading font and the size the engine's `em`
                         // heading multiples resolve against.

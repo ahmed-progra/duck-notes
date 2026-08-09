@@ -110,6 +110,10 @@ path, so nothing was watching the branch that did the suppressing.
 - One commit per phase. No auto-push.
 - Message format: `phase <n>: <name>` (e.g. `phase 2: room + fts5`)
 - Before committing: `git status`, show me the file list, wait for approval.
+- After a `/compact`, a bare "continue"/"continou" answers only "keep working" — never a yes/no
+  question (e.g. a pending commit question) asked immediately before the compaction. If such a
+  question is still open when a session compacts, re-ask it explicitly in your first message back
+  rather than treating a generic continue as its answer.
 - Never run: push, reset --hard, rebase, checkout of tracked files, clean -fd.
 - Never touch .gitignore without asking.
 
