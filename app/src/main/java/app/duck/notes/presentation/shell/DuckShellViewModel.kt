@@ -27,6 +27,7 @@ import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.usecase.OpenWikiLink
 import app.duck.notes.domain.usecase.ParseTags
 import app.duck.notes.domain.usecase.PinTag
 import app.duck.notes.domain.usecase.RenameTag
@@ -101,6 +102,7 @@ class DuckShellViewModel @Inject constructor(
     private val undoTagChange: UndoTagChange,
     private val attachImage: AttachImage,
     private val deleteAttachment: DeleteAttachment,
+    private val openWikiLink: OpenWikiLink,
     observeAttachments: ObserveAttachments,
     getBacklinks: GetBacklinks,
     private val clock: Clock,
@@ -493,6 +495,25 @@ class DuckShellViewModel @Inject constructor(
         viewModelScope.launch {
             flush()
             handle[KEY_SELECTED] = id
+        }
+    }
+
+    /**
+     * Follows a tapped `[[WikiLink]]` — Phase 9d.
+     *
+     * **[flush] first, and it is not optional.** The tap navigates away from a buffer that may hold
+     * up to `MAX_WAIT_MS` of unwritten keystrokes, and it also hands `OpenWikiLink` the body it will
+     * re-save. Without the flush the source's last words are lost *and* its links are re-derived from
+     * a stale body. This is the same ordering [onSelectNote] uses, for the first of those reasons;
+     * 9d adds the second.
+     *
+     * The buffer is read **after** the flush, so `sourceBody` is exactly what Room now holds and the
+     * relinking save writes the same text back.
+     */
+    fun onOpenWikiLink(title: String) {
+        viewModelScope.launch {
+            flush()
+            handle[KEY_SELECTED] = openWikiLink(title, loadedId.value, buffer.text.toString())
         }
     }
 

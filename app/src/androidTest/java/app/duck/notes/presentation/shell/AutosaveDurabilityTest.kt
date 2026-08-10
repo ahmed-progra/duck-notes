@@ -28,6 +28,7 @@ import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.usecase.OpenWikiLink
 import app.duck.notes.domain.usecase.ParseTags
 import app.duck.notes.domain.usecase.ResolveWikiLinks
 import app.duck.notes.domain.usecase.PinTag
@@ -114,7 +115,8 @@ class AutosaveDurabilityTest {
             addTagToNote = AddTagToNote(notes, parseTags, saveNote),
             undoTagChange = UndoTagChange(tags),
             attachImage = AttachImage(attachStorage, attachments, notes, saveNote, Clock { System.currentTimeMillis() }),
-            deleteAttachment = DeleteAttachment(attachStorage, attachments, notes, saveNote),
+            openWikiLink = OpenWikiLink(notes, saveNote),
+        deleteAttachment = DeleteAttachment(attachStorage, attachments, notes, saveNote),
             observeAttachments = ObserveAttachments(attachments),
             getBacklinks = GetBacklinks(LinkRepositoryImpl(db.noteLinkDao())),
             clock = Clock { System.currentTimeMillis() },

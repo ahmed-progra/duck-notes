@@ -348,6 +348,13 @@ abstract class NoteDao {
      * recently modified is the deliberate answer: the note the user last touched is the one they mean.
      *
      * Trashed notes are excluded — a link must not resolve to something in the bin.
+     *
+     * **Public since 9d, and deliberately not duplicated.** It has a second caller now: tapping a
+     * `[[WikiLink]]` resolves through this same query before deciding whether to create. That is the
+     * property worth having — a tap opens *exactly* the note the next save would write a `note_links`
+     * row to, including the most-recently-modified tie-break, because both ask one question of one
+     * query rather than two questions that happen to agree today. It sits among the transaction
+     * helpers because that is where its other caller lives.
      */
     @Query(
         """
@@ -357,7 +364,7 @@ abstract class NoteDao {
         LIMIT 1
         """,
     )
-    protected abstract suspend fun noteIdByTitle(title: String): String?
+    abstract suspend fun noteIdByTitle(title: String): String?
 
     private fun ftsMatch(term: String): String =
         term.trim().split(Regex("\\s+"))

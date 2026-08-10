@@ -89,6 +89,31 @@ data class TaskBox(
 )
 
 /**
+ * One tappable `[[WikiLink]]` — Phase 9d, and the type that keeps the tap out of rendered space.
+ *
+ * The overlay built from this **carries its own [title]**, so a tap never has to be turned back into
+ * an offset. That is the whole design: `SpanPlanner.renderedOffset` maps forward, source → rendered,
+ * and the question *"which link was tapped"* is answered by which overlay was hit rather than by
+ * inverting anything. There is no inverse of `renderedOffset` in this codebase and 9d does not add
+ * one; a hand-rolled inverse would be a second implementation of a mapping that already has a home.
+ *
+ * - [rendered] is the **inner title only**, because the editor conceals both bracket pairs whenever
+ *   the caret is outside the node. For `[[Pond]]` the source span is eight characters and the
+ *   rendered span is four. An overlay built from the source span would sit two characters off at each
+ *   end, which nothing on screen would look wrong enough to catch.
+ * - [source] is the whole span, brackets included — what an edit would replace.
+ * - [title] is what the tap resolves and, failing that, creates. Trimmed by `WikiLinkScanner.titleAt`
+ *   so it matches what a save wrote to `note_links`.
+ *
+ * Like [TaskBox], [rendered] is only valid for the [SpanPlan] it came from.
+ */
+data class WikiLinkTarget(
+    val source: IntRange,
+    val rendered: IntRange,
+    val title: String,
+)
+
+/**
  * Turns a scan plus a caret into a frame.
  *
  * Pure and free of Compose, so the golden and invariant suites are plain JVM tests that run in
@@ -122,8 +147,7 @@ object SpanPlanner {
             styles += StyledRange(token.start, token.end, styleFor(token.kind), token.level)
             if (token.markers.isEmpty()) continue
 
-            val revealed = from <= token.end && to >= token.start
-            if (revealed) {
+            if (revealed(token, from, to)) {
                 // Painted after the node style so the muted marker colour wins over it.
                 token.markers.forEach { styles += StyledRange(it.first, it.last + 1, StyleKey.MARKER) }
             } else {
@@ -238,6 +262,84 @@ object SpanPlanner {
             )
         }
     }
+
+    /**
+     * Every tappable wiki link in [tokens], for the frame [plan] describes — Phase 9d.
+     *
+     * Sits beside [taskBoxes] and for the reason that function's KDoc gives: these values decide
+     * **where a tap target lands**, and assembling them inside a composable would put that arithmetic
+     * somewhere only an emulator could reach. Here it is a pure function, which is why 9d's two
+     * standing offset regression tests — right-to-left and non-BMP — are JVM tests. Only the
+     * rendered-offset → screen-rect leg needs a device.
+     *
+     * ## A revealed link is deliberately absent, and that absence is the routing rule
+     *
+     * When the caret is inside a link its brackets are showing and the user is editing it, so no
+     * target is emitted, no overlay is drawn, and the tap reaches `BasicTextField` and places the
+     * caret. When it is outside, the link is concealed and the overlay navigates. **The presence of
+     * the target is the decision** — there is no second rule about when a tap means what, and no
+     * event consumption to get wrong. [revealed] is the same function [plan] uses to decide whether
+     * to conceal, so the two can never disagree about which state a link is in.
+     *
+     * That also answers how a link is edited: tap *beside* it. Endpoints count as touching, so a caret
+     * immediately before or after reveals the link and removes the overlay, and the next tap lands in
+     * the text.
+     *
+     * [body] is only read for [WikiLinkTarget.title]; the offsets come from the scan.
+     */
+    fun wikiLinkTargets(
+        body: String,
+        tokens: List<Token>,
+        plan: SpanPlan,
+        selectionStart: Int,
+        selectionEnd: Int,
+    ): List<WikiLinkTarget> {
+        val cuts = plan.conceal.sortedBy { it.first }
+        val from = minOf(selectionStart, selectionEnd)
+        val to = maxOf(selectionStart, selectionEnd)
+        return tokens.mapNotNull { token ->
+            if (token.kind != TokenKind.WIKI_LINK) return@mapNotNull null
+            if (revealed(token, from, to)) return@mapNotNull null
+            val source = token.start until token.end
+            // The inner span, from the scanner rather than from `+ 2` here — see WikiLinkScanner.
+            //
+            // **No plant distinguishes this from passing `source`, and that is a property rather than
+            // an oversight.** Under concealment the two are provably equal: `rebase(token.start)`
+            // breaks on the `[[` cut before subtracting it, while `rebase(token.start + 2)` subtracts
+            // exactly 2 — and the same cancellation happens at the `]]` end. Both map to the same
+            // rendered offset. Swapping in `source` was run as a plant and came back green.
+            //
+            // It stays because it is the correct *statement* — the target is the title, not the
+            // brackets — and because the equality holds only while revealed links are skipped above.
+            // Emit a target for a revealed link and the two immediately diverge, which is what the
+            // sibling plant on `revealed` demonstrates from the other side.
+            val inner = WikiLinkScanner.innerOf(source)
+            val renderedStart = rebase(inner.first, cuts)
+            val renderedEnd = rebase(inner.last + 1, cuts)
+            // A link swallowed by a fold has nothing left to tap. Same guard `taskBoxes` carries.
+            if (renderedEnd <= renderedStart) return@mapNotNull null
+            WikiLinkTarget(
+                source = source,
+                rendered = renderedStart until renderedEnd,
+                title = WikiLinkScanner.titleAt(body, source),
+            )
+        }
+    }
+
+    /**
+     * Is [token]'s syntax showing? True when the selection `[from, to]` touches it at all.
+     *
+     * **Endpoints count**, which is the whole of it: a caret resting immediately before `**` or
+     * immediately after the closing `**` still reveals it, because otherwise the markers would vanish
+     * out from under you at the exact moment you were trying to type next to them.
+     *
+     * Extracted in 9d rather than left inline in [plan], because [wikiLinkTargets] needs the same
+     * answer and a second copy of `from <= end && to >= start` would be two rules that agree until
+     * one of them is edited. It is also the **routing rule for a tap**: a revealed link gets no
+     * overlay, so the tap reaches the text field and places the caret instead of navigating.
+     */
+    internal fun revealed(token: Token, from: Int, to: Int): Boolean =
+        from <= token.end && to >= token.start
 
     /**
      * [offset] shifted left by every concealed character before it. [cuts] must be **ascending**.

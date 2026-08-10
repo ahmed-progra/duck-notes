@@ -91,6 +91,8 @@ fun MarkdownEditorScreen(
     onToggleInfo: (() -> Unit)? = null,
     /** Candidate titles for the `[[title]]` picker, newest first — Phase 9c. */
     noteTitles: List<String> = emptyList(),
+    /** Follow a tapped `[[WikiLink]]` by title — Phase 9d. Null in previews, which cannot navigate. */
+    onOpenWikiLink: ((String) -> Unit)? = null,
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -142,6 +144,11 @@ fun MarkdownEditorScreen(
         SpanPlanner.plan(scan.tokens, selection.start, selection.end, folds)
     }
     val boxes = remember(plan) { SpanPlanner.taskBoxes(text.toString(), scan.tokens, plan) }
+    // Keyed on the selection as well, like `plan`: a link's target appears and disappears as the
+    // caret leaves and enters it, which is the routing rule — see SpanPlanner.wikiLinkTargets.
+    val links = remember(plan, selection) {
+        SpanPlanner.wikiLinkTargets(text.toString(), scan.tokens, plan, selection.start, selection.end)
+    }
     val sections = remember(text) { SectionFolding.sections(text.toString(), scan.tokens) }
 
     // Paste (and drag-and-drop, and keyboard rich content): image items route to onAttachImages, the
@@ -287,6 +294,17 @@ fun MarkdownEditorScreen(
                         cursorBrush = SolidColor(colors.accent),
                         onTextLayout = { getResult -> layout = getResult() },
                     )
+
+                    if (measured != null && onOpenWikiLink != null) {
+                        links.forEach { link ->
+                            // Same one-frame-behind guard the task boxes carry: on the frame the text
+                            // changes, a target computed from the new plan can point past the old
+                            // layout, and getBoundingBox would throw.
+                            if (link.rendered.last < measured.layoutInput.text.length) {
+                                WikiLinkOverlay(link, measured) { onOpenWikiLink(link.title) }
+                            }
+                        }
+                    }
 
                     if (measured != null) {
                         boxes.forEach { box ->

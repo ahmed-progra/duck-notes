@@ -22,6 +22,7 @@ import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.usecase.OpenWikiLink
 import app.duck.notes.domain.usecase.ParseTags
 import app.duck.notes.domain.usecase.ResolveWikiLinks
 import app.duck.notes.domain.usecase.PinTag
@@ -101,6 +102,7 @@ class ShellStateRestorationTest {
             attachStorage, attachments, notes,
             SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { 0L }), Clock { 0L },
         ),
+        openWikiLink = OpenWikiLink(notes, SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { 0L })),
         deleteAttachment = DeleteAttachment(
             attachStorage, attachments, notes,
             SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { 0L }),

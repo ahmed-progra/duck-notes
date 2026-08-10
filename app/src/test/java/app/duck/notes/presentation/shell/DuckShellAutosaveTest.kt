@@ -23,6 +23,7 @@ import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
+import app.duck.notes.domain.usecase.OpenWikiLink
 import app.duck.notes.domain.markdown.FormatAction
 import app.duck.notes.domain.markdown.MarkdownTextCache
 import app.duck.notes.domain.markdown.ScanResult
@@ -126,6 +127,7 @@ class DuckShellAutosaveTest {
             attachStorage, attachments, notes,
             SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), clock), clock,
         ),
+        openWikiLink = OpenWikiLink(notes, SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), clock)),
         deleteAttachment = DeleteAttachment(
             attachStorage, attachments, notes,
             SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), clock),
@@ -1067,4 +1069,66 @@ class DuckShellAutosaveTest {
         MarkdownTextCache.rescan(ScanResult.Empty, body).tokens.let { tokens ->
             SpanPlanner.taskBoxes(body, tokens, SpanPlanner.plan(tokens, caret, caret))
         }
+
+    // --- following a wiki link (9d) -------------------------------------------
+
+    /**
+     * **Following a link flushes first, so the tap cannot lose the last keystrokes.**
+     *
+     * A tap navigates away from a buffer that may hold up to `MAX_WAIT_MS` of unwritten typing. The
+     * debounce alone would not have fired, so without the flush those words are gone — and the user's
+     * gesture was "open that note", not "discard this one". Removing `flush()` from `onOpenWikiLink`
+     * is the plant; the navigation still works, which is what makes this invisible without the test.
+     *
+     * **The link must RESOLVE for this test to isolate the flush**, and the first draft got that
+     * wrong. On the *create* path `OpenWikiLink` re-saves the source to relink it, reading the live
+     * buffer — so the typed text reaches Room through the relink even with no flush at all, and the
+     * plant comes back green. Seeding the target removes the relink save, leaving the flush as the
+     * only thing that can write, which is the property being claimed.
+     */
+    @Test
+    fun followingALinkFlushesTheBufferFirst() = withOpenNote { vm ->
+        // The local `note` helper sets title = id, so the id IS the title the link resolves by.
+        notes.seed(note("Pond", "the pond note"))
+        vm.type("unsaved words and [[Pond]]")
+
+        vm.onOpenWikiLink("Pond")
+        advanceUntilIdle()
+
+        assertEquals(
+            "the buffer's text must reach Room before the selection moves",
+            listOf("unsaved words and [[Pond]]"),
+            writesTo("n1"),
+        )
+    }
+
+    /**
+     * The flush happens **before** the body is handed over for relinking, so the created note's
+     * backlink is derived from the text the user can see rather than the last debounced write.
+     *
+     * Reading `buffer` before the flush would relink a stale body — the link the user just typed
+     * would not be among the source's rows, which is the same empty-panel failure the relink exists
+     * to prevent, arrived at from the other side.
+     */
+    @Test
+    fun followingALinkRelinksTheSourceFromTheFlushedBody() = withOpenNote { vm ->
+        vm.type("unsaved words and [[Pond]]")
+
+        vm.onOpenWikiLink("Pond")
+        advanceUntilIdle()
+
+        assertEquals(listOf("Pond"), notes.savedLinks["n1"])
+    }
+
+    /** And the selection actually moves to the created note. */
+    @Test
+    fun followingAnUnresolvedLinkOpensTheCreatedNote() = withOpenNote { vm ->
+        vm.type("see [[Pond]]")
+
+        vm.onOpenWikiLink("Pond")
+        advanceUntilIdle()
+
+        val opened = vm.state.value.selectedNoteId
+        assertEquals("Pond", notes.current(requireNotNull(opened))?.title)
+    }
 }

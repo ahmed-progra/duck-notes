@@ -146,6 +146,30 @@ object WikiLinkScanner {
     fun linkTo(title: String): String = "[[$title]]"
 
     /**
+     * The title inside the `[[…]]` spanning [range] of [body], trimmed — and **the inner span itself**
+     * via [innerOf], which is the half that matters for offsets.
+     *
+     * [range] is a `WIKI_LINK` token's source span, brackets included. Both functions exist so the
+     * `+ 2` / `- 2` that turns that into the title never leaves this file. That arithmetic is bracket
+     * knowledge in numeric form, and `MarkdownSyntaxSourceTest` **cannot see it**: it bans the
+     * literals `"[["` and `"]]"` above `domain/markdown`, and no scan detects an integer. The
+     * discipline is therefore placement rather than detection — `presentation/` does no bracket
+     * arithmetic because there is nothing left there to do it with.
+     *
+     * Trimmed to match [titlesIn], so what a tap resolves is what a save wrote.
+     */
+    fun titleAt(body: String, range: IntRange): String = body.substring(innerOf(range)).trim()
+
+    /**
+     * [range] minus its brackets — a `WIKI_LINK` token's span narrowed to the text actually rendered.
+     *
+     * The editor conceals both marker pairs whenever the caret is outside the node, so this is the
+     * span a tap target must be built from. Deriving it at the call site as `start + 2 until end - 2`
+     * would put the off-by-two somewhere no guard is looking; here it is one expression with one test.
+     */
+    fun innerOf(range: IntRange): IntRange = range.first + 2 until range.last - 1
+
+    /**
      * [titles] that could complete [prefix], in the order given, deduped.
      *
      * **Matching folds case; the caller inserts the title verbatim.** Those are not two answers to

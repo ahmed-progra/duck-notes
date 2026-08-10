@@ -116,6 +116,13 @@ class FakeNoteRepository : NoteRepository {
 
     override suspend fun getNote(id: String): Note? = notes.value.find { it.id == id }
 
+    /** Mirrors `NoteDao.noteIdByTitle`: exact match, trashed excluded, most recently modified wins. */
+    override suspend fun noteIdByTitle(title: String): String? = notes.value
+        .filterNot { it.isTrashed }
+        .filter { it.title == title }
+        .maxByOrNull { it.modifiedAt }
+        ?.id
+
     override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) {
         savedTags[note.id] = tagNames
         savedLinks[note.id] = linkTitles

@@ -420,6 +420,59 @@ class RtlLayoutTest {
         )
     }
 
+    /**
+     * The wiki-link tap target must sit on its own glyphs in both directions — Phase 9d.
+     *
+     * **This is not the container-mirroring claim the fold gutter and the strips make, and it must not
+     * be argued from them.** Those ask whether `Row` and `LazyRow` lay children out per
+     * `LocalLayoutDirection`. This asks whether a *tap target derived from a text layout* lands on the
+     * characters it represents once bidi has reordered them — the same question
+     * [theTaskBoxTracksItsGlyphsInBothDirections] answers for the checkbox, and the same one 8d-a
+     * shipped wrong.
+     *
+     * `WikiLinkOverlay` positions with `absoluteOffset` because `getBoundingBox` already returns where
+     * bidi put the glyph; `Modifier.offset` would mirror that resolved coordinate a second time and
+     * push the target off the text. **That is the plant** — swapping in `offset` re-creates the exact
+     * defect 8d-a fixed, measured then at 673.9dp against a field ending at 363.4dp.
+     *
+     * Asserted as **containment**, for the reason that test records: where exactly a glyph sits is the
+     * text layout's business, and an assertion about which half of the field it lands in passes for a
+     * target that is off the device entirely. Containment is what survives bidi being bidi.
+     */
+    @Test
+    fun theWikiLinkOverlayTracksItsGlyphsInBothDirections() {
+        // Its own setContent: the shared [editor] helper passes no `onOpenWikiLink`, and the overlay
+        // is only emitted when one is supplied — previews and the gallery have nothing to navigate
+        // to. Using the helper found no node at all, which is the fixture failing, not the overlay.
+        rule.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                DuckTheme {
+                    MarkdownEditorScreen(TextFieldState(LINK_NOTE), onOpenWikiLink = {})
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        val ltrBox = rule.onNodeWithContentDescription(LINK_TITLE).getUnclippedBoundsInRoot()
+        val ltrField = fieldBounds()
+        println("DUCK rtl: LTR wikilink=$ltrBox field=$ltrField")
+
+        flipToRtl()
+        val rtlBox = rule.onNodeWithContentDescription(LINK_TITLE).getUnclippedBoundsInRoot()
+        val rtlField = fieldBounds()
+        println("DUCK rtl: RTL wikilink=$rtlBox field=$rtlField")
+
+        assertEquals(
+            "the wiki-link target must lie inside the text field in both directions. LTR box=" +
+                "$ltrBox field=$ltrField; RTL box=$rtlBox field=$rtlField. A target outside the " +
+                "field is not on the characters it represents and cannot be tapped where the user " +
+                "sees them — the 8d-a defect, in the other overlay.",
+            LinkInsideLtr(true) to LinkInsideRtl(true),
+            LinkInsideLtr(ltrBox.left >= ltrField.left && ltrBox.right <= ltrField.right) to
+                LinkInsideRtl(rtlBox.left >= rtlField.left && rtlBox.right <= rtlField.right),
+        )
+    }
+
     /** Named wrappers so failures read `GutterAfterText(false)`, not a bare `false`. */
     private data class GutterBeforeText(val value: Boolean)
 
@@ -448,6 +501,10 @@ class RtlLayoutTest {
     private data class SuggestionLeadingLtr(val value: Boolean)
 
     private data class SuggestionLeadingRtl(val value: Boolean)
+
+    private data class LinkInsideLtr(val value: Boolean)
+
+    private data class LinkInsideRtl(val value: Boolean)
 
     private companion object {
         /** "Hide <title> section" — the collapse label, with the Arabic heading as its argument. */
@@ -481,6 +538,17 @@ class RtlLayoutTest {
          * `WikiLinkSuggestions` renders at all.
          */
         const val SUGGEST_BODY = "note body [[Po"
+
+        /**
+         * An Arabic line with a Latin-titled `[[WikiLink]]` in it — Phase 9d.
+         *
+         * Arabic around it so bidi actually reorders the line, and the caret defaults to 0, outside
+         * the link, so its brackets are concealed and a target is emitted.
+         */
+        val LINK_NOTE = "نص عربي [[Pond]] هنا"
+
+        /** The overlay's contentDescription is the link's title. */
+        const val LINK_TITLE = "Pond"
 
         /** Two candidates, so "leads" compares siblings rather than a container edge. */
         const val FIRST_TITLE = "Pond"

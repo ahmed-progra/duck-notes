@@ -321,6 +321,11 @@ data class ShellActions(
     /** Show or hide the backlinks panel. A backlink row tap reuses [onSelectNote] — it is a note id. */
     val onToggleInfo: () -> Unit = {},
     /**
+     * Follow a tapped `[[WikiLink]]` — Phase 9d. By **title**, not by id, because the link may not
+     * resolve yet: the use case behind this creates the note when nothing matches.
+     */
+    val onOpenWikiLink: (String) -> Unit = {},
+    /**
      * The tags already on a note, so the "Add tag" picker can omit them.
      *
      * A function rather than a field on [ShellUiState]: it is needed only at the moment the menu

@@ -69,6 +69,10 @@ MUST_BE_PRESENT = [
     # above) because the source guard forbids the bracket literals anywhere higher, so this composable
     # is the string that proves the picker itself reached the release dex.
     "WikiLinkSuggestions",
+    # 9d. Create-on-tap. The overlay is where a tap stops being a coordinate — placed at forward-mapped
+    # rendered offsets so nothing has to be inverted. A present string here means the tap target itself
+    # reached the release dex, not merely the mapping behind it.
+    "WikiLinkOverlay",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

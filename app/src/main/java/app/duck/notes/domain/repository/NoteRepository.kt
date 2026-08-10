@@ -42,6 +42,14 @@ interface NoteRepository {
     suspend fun getNote(id: String): Note?
 
     /**
+     * The note a `[[title]]` resolves to, or null — the same rule the save path links by.
+     *
+     * Exact match, trashed excluded, most recently modified wins. Tapping a link resolves through
+     * this so it opens exactly the note the next save would write a `note_links` row to.
+     */
+    suspend fun noteIdByTitle(title: String): String?
+
+    /**
      * Upsert by [Note.id], replacing the note's tags with [tagNames] and its `[[WikiLink]]` rows
      * with whatever [linkTitles] resolves to.
      *

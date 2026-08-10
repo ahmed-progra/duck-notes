@@ -130,6 +130,7 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
             onUndoShown = viewModel::onUndoShown,
             onToggleSection = viewModel::onToggleSection,
             onToggleInfo = viewModel::onToggleInfo,
+            onOpenWikiLink = viewModel::onOpenWikiLink,
             tagsOfNote = viewModel::tagsOfNote,
         ),
         modifier = modifier,
@@ -268,6 +269,7 @@ fun DuckShell(
                         onToggleFocus = { focusMode = !focusMode },
                         onToggleInfo = actions.onToggleInfo,
                         noteTitles = state.allNoteTitles,
+                        onOpenWikiLink = actions.onOpenWikiLink,
                     )
                 }
             }
