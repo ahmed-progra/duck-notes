@@ -258,9 +258,10 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 ## Build environment traps on this machine
 
-Ten things have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
+The following have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
 audit-fix pass, the next two in the 8c-b spike, the eighth in the 8c-b re-verify pass, the ninth in
-the 8c-c-fix pass, the tenth in the 8d-a pass. None is a project defect; all are easy to hit again.
+the 8c-c-fix pass, the tenth in the 8d-a pass, the eleventh in 8d-b, the twelfth in 9b. None is a
+project defect; all are easy to hit again.
 
 **1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
 absolute paths — these two lines are the ones to copy:
@@ -501,3 +502,38 @@ class and refused to go red:
   ```
 
   Without it, the probe is trap 10 one layer down: it certifies bytes your edit never reached.
+
+**12. `Get-Content -Raw | Set-Content -Encoding utf8` silently corrupts em-dashes into mojibake.**
+`Get-Content -Raw` decodes as the system ANSI codepage unless told otherwise, so a UTF-8 `—`
+(`E2 80 94`) is read as three CP1252 characters and written back as `â€"`. **This repo's KDoc is
+dense with em-dashes**, so very nearly every source file is a candidate.
+
+**What makes it dangerous is that the corruption compiles.** Mojibake inside a comment or a KDoc is
+valid Kotlin. Nothing goes red, no test notices, lint says nothing, and the release dex is unaffected
+— it surfaces only when a human next reads the file, possibly months later, in a paragraph that is
+now unquotable. Every other trap here fails visibly; this one fails into the source tree and waits.
+
+**Patch source through Python instead, never through that pipeline:**
+
+```sh
+python - <<'PY'
+p = 'app/src/main/java/app/duck/notes/Example.kt'
+s = open(p, encoding='utf-8').read()
+s = s.replace('old', 'new')
+open(p, 'w', encoding='utf-8', newline='').write(s)
+PY
+```
+
+`newline=''` matters as much as the encoding: without it Python rewrites every line ending to `\n`,
+so a one-word edit lands as a whole-file CRLF→LF diff and buries itself.
+
+**The concrete instance.** It hit `NoteLinkDao.kt` during 9b's plant sequence. A `Set-Content` used
+to strip `AND n.is_trashed = 0` for a plant also rewrote the KDoc line
+`## Trash changes no rows — it is hidden here, not deleted` as `## Trash changes no rows â€" it is
+hidden here, not deleted`. The plant built and ran correctly, and the file stayed corrupted after the
+revert. Caught only by grepping the file for `â€` on the way past; repaired with the Python form
+above, after which every remaining plant in that sequence used it.
+
+**Note the interaction with CLAUDE.md's git rules.** `git checkout` of a tracked file is forbidden
+here, so mojibake in a *tracked* file cannot be undone by discarding the change — it has to be
+repaired in place. Grep for `â€` and `Â` before committing anything a PowerShell pipeline touched.

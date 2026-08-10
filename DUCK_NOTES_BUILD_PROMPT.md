@@ -2003,6 +2003,22 @@ phase's notes" is where a defect goes to be forgotten.
 - **`AttachImage` returns `null` on a failed copy with no user feedback.** A real image that failed to
   read attaches nothing and says nothing. *Fix:* same — propagate the failure and raise the same
   snackbar rather than returning `null` silently. Pairs with the sink above; one snackbar covers both.
+- **`NoteDao.saveNoteWithTags` writes `note_links` rows as well as tags, and its name says only tags.**
+  This is the **misnamed** class — *The inverse class* above — in production code rather than in a
+  guard: the method does something real under a label describing a different property, so it is the
+  entry here that **degrades on its own with no code change**. A future reader takes the link write as
+  misplaced, deletes it, and the deletion looks correct in review; nothing goes red, because the only
+  thing tying the two halves together is the transaction they share. *Fix:* rename to name both
+  halves. Mechanical, roughly fifteen `androidTest` call sites, no behaviour change — fold it into
+  whichever phase next touches the file.
+
+  **This is the one place *"fix it by KDoc, never by rename"* does not apply, and the difference is
+  who reads the name.** A guard's name is cited by prose nothing checks — this document, a commit
+  message, another test's comment — so renaming it trades an invisible coupling for a dangling one.
+  A method's name is read at every call site *by the compiler*, which rewrites all of them and fails
+  loudly on any it cannot. The rule is about unenforced citations, not about names in general.
+  (Found 9b; stated three times in that phase's report before landing here — the same path the two
+  sinks above took.)
 
 ---
 
