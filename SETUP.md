@@ -478,7 +478,7 @@ gutter, `the chevron spans -24.0.dp..24.0.dp, the text starts at 48.0.dp`), a si
 cannot forge. The hazard was equally present; it simply had nothing green to hide behind until a plant
 whose correct result was a pass.
 
-**11. Run `dex_probe.py` against a `--no-build-cache` release build, and know that `MUST_BE_PRESENT`
+**11. Run `dex_probe.py` against a `--rerun-tasks` release build, and know that `MUST_BE_PRESENT`
 matches source *filenames*, not only class descriptors.** Two ways the probe can certify a dex that
 does not say what you think, both found in the 8d-b pass by a `MUST_BE_PRESENT` plant that renamed a
 class and refused to go red:
@@ -494,14 +494,32 @@ class and refused to go red:
   reasonable signal. It is written down so the next plant is designed knowing it.)
 - **`org.gradle.caching=true`, so a plain `assembleRelease` — even `clean assembleRelease` — can return
   a byte-identical dex from the build cache in ~6 s, and the probe reads whatever the cache hands back.**
-  Add `--no-build-cache` (or `--rerun-tasks`) to the release build the probe runs against:
+  **Use `--rerun-tasks`. `--no-build-cache` alone is NOT enough:**
 
   ```
-  gradle -p . assembleRelease --no-build-cache
+  gradle -p . assembleRelease --rerun-tasks --no-build-cache
   python scripts/dex_probe.py
   ```
 
   Without it, the probe is trap 10 one layer down: it certifies bytes your edit never reached.
+
+  **The two flags are not equivalent, and this section used to say they were.** `--no-build-cache`
+  disables the *build cache* — it does not disable Gradle's **incremental up-to-date checks**. If the
+  inputs hash the same as the last release build, the task is **skipped entirely**, nothing is
+  compiled, and the probe reads whatever dex is already sitting in `outputs/`. That is the identical
+  failure the flag was added to prevent, arrived at by a different route. `--rerun-tasks` is the one
+  that forces the work.
+
+  **The tell is the clock, and it is the part a reader can actually spot: a release assemble that
+  finishes in about a second did not compile anything.** A real one here takes ~60–70 s.
+
+  **What it cost.** In 9c's final gate, `assembleRelease --no-build-cache` returned
+  `BUILD SUCCESSFUL in 1s` — *after* three plants had been applied and reverted. The reverts had
+  restored the inputs to the hash of an earlier release build, so Gradle skipped the task and the
+  probe would have certified a dex predating every one of them. It happened to be the right bytes;
+  nothing on screen said so, and nothing would have said otherwise. Re-run with `--rerun-tasks` it
+  took 1m 10s and probed a dex that had actually been built. Same shape as trap 10 — **a green that
+  certifies bytes the change never reached** — one layer further down.
 
 **12. `Get-Content -Raw | Set-Content -Encoding utf8` silently corrupts em-dashes into mojibake.**
 `Get-Content -Raw` decodes as the system ANSI codepage unless told otherwise, so a UTF-8 `—`

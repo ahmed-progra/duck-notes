@@ -1736,9 +1736,12 @@ a class without also deleting its file, so it had never surfaced.
 
 **`org.gradle.caching=true` can serve a stale dex to the probe.** During the same investigation, a
 plain `assembleRelease` — and even `clean assembleRelease` — returned a byte-identical dex from the
-build cache in 6 s. The probe read whatever dex the cache handed back. **Run the probe against a
-`--no-build-cache` (or `--rerun-tasks`) release build**, or it can certify bytes your edit never
-reached — the exact shape of trap 10, one layer down. Both findings are written into SETUP.md as trap 11.
+build cache in 6 s. The probe read whatever dex the cache handed back, so it can certify bytes your
+edit never reached — the exact shape of trap 10, one layer down. Both findings are written into
+SETUP.md as trap 11, **which is where the current flag lives — read it there rather than from here.**
+This paragraph said `--no-build-cache` (or `--rerun-tasks`), and 9c proved those are not equivalent:
+`--no-build-cache` does not disable Gradle's up-to-date checks, so the task can be skipped outright.
+`--rerun-tasks` is the one that forces the work.
 
 ### Verification
 
