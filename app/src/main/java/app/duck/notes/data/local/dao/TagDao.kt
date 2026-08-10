@@ -13,7 +13,7 @@ data class TagNoteRefRow(val name: String, val noteId: String)
  * Tag reads plus user-authored writes (pin, rename, icon).
  *
  * Tag *creation from note bodies* and orphan cleanup still happen inside
- * [NoteDao.saveNoteWithTags] — Phase 7 did not change that, because rename and delete are body
+ * [NoteDao.saveNoteWithTagsAndLinks] — Phase 7 did not change that, because rename and delete are body
  * edits and the rows follow from re-parsing exactly as they do on an ordinary save. What Phase 7
  * added here are the by-name lookups the two operations need to carry customization across and to
  * clean up after themselves.
@@ -72,7 +72,7 @@ interface TagDao {
     /**
      * Unconditional. Used by delete, and by rename for the old rows it has just emptied.
      *
-     * Needed because [NoteDao.saveNoteWithTags]'s `deleteOrphanTags` **spares pinned and icon'd
+     * Needed because [NoteDao.saveNoteWithTagsAndLinks]'s `deleteOrphanTags` **spares pinned and icon'd
      * rows** by design — so the case where a user is most likely to be deleting a tag is exactly the
      * case where the row would otherwise survive its own deletion.
      */

@@ -30,6 +30,15 @@ interface NoteRepository {
 
     fun observeNote(id: String): Flow<Note?>
 
+    /**
+     * Titles of active notes except [excludeId], newest first — the `[[title]]` picker's candidates.
+     *
+     * Titles rather than [Note]s because that is all the picker inserts, and because it keeps holding
+     * every candidate in memory cheap. [excludeId] is the note being edited, which must not offer
+     * itself a link to itself.
+     */
+    fun observeTitles(excludeId: String?): Flow<List<String>>
+
     suspend fun getNote(id: String): Note?
 
     /**

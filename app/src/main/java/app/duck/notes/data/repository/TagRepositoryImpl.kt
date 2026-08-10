@@ -110,7 +110,7 @@ class TagRepositoryImpl @Inject constructor(
     /**
      * The inverse of both, in one transaction — *write these bodies back*.
      *
-     * Restoring bodies restores tag **membership** for free, because `saveNoteWithTags` re-derives
+     * Restoring bodies restores tag **membership** for free, because `saveNoteWithTagsAndLinks` re-derives
      * `note_tags` from the text. It is what makes undo honest even after a merge, which no inverse
      * rename could achieve. The two steps after it are the two things bodies do not carry:
      * customization, since `ensureTag` mints a fresh row without it; and the sweep, since a created
@@ -156,7 +156,7 @@ class TagRepositoryImpl @Inject constructor(
      * rather than `deferred` because every caller writes: it takes the write lock up front instead
      * of upgrading mid-transaction and risking `SQLITE_BUSY`. Nested DAO calls reuse the held
      * connection — Room tracks it in the coroutine context, which is what makes
-     * `saveNoteWithTags`'s own `@Transaction` compose rather than deadlock.
+     * `saveNoteWithTagsAndLinks`'s own `@Transaction` compose rather than deadlock.
      *
      * `DuckDatabaseTest` records the same trap for `insertAll`; this is that note's other half.
      */
@@ -193,11 +193,11 @@ class TagRepositoryImpl @Inject constructor(
      */
     private suspend fun writeBody(note: NoteEntity, body: String) {
         // Links re-derived from the rewritten body for the same reason the title and tags are: this
-        // is the single write path, and `saveNoteWithTags` clears a note's link rows before
+        // is the single write path, and `saveNoteWithTagsAndLinks` clears a note's link rows before
         // re-inserting. Omitting them here would make a tag rename silently delete every
         // `[[WikiLink]]` row of every note it touched — a rename in one syntax destroying data in
         // another. A rename never edits bracket syntax, so the re-derived list is the same list.
-        notes.saveNoteWithTags(
+        notes.saveNoteWithTagsAndLinks(
             note.copy(title = deriveTitle(body), body = body),
             parseTags(body),
             resolveWikiLinks(body),
@@ -216,7 +216,7 @@ class TagRepositoryImpl @Inject constructor(
         oldRows.zip(newNames).forEach { (old, newName) ->
             if (!old.isPinned && old.iconKey == null) return@forEach
             val current = tags.getByName(newName)
-                // No body carries this tag, so `saveNoteWithTags` never minted a row to carry onto.
+                // No body carries this tag, so `saveNoteWithTagsAndLinks` never minted a row to carry onto.
                 // Move the old row itself rather than dropping it: `upsert` is keyed on `id`, so
                 // rewriting it under the new name *relocates* it, and the `deleteByName(old.name)`
                 // that follows then matches nothing. Reachable only because `deleteOrphanTags`

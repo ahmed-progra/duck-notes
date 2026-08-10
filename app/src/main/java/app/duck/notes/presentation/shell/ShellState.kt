@@ -288,6 +288,12 @@ data class ShellUiState(
     val selectedNoteBacklinks: List<NoteLink> = emptyList(),
     /** Whether the backlinks panel is showing — a side pane on Expanded, a bottom sheet below it. */
     val infoOpen: Boolean = false,
+    /**
+     * Candidate titles for the `[[title]]` picker, newest first and **excluding the open note** —
+     * Phase 9c. Queried rather than read off [notes], which is narrowed by the sidebar filter and
+     * would silently shrink the picker whenever the user filtered by a tag.
+     */
+    val allNoteTitles: List<String> = emptyList(),
     val undo: TagPrompt? = null,
 )
 

@@ -68,7 +68,7 @@ class AddTagToNoteTest {
     }
 
     /**
-     * The visible-corruption case. `saveNoteWithTags` inserts cross-refs with IGNORE and `ParseTags`
+     * The visible-corruption case. `saveNoteWithTagsAndLinks` inserts cross-refs with IGNORE and `ParseTags`
      * dedupes, so a second `#work` in the body would leave the row single and the text doubled — a
      * duplicate the database cannot see and the user cannot miss.
      */

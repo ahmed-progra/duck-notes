@@ -37,6 +37,7 @@ import app.duck.notes.domain.markdown.MarkdownTextCache
 import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.markdown.SectionFolding
 import app.duck.notes.domain.markdown.SpanPlanner
+import app.duck.notes.domain.markdown.WikiLinkScanner
 
 /**
  * The editor — the markdown engine over a buffer someone else owns.
@@ -88,6 +89,8 @@ fun MarkdownEditorScreen(
     onToggleFocus: () -> Unit = {},
     /** Null in the gallery and previews, which have no shell to host the panel. */
     onToggleInfo: (() -> Unit)? = null,
+    /** Candidate titles for the `[[title]]` picker, newest first — Phase 9c. */
+    noteTitles: List<String> = emptyList(),
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -161,6 +164,30 @@ fun MarkdownEditorScreen(
         bottomBar = {
             if (!focusMode) {
                 Column {
+                    // The picker leads the chrome stack, closest to the text it completes into.
+                    //
+                    // Both values are SOURCE offsets straight off the buffer: `state.selection.start`
+                    // is a raw buffer offset and `activeAt` walks the raw text. No `TextLayoutResult`
+                    // and no `SpanPlanner` rebase is involved, which is what keeps 9c out of rendered
+                    // space — see WikiLinkSuggestions for why that boundary is drawn here.
+                    //
+                    // Keyed on text AND selection, unlike `scan` above: the caret alone moving in or
+                    // out of a `[[` changes whether there is a context at all.
+                    val active = remember(text, selection) {
+                        if (selection.collapsed) {
+                            WikiLinkScanner.activeAt(text.toString(), selection.start)
+                        } else {
+                            // A range selection is someone selecting, not someone typing a title.
+                            null
+                        }
+                    }
+                    if (active != null) {
+                        val prefix = text.substring(active.first + 2, active.last + 1)
+                        WikiLinkSuggestions(
+                            titles = WikiLinkScanner.suggest(noteTitles, prefix),
+                            onSelect = { state.completeWikiLink(active, it) },
+                        )
+                    }
                     AttachmentStrip(
                         attachments = attachments,
                         onAddImage = onAddImage,

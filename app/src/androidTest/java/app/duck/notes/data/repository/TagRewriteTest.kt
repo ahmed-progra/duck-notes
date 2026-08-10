@@ -58,7 +58,7 @@ class TagRewriteTest {
 
     private suspend fun seed(body: String, trashed: Boolean = false): String {
         val id = UUID.randomUUID().toString()
-        db.noteDao().saveNoteWithTags(
+        db.noteDao().saveNoteWithTagsAndLinks(
             NoteEntity(
                 id = id,
                 title = DeriveTitle()(body),
@@ -156,7 +156,7 @@ class TagRewriteTest {
     /**
      * Undo restores bodies, membership and customization together.
      *
-     * Membership comes back for free because `saveNoteWithTags` re-derives `note_tags` from the
+     * Membership comes back for free because `saveNoteWithTagsAndLinks` re-derives `note_tags` from the
      * text — the property that makes undo honest after a *merge*, where no inverse rename could
      * separate the two tags' notes again. That is the case seeded here.
      */
@@ -306,7 +306,7 @@ class TagRewriteTest {
      * [rename_ofAPinnedTagNoNoteCarriesIsUndoable] for the assertion that now makes it.
      *
      * Bodies are still the source of truth; this is the one case where they cannot be. With no note
-     * carrying `#unused`, `saveNoteWithTags` never mints a `renamed` row, so there is nothing for
+     * carrying `#unused`, `saveNoteWithTagsAndLinks` never mints a `renamed` row, so there is nothing for
      * `carryCustomization` to graft the pin onto. It now moves the old row instead — same id, new
      * name — which `deleteByName` then no longer matches. Such a row can only exist because
      * `deleteOrphanTags` spares pinned ones, and that exemption is what makes moving it the correct

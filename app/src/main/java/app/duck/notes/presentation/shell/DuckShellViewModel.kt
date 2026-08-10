@@ -201,8 +201,28 @@ class DuckShellViewModel @Inject constructor(
      */
     private val infoOpen: Flow<Boolean> = handle.getStateFlow(KEY_INFO_OPEN, false)
 
+    /**
+     * Candidate titles for the `[[title]]` picker, excluding the open note — Phase 9c.
+     *
+     * Followed by id like [backlinks] is, so `flatMapLatest` both cancels the previous note's query
+     * on a switch and re-runs the exclusion for the new one. A note must not offer itself a link to
+     * itself; with nothing selected there is nothing to exclude and nothing to complete into, so the
+     * list is empty rather than everything.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val noteTitles: Flow<List<String>> = selectedId.flatMapLatest { id ->
+        if (id == null) flowOf(emptyList()) else observeNotes.titles(id)
+    }
+
     /** Three flows bundled into one, because `combine` tops out at five. */
     private val tagState: Flow<TagState> = combine(tree, counts, undo, ::TagState)
+
+    /**
+     * Phase 9's three, bundled for the same reason [tagState] is: `combine` tops out at five and the
+     * top-level one was already there. Backlinks, the panel's open state and the picker's candidates
+     * are the linking feature's state, so they travel together rather than being split by arity.
+     */
+    private val linkState: Flow<LinkState> = combine(backlinks, infoOpen, noteTitles, ::LinkState)
 
     private val editorState: Flow<EditorState> =
         combine(filter, notes, selection, expanded, collapsedSections) { f, n, sel, exp, collapsed ->
@@ -214,9 +234,8 @@ class DuckShellViewModel @Inject constructor(
             editorState,
             tagState,
             selectedAttachments,
-            backlinks,
-            infoOpen,
-        ) { editor, tg, attachments, links, info ->
+            linkState,
+        ) { editor, tg, attachments, link ->
             ShellUiState(
                 filter = editor.filter,
                 notes = editor.notes,
@@ -230,8 +249,9 @@ class DuckShellViewModel @Inject constructor(
                 selectedNoteAttachments = attachments,
                 allTagPaths = tg.tree.tagPaths(),
                 collapsedSections = editor.collapsedSections,
-                selectedNoteBacklinks = links,
-                infoOpen = info,
+                selectedNoteBacklinks = link.backlinks,
+                infoOpen = link.infoOpen,
+                allNoteTitles = link.noteTitles,
                 undo = tg.undo,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
@@ -782,6 +802,13 @@ class DuckShellViewModel @Inject constructor(
         val tree: List<TagNode>,
         val counts: Map<String, TagCount>,
         val undo: TagPrompt?,
+    )
+
+    /** Phase 9's state: what links in, whether the panel shows it, and what the picker can complete to. */
+    private data class LinkState(
+        val backlinks: List<NoteLink>,
+        val infoOpen: Boolean,
+        val noteTitles: List<String>,
     )
 
     // Not private since 8a: `AutosaveDurabilityTest` waits out [MAX_WAIT_MS] on a real clock, and a

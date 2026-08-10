@@ -104,6 +104,16 @@ class FakeNoteRepository : NoteRepository {
 
     override fun observeNote(id: String): Flow<Note?> = notes.map { all -> all.find { it.id == id } }
 
+    /**
+     * Mirrors `NoteDao.observeTitles`: active notes only, newest first, and never the note whose id
+     * is [excludeId] — the one being edited, which must not offer itself a link to itself.
+     */
+    override fun observeTitles(excludeId: String?): Flow<List<String>> = notes.map { all ->
+        all.filterNot { it.isTrashed || it.id == excludeId }
+            .sortedByDescending { it.modifiedAt }
+            .map { it.title }
+    }
+
     override suspend fun getNote(id: String): Note? = notes.value.find { it.id == id }
 
     override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) {

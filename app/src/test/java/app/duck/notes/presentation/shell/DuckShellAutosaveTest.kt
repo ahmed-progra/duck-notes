@@ -619,7 +619,7 @@ class DuckShellAutosaveTest {
      * **The test rev 1's design would fail.**
      *
      * Adopt-when-clean blocks the adoption but leaves `#work` sitting in a dirty buffer, and the next
-     * autosave then writes it back — `saveNoteWithTags` re-derives tags from that body and
+     * autosave then writes it back — `saveNoteWithTagsAndLinks` re-derives tags from that body and
      * `ensureTag` mints the row the rename just deleted. The buffer is rewritten with the same
      * `TagScanner` the transaction used, never discarded.
      *

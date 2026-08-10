@@ -28,8 +28,10 @@ class NoteRepositoryImpl @Inject constructor(
     override fun observeNote(id: String): Flow<Note?> =
         notes.observeNote(id).map { it?.toDomain() }
 
+    override fun observeTitles(excludeId: String?): Flow<List<String>> = notes.observeTitles(excludeId)
+
     override suspend fun getNote(id: String): Note? = notes.getById(id)?.toDomain()
 
     override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) =
-        notes.saveNoteWithTags(note.toEntity(), tagNames, linkTitles)
+        notes.saveNoteWithTagsAndLinks(note.toEntity(), tagNames, linkTitles)
 }

@@ -85,7 +85,7 @@ import org.junit.runner.RunWith
  * because a one-step lag looks exactly like a stale-cache bug.
  *
  * **Phase 8a introduced the defect.** Before autosave the editor never wrote, so a partially typed tag
- * never reached `saveNoteWithTags` at all.
+ * never reached `saveNoteWithTagsAndLinks` at all.
  */
 @RunWith(AndroidJUnit4::class)
 class PartialTagMintingTest {
@@ -140,7 +140,7 @@ class PartialTagMintingTest {
 
     @Test
     fun typingATagOneCharacterAtATimeWithAPauseBetweenEach() = runBlocking {
-        db.noteDao().saveNoteWithTags(
+        db.noteDao().saveNoteWithTagsAndLinks(
             NoteEntity(id = "n1", title = "n", body = "", createdAt = 0L, modifiedAt = 0L),
             emptyList(),
         )
@@ -198,7 +198,7 @@ class PartialTagMintingTest {
      */
     @Test
     fun aTagLeftUnderTheCaretIsMintedWhenTheAppStops() = runBlocking {
-        db.noteDao().saveNoteWithTags(
+        db.noteDao().saveNoteWithTagsAndLinks(
             NoteEntity(id = "n1", title = "n", body = "", createdAt = 0L, modifiedAt = 0L),
             emptyList(),
         )

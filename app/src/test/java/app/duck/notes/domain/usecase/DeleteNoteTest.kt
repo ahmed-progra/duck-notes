@@ -61,7 +61,7 @@ class DeleteNoteTest {
     /**
      * The mirror of [preservesTagsOfTheTrashedNote], and the same call for the same reason.
      *
-     * `NoteDao.saveNoteWithTags` **clears** a note's link rows before re-inserting, so trashing has
+     * `NoteDao.saveNoteWithTagsAndLinks` **clears** a note's link rows before re-inserting, so trashing has
      * to hand it the body's links or it deletes them. It must not: a trashed note still holds
      * `[[Pond]]` in its body, so its rows stay correct and `RestoreNote` has nothing to rebuild.
      * Hiding them from other notes' panels is the *query's* job — `NoteLinkDao.observeBacklinks`

@@ -267,6 +267,7 @@ fun DuckShell(
                         focusMode = focusing,
                         onToggleFocus = { focusMode = !focusMode },
                         onToggleInfo = actions.onToggleInfo,
+                        noteTitles = state.allNoteTitles,
                     )
                 }
             }

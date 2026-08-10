@@ -64,7 +64,7 @@ class NoteLinkDaoTest {
     )
 
     private suspend fun save(note: NoteEntity, linkTitles: List<String> = emptyList()) =
-        notes.saveNoteWithTags(note, emptyList(), linkTitles)
+        notes.saveNoteWithTagsAndLinks(note, emptyList(), linkTitles)
 
     private suspend fun backlinkSourceIds(targetId: String) =
         links.observeBacklinks(targetId).first().map { it.sourceId }
@@ -230,5 +230,72 @@ class NoteLinkDaoTest {
         save(note(UUID.randomUUID().toString(), "Lonely"))
 
         assertEquals(emptyList<String>(), backlinkSourceIds("lonely"))
+    }
+
+    // --- autocomplete candidates (9c) ----------------------------------------
+    //
+    // `observeTitles` lives on NoteDao rather than NoteLinkDao, but it is the `[[title]]` picker's
+    // query and its answers have to agree with `noteIdByTitle`'s — trashed excluded, most recently
+    // modified wins — so it is tested beside the resolution it feeds rather than among the note
+    // queries it merely resembles.
+
+    private suspend fun titles(excludeId: String? = null) = notes.observeTitles(excludeId).first()
+
+    /**
+     * **The order is a decision, not an accident.** `notes.title` carries no index, so without the
+     * `ORDER BY` SQLite returns rows however it reaches them — stable today and free to change after
+     * a `VACUUM`, which would silently reshuffle the picker. Most recently modified first is
+     * `noteIdByTitle`'s own rule, so the title the picker puts at the top is the note an exact
+     * resolution would pick. Dropping `ORDER BY modified_at DESC` is the plant.
+     */
+    @Test
+    fun titlesAreOfferedMostRecentlyModifiedFirst() = runBlocking {
+        save(note("old", "Oldest", modifiedAt = 1_000L))
+        save(note("mid", "Middle", modifiedAt = 5_000L))
+        save(note("new", "Newest", modifiedAt = 9_000L))
+
+        assertEquals(listOf("Newest", "Middle", "Oldest"), titles())
+    }
+
+    /**
+     * The note being edited does not offer itself.
+     *
+     * A self-link would put the note into its own backlinks panel — the one 9b built — which is noise
+     * rather than information. Dropping the `:excludeId` predicate is the plant.
+     */
+    @Test
+    fun theEditedNoteDoesNotOfferItself() = runBlocking {
+        save(note("self", "Journal"))
+        save(note("other", "Pond"))
+
+        assertEquals(listOf("Pond"), titles(excludeId = "self"))
+        assertEquals(
+            "a null exclusion offers everything",
+            listOf("Journal", "Pond").sorted(),
+            titles().sorted(),
+        )
+    }
+
+    /**
+     * Trashed titles are not offered, matching `noteIdByTitle`.
+     *
+     * Offering one would complete to a title that resolves to nothing, so the link would be painted
+     * and would never become a `note_links` row — a completion that silently does not work.
+     */
+    @Test
+    fun trashedTitlesAreNotOffered() = runBlocking {
+        save(note("live", "Pond"))
+        save(note("binned", "Binned", trashed = true))
+
+        assertEquals(listOf("Pond"), titles())
+    }
+
+    /** Two notes may share a title; the query returns both and `suggest` dedupes for display. */
+    @Test
+    fun aDuplicateTitleIsReturnedOncePerNote() = runBlocking {
+        save(note("a", "Pond", modifiedAt = 1_000L))
+        save(note("b", "Pond", modifiedAt = 2_000L))
+
+        assertEquals(listOf("Pond", "Pond"), titles())
     }
 }

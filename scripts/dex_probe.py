@@ -65,6 +65,10 @@ MUST_BE_PRESENT = [
     # write half has no class of its own (the rows ride NoteDao's existing save transaction), so this
     # is the string that proves the phase reached the release dex rather than only the source tree.
     "DuckInfoPanel",
+    # 9c. The [[title]] autocomplete strip. Its detection half lives inside WikiLinkScanner (already
+    # above) because the source guard forbids the bracket literals anywhere higher, so this composable
+    # is the string that proves the picker itself reached the release dex.
+    "WikiLinkSuggestions",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

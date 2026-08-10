@@ -31,4 +31,14 @@ class ObserveNotes @Inject constructor(
     fun untagged(): Flow<List<Note>> = notes.observeUntagged()
 
     fun trashed(): Flow<List<Note>> = notes.observeTrashed()
+
+    /**
+     * Candidate titles for the `[[title]]` picker — Phase 9c.
+     *
+     * A view here rather than a use case of its own, for the reason this class's KDoc already gives:
+     * these are the views a predicate over [invoke] cannot supply. This one cannot because it returns
+     * titles rather than notes and because the exclusion is by id, which a caller filtering a
+     * `List<Note>` could do — but only after loading every body to throw them away.
+     */
+    fun titles(excludeId: String?): Flow<List<String>> = notes.observeTitles(excludeId)
 }

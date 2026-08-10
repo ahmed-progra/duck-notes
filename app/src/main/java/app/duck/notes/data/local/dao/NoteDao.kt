@@ -17,9 +17,9 @@ import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
 /**
- * Reads and writes for notes, plus the atomic note-with-tags save.
+ * Reads and writes for notes, plus the atomic save of a note with its derived rows.
  *
- * Abstract class rather than interface so [saveNoteWithTags] can be a `@Transaction` default
+ * Abstract class rather than interface so [saveNoteWithTagsAndLinks] can be a `@Transaction` default
  * method that calls the tag/cross-ref helpers below — Room only lets a transaction call methods
  * on the same DAO. Full-text search goes through [search] (`@RawQuery`) because Room's schema
  * parser can't see the hand-built `notes_fts` virtual table and would reject a normal `@Query`.
@@ -160,6 +160,45 @@ abstract class NoteDao {
     )
     abstract fun observeUntagged(): Flow<List<NoteEntity>>
 
+    /**
+     * Titles of every active note except [excludeId], most recently modified first — Phase 9c's
+     * `[[title]]` autocomplete.
+     *
+     * ## Titles, not notes, and no prefix in the SQL
+     *
+     * The picker matches a typed prefix, and this **deliberately does not**. `LIKE :prefix || '%'`
+     * would carry the exact defect [notesByTagPath] documents one screen up: `_` and `%` are `LIKE`
+     * wildcards, note titles are every bit as free to contain them as tag names are, and the fix is an
+     * `ESCAPE` clause plus an escaping helper. `WikiLinkScanner.suggest` filters in Kotlin instead,
+     * which needs no escaping, folds case over the whole of Unicode rather than SQLite `NOCASE`'s
+     * ASCII, and is a pure function a JVM test can drive.
+     *
+     * Returning titles rather than rows keeps that cheap: at 5000 notes this is a few hundred KB of
+     * strings, against a `ShellUiState` that already holds full note **bodies**.
+     *
+     * ## The two predicates
+     *
+     * `is_trashed = 0` matches [noteIdByTitle] — a link must not resolve into the bin, so offering a
+     * trashed title would complete to something that never becomes a row.
+     *
+     * [excludeId] is the note being edited, so it cannot offer itself. A self-link would put the note
+     * into its own backlinks panel, which is noise rather than information. Null offers everything,
+     * which is what a caller with no note open wants.
+     *
+     * `ORDER BY modified_at DESC` is [noteIdByTitle]'s rule, and is a decision rather than an
+     * accident for the same reason: `notes.title` carries no index, so without it SQLite returns rows
+     * in whatever order it reaches them, free to change after a `VACUUM`. Pinned by
+     * `NoteLinkDaoTest.titlesAreOfferedMostRecentlyModifiedFirst`.
+     */
+    @Query(
+        """
+        SELECT title FROM notes
+        WHERE is_trashed = 0 AND (:excludeId IS NULL OR id != :excludeId)
+        ORDER BY modified_at DESC
+        """,
+    )
+    abstract fun observeTitles(excludeId: String?): Flow<List<String>>
+
     // --- Search -------------------------------------------------------------
 
     /**
@@ -232,7 +271,7 @@ abstract class NoteDao {
      * not each have to pass one; every real write goes through `NoteRepositoryImpl`, which does.
      */
     @Transaction
-    open suspend fun saveNoteWithTags(
+    open suspend fun saveNoteWithTagsAndLinks(
         note: NoteEntity,
         tagNames: List<String>,
         linkTitles: List<String> = emptyList(),

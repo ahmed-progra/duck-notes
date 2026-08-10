@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -367,6 +368,58 @@ class RtlLayoutTest {
         rule.waitForIdle()
     }
 
+    /**
+     * The `[[title]]` picker is a `LazyRow`, so its best match must lead — left in LTR, right in RTL.
+     *
+     * Expected to pass without a production change, the same claim [theAttachmentStripMirrorsWithLayoutDirection]
+     * makes about `LazyRow` — and measured here rather than inherited from it, because that test
+     * proves the framework mirrors *the attachment strip*, not that this composable failed to undo it.
+     * **The plant is the idiom that file already names:** a hardcoded
+     * `CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)` inside
+     * `WikiLinkSuggestions`, which pins the first entry left in both directions.
+     *
+     * Two suggestions, so "leads" is a comparison between siblings rather than against a container
+     * edge — the shape that survives padding changes.
+     *
+     * The editor is driven with a body ending in a half-typed `[[`, and the caret is placed there by
+     * the `TextFieldState`, because the strip renders **only** when `WikiLinkScanner.activeAt` finds a
+     * context. That is also this test's second job: it is the one place the derived-visibility rule is
+     * exercised against a real composition rather than as a pure function.
+     */
+    @Test
+    fun theSuggestionStripMirrorsWithLayoutDirection() {
+        rule.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                DuckTheme {
+                    MarkdownEditorScreen(
+                        state = TextFieldState(SUGGEST_BODY, TextRange(SUGGEST_BODY.length)),
+                        noteTitles = listOf(FIRST_TITLE, SECOND_TITLE),
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        val ltrFirst = rule.onNodeWithText(FIRST_TITLE).getUnclippedBoundsInRoot()
+        val ltrSecond = rule.onNodeWithText(SECOND_TITLE).getUnclippedBoundsInRoot()
+        println("DUCK rtl: LTR first=$ltrFirst second=$ltrSecond")
+
+        flipToRtl()
+        val rtlFirst = rule.onNodeWithText(FIRST_TITLE).getUnclippedBoundsInRoot()
+        val rtlSecond = rule.onNodeWithText(SECOND_TITLE).getUnclippedBoundsInRoot()
+        println("DUCK rtl: RTL first=$rtlFirst second=$rtlSecond")
+
+        assertEquals(
+            "the best match must lead in both directions: left of the second entry in LTR " +
+                "($ltrFirst vs $ltrSecond), right of it in RTL ($rtlFirst vs $rtlSecond). LazyRow " +
+                "lays items start-to-end per LocalLayoutDirection; this is what proves it rather " +
+                "than assuming it.",
+            SuggestionLeadingLtr(true) to SuggestionLeadingRtl(true),
+            SuggestionLeadingLtr(ltrFirst.right <= ltrSecond.left) to
+                SuggestionLeadingRtl(rtlFirst.left >= rtlSecond.right),
+        )
+    }
+
     /** Named wrappers so failures read `GutterAfterText(false)`, not a bare `false`. */
     private data class GutterBeforeText(val value: Boolean)
 
@@ -391,6 +444,10 @@ class RtlLayoutTest {
     private data class HeadingLeadingLtr(val value: Boolean)
 
     private data class HeadingLeadingRtl(val value: Boolean)
+
+    private data class SuggestionLeadingLtr(val value: Boolean)
+
+    private data class SuggestionLeadingRtl(val value: Boolean)
 
     private companion object {
         /** "Hide <title> section" — the collapse label, with the Arabic heading as its argument. */
@@ -418,6 +475,17 @@ class RtlLayoutTest {
         /** One incoming link, so the panel renders its list branch rather than the empty state. */
         val SAMPLE_BACKLINK =
             NoteLink(sourceId = "n0", targetId = "n1", linkText = "note", sourceTitle = "Journal")
+
+        /**
+         * A body ending in a half-typed `[[`, with the caret at its end — the only state in which
+         * `WikiLinkSuggestions` renders at all.
+         */
+        const val SUGGEST_BODY = "note body [[Po"
+
+        /** Two candidates, so "leads" compares siblings rather than a container edge. */
+        const val FIRST_TITLE = "Pond"
+
+        const val SECOND_TITLE = "Ponder this"
 
         /** Either side of `paneModeFor`'s 840dp and 600dp breakpoints. */
         val EXPANDED_WIDTH = 900.dp

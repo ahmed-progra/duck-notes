@@ -62,7 +62,7 @@ import org.junit.runner.RunWith
  * phase's worst failure lives:
  *
  * **`ensureTag` resurrecting a deleted tag row.** A stale editor buffer written after a rename does
- * not merely lose the rename — `NoteDao.saveNoteWithTags` re-derives `note_tags` from the body it is
+ * not merely lose the rename — `NoteDao.saveNoteWithTagsAndLinks` re-derives `note_tags` from the body it is
  * handed, and `ensureTag` *mints a fresh `tags` row* for a name the transaction just deleted. No fake
  * models that, because no fake has an `ensureTag`. This suite is the only place it is observable.
  *
@@ -122,7 +122,7 @@ class AutosaveDurabilityTest {
     }
 
     private suspend fun seed(id: String, body: String) {
-        db.noteDao().saveNoteWithTags(
+        db.noteDao().saveNoteWithTagsAndLinks(
             NoteEntity(id = id, title = DeriveTitle()(body), body = body, createdAt = 0L, modifiedAt = 0L),
             parseTags(body),
         )
@@ -234,7 +234,7 @@ class AutosaveDurabilityTest {
      *
      * A rename commits while the editor holds unsaved text for one of the affected notes. If the
      * buffer is merely *not adopted*, it still carries `#work`, and the next autosave hands that body
-     * to `saveNoteWithTags` — which re-derives tags and calls `ensureTag("work")`, minting the row
+     * to `saveNoteWithTagsAndLinks` — which re-derives tags and calls `ensureTag("work")`, minting the row
      * the transaction just deleted. The rename is reverted on exactly the note the user was looking
      * at, and the tag reappears in the sidebar.
      *

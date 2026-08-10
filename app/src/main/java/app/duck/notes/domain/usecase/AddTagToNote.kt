@@ -33,7 +33,7 @@ enum class AddTagResult {
  * A no-op, matched on the **exact** name. Not a prefix: a note carrying `#projects/duck` can
  * legitimately gain `#projects`, and the subtree filter surfaces it under both either way.
  *
- * Without this the failure is quiet and ugly. `NoteDao.saveNoteWithTags` inserts cross-refs with
+ * Without this the failure is quiet and ugly. `NoteDao.saveNoteWithTagsAndLinks` inserts cross-refs with
  * `OnConflictStrategy.IGNORE` and [ParseTags] calls `distinct()`, so **the row stays single while
  * the body reads `#work` twice** — a duplicate the database cannot see and the user cannot miss.
  * The menu also omits tags the note already has; this is the guard for the body moving underneath
