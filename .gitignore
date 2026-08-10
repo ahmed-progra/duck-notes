@@ -14,3 +14,7 @@ local.properties
 *.aab
 .claude/
 graphify-out/
+# SQLite runtime files (Room builds the DB on-device; these are stray dev/test artifacts)
+*.db
+*.db-shm
+*.db-wal
