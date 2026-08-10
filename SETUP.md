@@ -260,8 +260,8 @@ foundation 1.11+) require AGP 9.2 and are out of reach until AGP is upgraded.
 
 The following have cost time here — the first three in Phase 6, the fourth and fifth in the 8b
 audit-fix pass, the next two in the 8c-b spike, the eighth in the 8c-b re-verify pass, the ninth in
-the 8c-c-fix pass, the tenth in the 8d-a pass, the eleventh in 8d-b, the twelfth in 9b. None is a
-project defect; all are easy to hit again.
+the 8c-c-fix pass, the tenth in the 8d-a pass, the eleventh in 8d-b, the twelfth in 9b, the
+thirteenth across 9a, 9b and 9d. None is a project defect; all are easy to hit again.
 
 **1. Neither `gradle` nor `adb` is on `PATH`.** Both are installed; neither is findable. Use the
 absolute paths — these two lines are the ones to copy:
@@ -555,3 +555,44 @@ above, after which every remaining plant in that sequence used it.
 **Note the interaction with CLAUDE.md's git rules.** `git checkout` of a tracked file is forbidden
 here, so mojibake in a *tracked* file cannot be undone by discarding the change — it has to be
 repaired in place. Grep for `â€` and `Â` before committing anything a PowerShell pipeline touched.
+
+**13. Confirm a plant actually landed before you run anything. A plant that fails to apply produces
+a green, and a green is what a working guard looks like.**
+
+This has now happened three times, in three different ways:
+
+- **9a's Plant R** patched only one of the two `starts += start` appends in `splitLinesWithOffsets`.
+  The fixture's link was on the *last* line, whose start comes from the append that was missed. Whole
+  suite green.
+- **9b's plant on the same function** had the same shape for the same reason.
+- **9d's Plant 11** was meant to rename `WikiLinkOverlay.kt` to break a `MUST_BE_PRESENT` control.
+  `git mv` **refuses an untracked file**, the `&&` short-circuited the rename that followed it, and
+  the probe then reported `WikiLinkOverlay` **present** — certifying a build with no plant in it.
+
+**Why it is dangerous rather than merely annoying.** CLAUDE.md already warns that a plant is code and
+can be wrong in the direction that fakes a red. This is the *other* direction, and it is worse,
+because a fake red is at least investigated. A plant that never applied is indistinguishable from a
+guard that is genuinely load-bearing — both print green — so it is filed as *"guard confirmed"* and
+the guard is never tested again.
+
+**The tell:** a plant that produces no red is one of exactly two things — a finding worth writing
+down, or a plant that never applied. **Those look identical until you check**, so check before
+concluding either. 9d had one of each in the same session: the outer-vs-inner span plant was a real
+finding (the two are provably equal under concealment), and Plant 11 was a non-application.
+
+**Confirm the edit, not the command.** Any one of these is enough, and all are cheap:
+
+```sh
+git diff --stat -- <file>                 # tracked files: the plant should show up here
+grep -n "<the planted text>" <file>       # untracked files, or a rename: look for it directly
+python - <<'PY'                           # a patch that asserts it matched
+s = open(p, encoding='utf-8').read()
+assert OLD in s, "plant did not match — nothing was changed"
+open(p, 'w', encoding='utf-8', newline='').write(s.replace(OLD, NEW))
+PY
+```
+
+**Do not chain a plant behind `&&`.** `git mv old new && python patch.py` silently skips the patch
+when the move fails, which is precisely how Plant 11 got through. Run the steps separately and read
+the exit code, or use plain `mv` — **an untracked file is exactly the situation a class added by the
+current phase is in**, which is when this fires.

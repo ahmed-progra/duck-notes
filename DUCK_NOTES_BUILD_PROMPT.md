@@ -2006,6 +2006,18 @@ phase's notes" is where a defect goes to be forgotten.
 - **`AttachImage` returns `null` on a failed copy with no user feedback.** A real image that failed to
   read attaches nothing and says nothing. *Fix:* same — propagate the failure and raise the same
   snackbar rather than returning `null` silently. Pairs with the sink above; one snackbar covers both.
+- **A failed create-on-tap says nothing — the tap just appears to do nothing.** `OpenWikiLink` creates
+  the target through `SaveNote`; if that throws, the coroutine ends and no navigation happens. *Fix:*
+  the same `NotWritable` snackbar the two above want. **Grouped with them deliberately:** whichever
+  phase wires that snackbar covers all three, which is cheaper than wiring it once in 9d and again
+  later.
+
+  **It differs from the other two in a way worth keeping straight.** Those *swallow* an exception —
+  `runCatching { … }.getOrNull()` — so the failure is discarded and the partial state is whatever the
+  copy left behind. This one throws cleanly out of a single Room transaction, so nothing partial
+  survives and nothing is being hidden from the code. **The only thing missing is the telling.** That
+  makes it the cheapest of the three to fix and the only one where the fix is purely a message.
+  (Found 9d; filed here rather than left as a ceiling in that phase's report.)
 ### Closed
 
 | what | where |
