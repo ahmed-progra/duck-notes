@@ -54,6 +54,9 @@ MUST_BE_PRESENT = [
     "AttachmentStorageImpl",
     # 8d-c paste. The image-paste receiver + its extracted decision (isAttachableImage/shouldAttach).
     "ImagePaste",
+    # 8d-d focus mode. The one new class the phase ships: the pure caret-to-paragraph resolver the
+    # dimming rides on. A present string here means focus mode's core reached the release dex.
+    "FocusParagraph",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

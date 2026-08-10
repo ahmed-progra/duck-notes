@@ -92,6 +92,14 @@
     <string name="editor_collapse_section">Hide %1$s section</string>
 
     <!--
+      Phase 8d-d focus mode. Both are contentDescription read aloud. Enter is the trailing toolbar
+      glyph; exit is the corner icon shown while focus mode is on (the toolbar, and its enter button,
+      are gone by then).
+    -->
+    <string name="editor_focus">Focus mode</string>
+    <string name="editor_focus_exit">Exit focus mode</string>
+
+    <!--
       Phase 8d-b attachment strip. Both are contentDescription read aloud: the add tile names the
       action, each thumbnail names what it is. There is no per-image alt yet, so every thumbnail
       shares one label — the strip's job is "these are the note's images", not describing each.

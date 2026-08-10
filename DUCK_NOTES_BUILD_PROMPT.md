@@ -1989,6 +1989,23 @@ A `[[link]]` inside a code fence produces no `note_links` row.
 
 ---
 
+## DEFERRED HARDENING
+
+A running backlog of latent defects found in passing and deliberately left, so they have a home to be
+scheduled from rather than being re-discovered each phase. **Not owned by any one phase** — Phase 16
+(or an earlier hardening pass) schedules these; the point of listing them here is that "mentioned in a
+phase's notes" is where a defect goes to be forgotten.
+
+- **`AttachmentStorageImpl.store` swallows its copy failure.** It wraps the byte copy in
+  `runCatching { … }.getOrNull()`, so a `content://` source that cannot be read returns `null` with no
+  signal. *Fix:* surface the failure to the caller and show it, in the `NotWritable`-snackbar shape
+  `onAddTagToNote` already uses. (Found 8d-c; mentioned there, and again in 8d-d, before landing here.)
+- **`AttachImage` returns `null` on a failed copy with no user feedback.** A real image that failed to
+  read attaches nothing and says nothing. *Fix:* same — propagate the failure and raise the same
+  snackbar rather than returning `null` silently. Pairs with the sink above; one snackbar covers both.
+
+---
+
 ## PHASE 16 — HARDENING
 
 **Build**

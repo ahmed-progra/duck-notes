@@ -164,6 +164,15 @@ fun DuckShell(
         // as the editor buffer's in Phase 6, and a much cheaper one.
         var dialog by remember { mutableStateOf<TagDialog?>(null) }
 
+        // Focus mode. Composable-local like `dialog` above — ephemeral view state, not something the
+        // panes read from the repository, so it stays out of ShellUiState. Reset whenever the open
+        // note changes: without this a stale `true` would survive a note being closed and then hide
+        // the list view's own sidebar button. [focusing] folds in "a note is actually open" so no
+        // single-frame gap between the reset firing and the read can leak a stray control.
+        var focusMode by remember { mutableStateOf(false) }
+        LaunchedEffect(state.selectedNoteId) { focusMode = false }
+        val focusing = focusMode && state.selectedNoteId != null
+
         val sidebar: @Composable () -> Unit = {
             DuckSidebar(
                 filter = state.filter,
@@ -235,7 +244,7 @@ fun DuckShell(
                     }
                 }
                 Column(m) {
-                    if (state.selectedNoteTags.isNotEmpty()) {
+                    if (state.selectedNoteTags.isNotEmpty() && !focusing) {
                         EditorTagRow(
                             tags = state.selectedNoteTags,
                             onTagClick = { actions.onFilter(ShellFilter.Tag(it)) },
@@ -253,6 +262,8 @@ fun DuckShell(
                         },
                         onDeleteAttachment = { actions.onDeleteAttachment(it.id) },
                         onAttachImages = actions.onAttachImages,
+                        focusMode = focusing,
+                        onToggleFocus = { focusMode = !focusMode },
                     )
                 }
             }
@@ -302,15 +313,20 @@ fun DuckShell(
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
+                        // Hidden in focus mode: this is the fourth chrome element, and Compact-only —
+                        // the wider modes lay panes out with no Scaffold/topBar, so there is nothing
+                        // to hide there. An empty topBar lambda measures to zero height.
                         // statusBarsPadding, because `Scaffold`'s topBar slot does NOT apply window
                         // insets to arbitrary content — only its own `TopAppBar` does. Without it
                         // the button draws over the clock under `enableEdgeToEdge`.
-                        DuckIconButton(
-                            icon = DuckIcon.Tag,
-                            contentDescription = stringResource(R.string.shell_open_sidebar),
-                            onClick = { scope.launch { drawer.open() } },
-                            modifier = Modifier.statusBarsPadding(),
-                        )
+                        if (!focusing) {
+                            DuckIconButton(
+                                icon = DuckIcon.Tag,
+                                contentDescription = stringResource(R.string.shell_open_sidebar),
+                                onClick = { scope.launch { drawer.open() } },
+                                modifier = Modifier.statusBarsPadding(),
+                            )
+                        }
                     },
                 ) { padding ->
                     val motion = DuckTheme.motion
@@ -361,6 +377,20 @@ fun DuckShell(
             hostState = snackbars,
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
         )
+
+        // The only chrome present in focus mode: the way back out. Root overlay, same hoist as the
+        // SnackbarHost, so it lands over the editor pane (the rightmost/only pane) in every mode.
+        // Alignment.TopEnd — the direction-aware one — so it mirrors under RTL, unlike the overlays'
+        // AbsoluteAlignment; RtlLayoutTest measures that rather than trusting it. statusBarsPadding
+        // for the same reason the Compact topBar button needs it: a root overlay gets no insets.
+        if (focusing) {
+            DuckIconButton(
+                icon = R.drawable.duckformat_focus,
+                contentDescription = stringResource(R.string.editor_focus_exit),
+                onClick = { focusMode = false },
+                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding(),
+            )
+        }
 
         TagDialogHost(
             dialog = dialog,

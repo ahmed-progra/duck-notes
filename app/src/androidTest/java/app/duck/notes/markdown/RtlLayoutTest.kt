@@ -1,20 +1,30 @@
 package app.duck.notes.markdown
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.domain.model.Attachment
+import app.duck.notes.domain.model.Note
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
+import app.duck.notes.presentation.shell.DuckShell
+import app.duck.notes.presentation.shell.ShellActions
+import app.duck.notes.presentation.shell.ShellUiState
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -175,6 +185,64 @@ class RtlLayoutTest {
         )
     }
 
+    /**
+     * The focus-mode exit icon is a root overlay aligned `Alignment.TopEnd`, so it must swap corners
+     * with reading direction — trailing (right) in LTR, leading (left) in RTL.
+     *
+     * **8d-a's rule: this is measured, not assumed.** `Alignment.TopEnd` mirroring is a claim about
+     * Compose; the fold gutter turned out to mirror correctly but only because a test proved it, and
+     * this keeps 8d-d from being the one exception. It renders the real [DuckShell], enters focus mode
+     * through the real toolbar button, and reads the exit icon against the field's centre in both
+     * directions. The plant that proves it can fail is `AbsoluteAlignment.TopRight` in `DuckShell`,
+     * which pins the icon right regardless of direction.
+     *
+     * Own `setContent`: it drives `DuckShell`, not the shared [editor] helper's `MarkdownEditorScreen`.
+     */
+    @Test
+    fun theFocusExitIconMirrorsWithLayoutDirection() {
+        rule.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                DuckTheme {
+                    Box(Modifier.size(400.dp, 800.dp)) {
+                        DuckShell(
+                            state = ShellUiState(
+                                notes = listOf(EXIT_NOTE),
+                                selectedNoteId = EXIT_NOTE.id,
+                                selectedNoteBody = EXIT_NOTE.body,
+                            ),
+                            buffer = TextFieldState(EXIT_NOTE.body),
+                            actions = ShellActions(),
+                        )
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+
+        // Enter focus mode from the toolbar (trailing button, so scroll to it first).
+        rule.onNodeWithContentDescription(ENTER_FOCUS).performScrollTo().performClick()
+        rule.waitForIdle()
+
+        val ltrExit = rule.onNodeWithContentDescription(EXIT_FOCUS).getUnclippedBoundsInRoot()
+        val ltrField = fieldBounds()
+        val ltrCentre = (ltrField.left + ltrField.right) * 0.5f
+        println("DUCK rtl: LTR exit=$ltrExit field=$ltrField")
+
+        flipToRtl()
+        val rtlExit = rule.onNodeWithContentDescription(EXIT_FOCUS).getUnclippedBoundsInRoot()
+        val rtlField = fieldBounds()
+        val rtlCentre = (rtlField.left + rtlField.right) * 0.5f
+        println("DUCK rtl: RTL exit=$rtlExit field=$rtlField")
+
+        assertEquals(
+            "the focus exit icon must sit at the trailing corner in both directions: right of the " +
+                "field centre in LTR ($ltrExit vs $ltrField), left of it in RTL ($rtlExit vs " +
+                "$rtlField). Alignment.TopEnd mirrors; AbsoluteAlignment.TopRight would pin it right.",
+            ExitTrailingLtr(true) to ExitLeadingRtl(true),
+            ExitTrailingLtr(ltrExit.left > ltrCentre) to ExitLeadingRtl(rtlExit.right < rtlCentre),
+        )
+    }
+
     /** Named wrappers so failures read `GutterAfterText(false)`, not a bare `false`. */
     private data class GutterBeforeText(val value: Boolean)
 
@@ -188,6 +256,10 @@ class RtlLayoutTest {
 
     private data class AddAfterThumb(val value: Boolean)
 
+    private data class ExitTrailingLtr(val value: Boolean)
+
+    private data class ExitLeadingRtl(val value: Boolean)
+
     private companion object {
         /** "Hide <title> section" — the collapse label, with the Arabic heading as its argument. */
         const val HIDE_SECTION = "Hide ملاحظات section"
@@ -199,6 +271,14 @@ class RtlLayoutTest {
         const val ADD_IMAGE = "Add image"
 
         const val ATTACHMENT = "Attachment"
+
+        /** Focus-mode toggle contentDescriptions, from `strings.xml`. */
+        const val ENTER_FOCUS = "Focus mode"
+
+        const val EXIT_FOCUS = "Exit focus mode"
+
+        /** A minimal open note for the exit-icon case; its body only has to make the field measurable. */
+        val EXIT_NOTE = Note(id = "n1", title = "note", body = "text here", createdAt = 0L, modifiedAt = 1L)
 
         /** Bogus uri on purpose — the tile is fixed-size, so it lays out without a bitmap. */
         val SAMPLE_ATTACHMENT = Attachment(

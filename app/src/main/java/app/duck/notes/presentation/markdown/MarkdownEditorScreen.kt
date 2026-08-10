@@ -84,6 +84,8 @@ fun MarkdownEditorScreen(
     onAddImage: () -> Unit = {},
     onDeleteAttachment: (Attachment) -> Unit = {},
     onAttachImages: (images: List<Pair<String, String>>) -> Unit = {},
+    focusMode: Boolean = false,
+    onToggleFocus: () -> Unit = {},
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -98,8 +100,10 @@ fun MarkdownEditorScreen(
     val colors = DuckTheme.colors
     val type = DuckTheme.type
     val styles = remember(colors, type) { MarkdownStyles(colors, type) }
-    val transformation = remember(styles, collapsedSections) {
-        MarkdownOutputTransformation(cache, styles, collapsedSections)
+    // Keyed on focusMode too: flipping it produces a new instance, which is what repaints the dim —
+    // the same "a new instance is enough to repaint with no keystroke" ThemeRepaintTest established.
+    val transformation = remember(styles, collapsedSections, focusMode) {
+        MarkdownOutputTransformation(cache, styles, collapsedSections, focusMode)
     }
 
     // The toolbar's enabled state, off the SAME incremental scan the transformation renders from.
@@ -148,14 +152,20 @@ fun MarkdownEditorScreen(
         modifier = modifier.fillMaxSize().imePadding(),
         // The strip sits above the format toolbar: both are editor chrome over the keyboard, and the
         // strip is always present so the leading add tile is the entry point to the first image.
+        //
+        // Focus mode hides both — not rendered, so they leave the layout and the semantics tree
+        // entirely rather than sitting there invisibly. The focus button lives in the toolbar, so it
+        // vanishes with it; exit is DuckShell's persistent corner icon.
         bottomBar = {
-            Column {
-                AttachmentStrip(
-                    attachments = attachments,
-                    onAddImage = onAddImage,
-                    onDeleteAttachment = onDeleteAttachment,
-                )
-                FormatToolbar(state = state, enabled = writable)
+            if (!focusMode) {
+                Column {
+                    AttachmentStrip(
+                        attachments = attachments,
+                        onAddImage = onAddImage,
+                        onDeleteAttachment = onDeleteAttachment,
+                    )
+                    FormatToolbar(state = state, enabled = writable, onEnterFocus = onToggleFocus)
+                }
             }
         },
     ) { innerPadding ->

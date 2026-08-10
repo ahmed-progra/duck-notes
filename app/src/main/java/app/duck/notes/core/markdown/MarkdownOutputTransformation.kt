@@ -2,6 +2,7 @@ package app.duck.notes.core.markdown
 
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldBuffer
+import app.duck.notes.domain.markdown.FocusParagraph
 import app.duck.notes.domain.markdown.MarkdownTextCache
 import app.duck.notes.domain.markdown.SectionFolding
 import app.duck.notes.domain.markdown.SpanPlanner
@@ -26,6 +27,7 @@ class MarkdownOutputTransformation(
     private val cache: MarkdownTextCache,
     private val styles: MarkdownStyles,
     private val foldedSections: Set<String> = emptySet(),
+    private val focusMode: Boolean = false,
 ) : OutputTransformation {
 
     override fun TextFieldBuffer.transformOutput() {
@@ -34,7 +36,13 @@ class MarkdownOutputTransformation(
         val folds = SectionFolding.ranges(
             originalText.toString(), scan.tokens, foldedSections, selection.start, selection.end,
         )
-        val plan = SpanPlanner.plan(scan.tokens, selection.start, selection.end, folds)
+        // Both source offsets: the caret is a source offset and FocusParagraph reads source text, so
+        // the DIMMED ranges plan emits are rebased by renderedStyles exactly like every other span.
+        val focusedParagraph = if (focusMode) FocusParagraph.at(originalText, selection.start) else null
+        val plan = SpanPlanner.plan(
+            scan.tokens, selection.start, selection.end, folds,
+            focusMode, focusedParagraph, originalText.length,
+        )
 
         // Conceal first, back-to-front. This ordering is REQUIRED FOR CORRECTNESS, not a
         // micro-optimisation: every range was computed against the original text, and removing one

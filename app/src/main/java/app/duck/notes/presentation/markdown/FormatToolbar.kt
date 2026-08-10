@@ -22,7 +22,14 @@ import app.duck.notes.domain.markdown.FormatAction
 import app.duck.notes.domain.markdown.MarkdownFormat
 
 /**
- * Nine buttons over the keyboard. The whole of Phase 8c-a's UI.
+ * Nine format buttons over the keyboard, plus — since 8d-d — one focus-mode toggle at the trailing
+ * end when [onEnterFocus] is supplied. The whole of Phase 8c-a's UI, grown by one control.
+ *
+ * The focus button is deliberately **not** a [FormatAction]: it writes nothing to the buffer, so it
+ * has no `MarkdownFormat` arm and does not touch the `FormatAction.entries.size` guard. It rides the
+ * same `DuckIconButton` (and its `ContrastTest` distinguishability row) as the format glyphs. Once
+ * focus mode is on the whole toolbar is not rendered, so this button only ever *enters*; exit is the
+ * persistent icon `DuckShell` floats at the top corner.
  *
  * It holds **no markdown knowledge**: every literal it writes comes from `MarkdownFormat`, which in
  * turn takes it from `MarkdownScanner`. `MarkdownFormatSourceTest` enforces that by scanning this
@@ -48,6 +55,7 @@ fun FormatToolbar(
     state: TextFieldState,
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    onEnterFocus: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
 
@@ -66,6 +74,15 @@ fun FormatToolbar(
                     contentDescription = stringResource(action.label),
                     enabled = enabled,
                     onClick = { state.applyFormat(action) },
+                )
+            }
+            // Focus toggle trails the format actions. `enabled = true` unconditionally — entering
+            // focus mode has nothing to do with whether the caret sits in writable markdown.
+            onEnterFocus?.let { enter ->
+                DuckIconButton(
+                    icon = R.drawable.duckformat_focus,
+                    contentDescription = stringResource(R.string.editor_focus),
+                    onClick = enter,
                 )
             }
         }

@@ -81,6 +81,10 @@ class MarkdownStyles(
         // proseMuted, not chromeMuted: a revealed backtick sits on codeSurface, which is why
         // proseMuted is tuned against codeSurface rather than against the page.
         StyleKey.MARKER -> SpanStyle(color = colors.proseMuted, fontWeight = FontWeight.Normal)
+        // Focus mode — everything outside the caret's paragraph. Colour only: it overlays whatever
+        // the token already painted, so weight/decoration survive and only the colour recedes.
+        // proseMuted, reused rather than a new token, so no pairing is added to ContrastTest.
+        StyleKey.DIMMED -> SpanStyle(color = colors.proseMuted)
     }
 
     private fun headingSize(level: Int): TextUnit = when (level) {

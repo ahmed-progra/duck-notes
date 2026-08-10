@@ -42,6 +42,16 @@ enum class StyleKey {
 
     /** Revealed syntax — the `**` you can see because the caret is inside the node. Muted, not hidden. */
     MARKER,
+
+    /**
+     * Focus mode: every span outside the caret's paragraph, painted `proseMuted` so the current
+     * paragraph reads and the rest recedes — Phase 8d-d.
+     *
+     * Reuses the already-floored `proseMuted` token, so no new colour pairing enters `ContrastTest`.
+     * Emitted **after** the token styles in [SpanPlan.styles] so its colour overrides theirs, and in
+     * SOURCE offsets so [SpanPlanner.renderedStyles] rebases it with everything else.
+     */
+    DIMMED,
 }
 
 /** [start, end) painted with [style]. [level] carries heading depth 1..6, else 0. */
@@ -99,6 +109,9 @@ object SpanPlanner {
         selectionStart: Int,
         selectionEnd: Int,
         foldedRanges: List<IntRange> = emptyList(),
+        focusMode: Boolean = false,
+        focusedParagraph: IntRange? = null,
+        sourceLength: Int = 0,
     ): SpanPlan {
         val styles = mutableListOf<StyledRange>()
         val conceal = mutableListOf<IntRange>()
@@ -148,6 +161,24 @@ object SpanPlanner {
         // Descending, so that applying a deletion never shifts a range still waiting to be applied.
         conceal.clear()
         conceal += merged.asReversed()
+
+        // Focus mode dims everything outside the caret's paragraph. Appended AFTER the token styles so
+        // its colour overrules them, and in SOURCE offsets so renderedStyles rebases it with the rest
+        // — no separate source-vs-rendered path. A null [focusedParagraph] under focus (the caret on a
+        // blank line) spares nothing, which is why the two states are distinct params rather than one.
+        if (focusMode) {
+            if (focusedParagraph == null) {
+                if (sourceLength > 0) styles += StyledRange(0, sourceLength, StyleKey.DIMMED)
+            } else {
+                if (focusedParagraph.first > 0) {
+                    styles += StyledRange(0, focusedParagraph.first, StyleKey.DIMMED)
+                }
+                val afterFocus = focusedParagraph.last + 1
+                if (afterFocus < sourceLength) {
+                    styles += StyledRange(afterFocus, sourceLength, StyleKey.DIMMED)
+                }
+            }
+        }
         return SpanPlan(styles, conceal)
     }
 
