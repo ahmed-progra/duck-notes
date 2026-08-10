@@ -6,6 +6,7 @@ import androidx.lifecycle.SavedStateHandle
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.fake.FakeAttachmentRepository
 import app.duck.notes.domain.fake.FakeAttachmentStorage
+import app.duck.notes.domain.fake.FakeLinkRepository
 import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FakeTagRepository
 import app.duck.notes.domain.model.Note
@@ -14,6 +15,7 @@ import app.duck.notes.domain.usecase.AddTagToNote
 import app.duck.notes.domain.usecase.AttachImage
 import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
+import app.duck.notes.domain.usecase.GetBacklinks
 import app.duck.notes.domain.usecase.DeriveTitle
 import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
@@ -21,6 +23,7 @@ import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
 import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.ResolveWikiLinks
 import app.duck.notes.domain.usecase.PinTag
 import app.duck.notes.domain.usecase.RenameTag
 import app.duck.notes.domain.usecase.SaveNote
@@ -80,7 +83,7 @@ class ShellStateRestorationTest {
         handle = handle,
         observeNotes = ObserveNotes(notes),
         observeNote = ObserveNote(notes),
-        saveNote = SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }),
+        saveNote = SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { 0L }),
         observeTagTree = ObserveTagTree(tags),
         observeTagCounts = ObserveTagCounts(tags),
         parseTags = parseTags,
@@ -91,18 +94,19 @@ class ShellStateRestorationTest {
         addTagToNote = AddTagToNote(
             notes,
             parseTags,
-            SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }),
+            SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { 0L }),
         ),
         undoTagChange = UndoTagChange(tags),
         attachImage = AttachImage(
             attachStorage, attachments, notes,
-            SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }), Clock { 0L },
+            SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { 0L }), Clock { 0L },
         ),
         deleteAttachment = DeleteAttachment(
             attachStorage, attachments, notes,
-            SaveNote(notes, DeriveTitle(), parseTags, Clock { 0L }),
+            SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { 0L }),
         ),
         observeAttachments = ObserveAttachments(attachments),
+        getBacklinks = GetBacklinks(FakeLinkRepository()),
         clock = Clock { 0L },
     )
 

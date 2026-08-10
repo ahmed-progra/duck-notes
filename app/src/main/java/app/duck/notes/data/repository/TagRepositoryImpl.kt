@@ -15,6 +15,7 @@ import app.duck.notes.domain.model.TagRef
 import app.duck.notes.domain.repository.TagRepository
 import app.duck.notes.domain.usecase.DeriveTitle
 import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.ResolveWikiLinks
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -48,6 +49,7 @@ class TagRepositoryImpl @Inject constructor(
     private val notes: NoteDao,
     private val deriveTitle: DeriveTitle,
     private val parseTags: ParseTags,
+    private val resolveWikiLinks: ResolveWikiLinks,
 ) : TagRepository {
 
     override fun observeAll(): Flow<List<Tag>> =
@@ -190,9 +192,15 @@ class TagRepositoryImpl @Inject constructor(
      * sense of what they were last working on, in return for nothing.
      */
     private suspend fun writeBody(note: NoteEntity, body: String) {
+        // Links re-derived from the rewritten body for the same reason the title and tags are: this
+        // is the single write path, and `saveNoteWithTags` clears a note's link rows before
+        // re-inserting. Omitting them here would make a tag rename silently delete every
+        // `[[WikiLink]]` row of every note it touched — a rename in one syntax destroying data in
+        // another. A rename never edits bracket syntax, so the re-derived list is the same list.
         notes.saveNoteWithTags(
             note.copy(title = deriveTitle(body), body = body),
             parseTags(body),
+            resolveWikiLinks(body),
         )
     }
 

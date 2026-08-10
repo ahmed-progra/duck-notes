@@ -12,8 +12,8 @@ class DeleteNoteTest {
 
     private val notes = FakeNoteRepository()
     private val clock = FixedClock(now = 1_000L)
-    private val saveNote = SaveNote(notes, DeriveTitle(), ParseTags(), clock)
-    private val deleteNote = DeleteNote(notes, ParseTags(), clock)
+    private val saveNote = SaveNote(notes, DeriveTitle(), ParseTags(), ResolveWikiLinks(), clock)
+    private val deleteNote = DeleteNote(notes, ParseTags(), ResolveWikiLinks(), clock)
 
     @Test
     fun trashesTheNoteAndStampsTrashedAt() = runTest {
@@ -56,6 +56,29 @@ class DeleteNoteTest {
         deleteNote(note.id)
 
         assertEquals(listOf("work"), notes.savedTags[note.id])
+    }
+
+    /**
+     * The mirror of [preservesTagsOfTheTrashedNote], and the same call for the same reason.
+     *
+     * `NoteDao.saveNoteWithTags` **clears** a note's link rows before re-inserting, so trashing has
+     * to hand it the body's links or it deletes them. It must not: a trashed note still holds
+     * `[[Pond]]` in its body, so its rows stay correct and `RestoreNote` has nothing to rebuild.
+     * Hiding them from other notes' panels is the *query's* job — `NoteLinkDao.observeBacklinks`
+     * filters on the source's `is_trashed` — which is exactly the split `NoteDao.notesByTagPathOnce`
+     * already argued for tags: the filter hides, the rewrite must not.
+     */
+    @Test
+    fun preservesLinksOfTheTrashedNote() = runTest {
+        val note = saveNote(id = null, body = "doomed, but still points at [[Pond]]")
+
+        deleteNote(note.id)
+
+        assertEquals(
+            "trashing a note must not delete its links — the body still contains them",
+            listOf("Pond"),
+            notes.savedLinks[note.id],
+        )
     }
 
     @Test

@@ -30,6 +30,6 @@ class NoteRepositoryImpl @Inject constructor(
 
     override suspend fun getNote(id: String): Note? = notes.getById(id)?.toDomain()
 
-    override suspend fun save(note: Note, tagNames: List<String>) =
-        notes.saveNoteWithTags(note.toEntity(), tagNames)
+    override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) =
+        notes.saveNoteWithTags(note.toEntity(), tagNames, linkTitles)
 }

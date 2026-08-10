@@ -56,6 +56,7 @@ fun FormatToolbar(
     enabled: Boolean,
     modifier: Modifier = Modifier,
     onEnterFocus: (() -> Unit)? = null,
+    onToggleInfo: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
 
@@ -83,6 +84,15 @@ fun FormatToolbar(
                     icon = R.drawable.duckformat_focus,
                     contentDescription = stringResource(R.string.editor_focus),
                     onClick = enter,
+                )
+            }
+            // Backlinks toggle, 9b. `enabled = true` for the same reason focus is: what links *to*
+            // this note has nothing to do with whether the caret sits in writable markdown.
+            onToggleInfo?.let { toggle ->
+                DuckIconButton(
+                    icon = R.drawable.duckformat_backlink,
+                    contentDescription = stringResource(R.string.editor_backlinks),
+                    onClick = toggle,
                 )
             }
         }

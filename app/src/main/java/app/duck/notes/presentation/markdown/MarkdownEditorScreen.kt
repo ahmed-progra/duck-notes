@@ -86,6 +86,8 @@ fun MarkdownEditorScreen(
     onAttachImages: (images: List<Pair<String, String>>) -> Unit = {},
     focusMode: Boolean = false,
     onToggleFocus: () -> Unit = {},
+    /** Null in the gallery and previews, which have no shell to host the panel. */
+    onToggleInfo: (() -> Unit)? = null,
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -164,7 +166,12 @@ fun MarkdownEditorScreen(
                         onAddImage = onAddImage,
                         onDeleteAttachment = onDeleteAttachment,
                     )
-                    FormatToolbar(state = state, enabled = writable, onEnterFocus = onToggleFocus)
+                    FormatToolbar(
+                        state = state,
+                        enabled = writable,
+                        onEnterFocus = onToggleFocus,
+                        onToggleInfo = onToggleInfo,
+                    )
                 }
             }
         },

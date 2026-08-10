@@ -1,0 +1,234 @@
+package app.duck.notes.data.local
+
+import android.content.Context
+import androidx.room.Room
+import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.duck.notes.data.local.dao.NoteDao
+import app.duck.notes.data.local.dao.NoteLinkDao
+import app.duck.notes.data.local.entity.NoteEntity
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.util.UUID
+
+/**
+ * `note_links` against a real database — Phase 9b.
+ *
+ * The JVM suite pins what `SaveNote` *hands* the write path; everything below is what only real rows
+ * can answer: whether a title resolves at all, which note it resolves to when two share a title, that
+ * a save rewrites one note's links and no other note's, and that the backlink query's `is_trashed`
+ * filter is on the source rather than the target.
+ *
+ * Room is built exactly as `DuckDatabaseTest` builds it, `BundledSQLiteDriver` included: the system
+ * SQLite may lack FTS5, which `notes_fts` requires, and this database declares it.
+ */
+@RunWith(AndroidJUnit4::class)
+class NoteLinkDaoTest {
+
+    private lateinit var db: DuckDatabase
+    private lateinit var notes: NoteDao
+    private lateinit var links: NoteLinkDao
+
+    @Before
+    fun setUp() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
+            .setDriver(BundledSQLiteDriver())
+            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .build()
+        notes = db.noteDao()
+        links = db.noteLinkDao()
+    }
+
+    @After
+    fun tearDown() = db.close()
+
+    private fun note(
+        id: String,
+        title: String,
+        modifiedAt: Long = 0L,
+        trashed: Boolean = false,
+    ) = NoteEntity(
+        id = id,
+        title = title,
+        body = "body of $title",
+        createdAt = 0L,
+        modifiedAt = modifiedAt,
+        isTrashed = trashed,
+    )
+
+    private suspend fun save(note: NoteEntity, linkTitles: List<String> = emptyList()) =
+        notes.saveNoteWithTags(note, emptyList(), linkTitles)
+
+    private suspend fun backlinkSourceIds(targetId: String) =
+        links.observeBacklinks(targetId).first().map { it.sourceId }
+
+    @Test
+    fun aResolvedTitleBecomesARowTheTargetCanSee() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("source", "Journal"), listOf("Pond"))
+
+        assertEquals(listOf("source"), backlinkSourceIds("target"))
+    }
+
+    /**
+     * The panel renders a title, so the query has to join one — and it must be the source's *current*
+     * title, not the text inside the brackets.
+     */
+    @Test
+    fun theRowCarriesTheSourcesTitleAndTheTypedText() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("source", "Journal"), listOf("Pond"))
+
+        val row = links.observeBacklinks("target").first().single()
+        assertEquals("Journal", row.sourceTitle)
+        assertEquals("Pond", row.linkText)
+    }
+
+    /**
+     * An unresolved title is silently no row. `target_id` is non-null and create-on-tap is a later
+     * phase, so a link to a note that does not exist yet is simply not a link yet.
+     */
+    @Test
+    fun anUnresolvedTitleProducesNoRow() = runBlocking {
+        save(note("source", "Journal"), listOf("Nothing Called This"))
+
+        assertEquals(emptyList<String>(), backlinkSourceIds("target"))
+    }
+
+    /**
+     * **Titles are not unique, so `LIMIT 1` needs its `ORDER BY` to be a decision.**
+     *
+     * Two notes can both derive the title `Pond`. Without the sort SQLite returns whichever row it
+     * reaches first — stable today, and free to change after a `VACUUM` or an index addition, which
+     * would silently re-point an existing link at a different note. Most recently modified is the
+     * deliberate answer. Dropping `ORDER BY modified_at DESC` from `noteIdByTitle` is the plant.
+     */
+    @Test
+    fun aDuplicateTitleResolvesToTheMostRecentlyModifiedNote() = runBlocking {
+        save(note("older", "Pond", modifiedAt = 1_000L))
+        save(note("newer", "Pond", modifiedAt = 9_000L))
+        save(note("source", "Journal"), listOf("Pond"))
+
+        assertEquals(emptyList<String>(), backlinkSourceIds("older"))
+        assertEquals(listOf("source"), backlinkSourceIds("newer"))
+    }
+
+    /** A repeated title is one row, not a constraint failure — the composite PK plus IGNORE. */
+    @Test
+    fun theSameTitleTwiceInOneBodyIsOneRow() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("source", "Journal"), listOf("Pond", "Pond"))
+
+        assertEquals(listOf("source"), backlinkSourceIds("target"))
+    }
+
+    @Test
+    fun rewritingABodyWithoutTheLinkDropsTheRow() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("source", "Journal"), listOf("Pond"))
+        assertEquals(listOf("source"), backlinkSourceIds("target"))
+
+        save(note("source", "Journal"), emptyList())
+
+        assertEquals(emptyList<String>(), backlinkSourceIds("target"))
+    }
+
+    /**
+     * A save clears **this** note's links and no one else's.
+     *
+     * `clearLinksFrom` is scoped by `source_id`; an unscoped `DELETE FROM note_links` would pass every
+     * single-source test above and destroy the whole table on the second note's save. That is the
+     * plant, and it is the reason this test seeds two independent sources.
+     */
+    @Test
+    fun aSaveRewritesOnlyItsOwnRows() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("first", "First"), listOf("Pond"))
+        save(note("second", "Second"), listOf("Pond"))
+
+        // Re-saving `second` must leave `first`'s row alone.
+        save(note("second", "Second"), listOf("Pond"))
+
+        assertEquals(listOf("first", "second"), backlinkSourceIds("target").sorted())
+    }
+
+    // --- trash ---------------------------------------------------------------
+
+    /**
+     * The filter is on the **source**: a note in the bin does not appear in anyone's backlinks.
+     *
+     * Dropping `AND n.is_trashed = 0` from `observeBacklinks` is the plant.
+     */
+    @Test
+    fun backlinksExcludeTrashedSources() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("live", "Live"), listOf("Pond"))
+        save(note("binned", "Binned"), listOf("Pond"))
+        assertEquals(listOf("binned", "live"), backlinkSourceIds("target").sorted())
+
+        // Trash `binned` the way `DeleteNote` does — same body, so the same links are rewritten.
+        save(note("binned", "Binned", trashed = true), listOf("Pond"))
+
+        assertEquals(listOf("live"), backlinkSourceIds("target"))
+    }
+
+    /**
+     * **Trash hides rows; it does not delete them.** The proof is that untrashing restores the
+     * backlink without anything having re-resolved a title.
+     *
+     * This is the behaviour `NoteDao.notesByTagPathOnce` already argued for tags — *"The filter must
+     * hide trashed notes; the rewrite must not"* — and the reason `NoteRepository.save` refuses to
+     * default `linkTitles`: a `DeleteNote` that passed nothing would delete these rows instead, and
+     * every assertion above would still pass.
+     */
+    @Test
+    fun trashingAndRestoringLeavesTheRowsIntact() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("binned", "Binned"), listOf("Pond"))
+
+        save(note("binned", "Binned", trashed = true), listOf("Pond"))
+        assertEquals(emptyList<String>(), backlinkSourceIds("target"))
+
+        save(note("binned", "Binned", trashed = false), listOf("Pond"))
+
+        assertEquals(
+            "the row survived the trash; restoring only stopped hiding it",
+            listOf("binned"),
+            backlinkSourceIds("target"),
+        )
+    }
+
+    /**
+     * A **trashed target** keeps its backlinks. The filter is deliberately one-sided.
+     *
+     * `ShellFilter.Trash` can open a note in the bin, and the useful answer there is the active notes
+     * still pointing at it. A filter on the target as well would empty that panel for no reason.
+     */
+    @Test
+    fun aTrashedTargetStillShowsItsBacklinks() = runBlocking {
+        save(note("target", "Pond", trashed = true))
+        save(note("source", "Journal"), listOf("Pond"))
+
+        // The link resolves against an active title only, so seed it before trashing the target.
+        save(note("target", "Pond", trashed = false))
+        save(note("source", "Journal"), listOf("Pond"))
+        save(note("target", "Pond", trashed = true))
+
+        assertEquals(listOf("source"), backlinkSourceIds("target"))
+    }
+
+    /** Nothing links here — the empty state the panel renders, not an error. */
+    @Test
+    fun aNoteNothingLinksToHasNoBacklinks() = runBlocking {
+        save(note(UUID.randomUUID().toString(), "Lonely"))
+
+        assertEquals(emptyList<String>(), backlinkSourceIds("lonely"))
+    }
+}

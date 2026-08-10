@@ -106,4 +106,15 @@
     -->
     <string name="attachment_add">Add image</string>
     <string name="attachment_image">Attachment</string>
+
+    <!--
+      Phase 9b backlinks panel. `editor_backlinks` is both the toolbar glyph's contentDescription and
+      the panel's visible heading — one string, because they name the same thing and a user who hears
+      one then sees the other should not get two different words.
+
+      There is deliberately no "close" label: `ModalBottomSheet` owns its own dismissal (scrim tap,
+      drag down, back), and the Expanded pane closes from the same toolbar button that opened it.
+    -->
+    <string name="editor_backlinks">Backlinks</string>
+    <string name="editor_backlinks_empty">No notes link here yet</string>
 </resources>

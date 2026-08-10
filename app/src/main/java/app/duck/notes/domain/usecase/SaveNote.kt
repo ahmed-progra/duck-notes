@@ -17,6 +17,7 @@ class SaveNote @Inject constructor(
     private val notes: NoteRepository,
     private val deriveTitle: DeriveTitle,
     private val parseTags: ParseTags,
+    private val resolveWikiLinks: ResolveWikiLinks,
     private val clock: Clock,
 ) {
     /**
@@ -47,7 +48,11 @@ class SaveNote @Inject constructor(
             createdAt = now,
             modifiedAt = now,
         )
-        notes.save(note, parseTags(body, caret))
+        // Links are re-derived from the body on every save, exactly as tags and the title are, so a
+        // `note_links` row can never describe a body that no longer contains the link. No caret
+        // suppression here: an in-progress `[[Pon` is not a link at all until its closing brackets
+        // exist, so there is nothing half-written for `WikiLinkScanner` to mint prematurely.
+        notes.save(note, parseTags(body, caret), resolveWikiLinks(body))
         return note
     }
 }

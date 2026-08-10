@@ -32,6 +32,17 @@ interface NoteRepository {
 
     suspend fun getNote(id: String): Note?
 
-    /** Upsert by [Note.id], replacing the note's tags with [tagNames]. */
-    suspend fun save(note: Note, tagNames: List<String>)
+    /**
+     * Upsert by [Note.id], replacing the note's tags with [tagNames] and its `[[WikiLink]]` rows
+     * with whatever [linkTitles] resolves to.
+     *
+     * **[linkTitles] is required, and deliberately not defaulted.** The write clears this note's link
+     * rows before re-inserting, so a caller that omitted them would silently *delete* the note's
+     * links — and the callers that would have taken the default are exactly the dangerous ones:
+     * `DeleteNote`, `RestoreNote` and the tag-rename body rewrite all pass through here without
+     * caring about links, and all three would have wiped them. Every writer already re-derives
+     * [tagNames] from the body it is writing; links mirror that, so the rows and the body can never
+     * describe different things.
+     */
+    suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>)
 }

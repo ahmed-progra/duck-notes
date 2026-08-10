@@ -5,6 +5,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.NoteLink
 import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
 
@@ -277,6 +278,16 @@ data class ShellUiState(
     val allTagPaths: List<String> = emptyList(),
     /** Heading fold keys for the selected note, persisted by note id in [DuckShellViewModel]. */
     val collapsedSections: Set<String> = emptySet(),
+    /**
+     * Notes linking *to* the open one, newest first — Phase 9b.
+     *
+     * Queried, not derived. The other note's body is what contains the `[[link]]`, and the shell only
+     * ever holds the open note's text, so there is nothing here to scan. Trashed sources are already
+     * excluded by `NoteLinkDao.observeBacklinks`.
+     */
+    val selectedNoteBacklinks: List<NoteLink> = emptyList(),
+    /** Whether the backlinks panel is showing — a side pane on Expanded, a bottom sheet below it. */
+    val infoOpen: Boolean = false,
     val undo: TagPrompt? = null,
 )
 
@@ -301,6 +312,8 @@ data class ShellActions(
     val onUndo: () -> Unit = {},
     val onUndoShown: () -> Unit = {},
     val onToggleSection: (String) -> Unit = {},
+    /** Show or hide the backlinks panel. A backlink row tap reuses [onSelectNote] — it is a note id. */
+    val onToggleInfo: () -> Unit = {},
     /**
      * The tags already on a note, so the "Add tag" picker can omit them.
      *

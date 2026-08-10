@@ -13,6 +13,7 @@ import app.duck.notes.domain.markdown.TagScanner
 import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.model.BodySnapshot
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.NoteLink
 import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
 import app.duck.notes.domain.usecase.AddTagResult
@@ -20,6 +21,7 @@ import app.duck.notes.domain.usecase.AddTagToNote
 import app.duck.notes.domain.usecase.AttachImage
 import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
+import app.duck.notes.domain.usecase.GetBacklinks
 import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
 import app.duck.notes.domain.usecase.ObserveNotes
@@ -100,6 +102,7 @@ class DuckShellViewModel @Inject constructor(
     private val attachImage: AttachImage,
     private val deleteAttachment: DeleteAttachment,
     observeAttachments: ObserveAttachments,
+    getBacklinks: GetBacklinks,
     private val clock: Clock,
 ) : ViewModel() {
 
@@ -178,6 +181,26 @@ class DuckShellViewModel @Inject constructor(
         if (id == null) flowOf(emptyList()) else observeAttachments(id)
     }
 
+    /**
+     * Backlinks for the open note, followed by id the way [selectedAttachments] is — a cold `Flow`
+     * with one consumer, so `flatMapLatest` cancels the previous note's query on a switch.
+     *
+     * Followed even while the panel is closed. Gating the query on [infoOpen] would trade a cheap
+     * indexed read for a visible empty-then-populate flash the first time the panel is opened, and
+     * `WhileSubscribed` already tears it down when the shell stops.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val backlinks: Flow<List<NoteLink>> = selectedId.flatMapLatest { id ->
+        if (id == null) flowOf(emptyList()) else getBacklinks(id)
+    }
+
+    /**
+     * Panel open/closed. In [handle] like every other piece of shell state, so it survives the 600dp
+     * resize that moves it from a bottom sheet to a side pane — the exact case the class KDoc says
+     * `rememberSaveable` gets wrong.
+     */
+    private val infoOpen: Flow<Boolean> = handle.getStateFlow(KEY_INFO_OPEN, false)
+
     /** Three flows bundled into one, because `combine` tops out at five. */
     private val tagState: Flow<TagState> = combine(tree, counts, undo, ::TagState)
 
@@ -187,7 +210,13 @@ class DuckShellViewModel @Inject constructor(
         }
 
     val state: StateFlow<ShellUiState> =
-        combine(editorState, tagState, selectedAttachments) { editor, tg, attachments ->
+        combine(
+            editorState,
+            tagState,
+            selectedAttachments,
+            backlinks,
+            infoOpen,
+        ) { editor, tg, attachments, links, info ->
             ShellUiState(
                 filter = editor.filter,
                 notes = editor.notes,
@@ -201,6 +230,8 @@ class DuckShellViewModel @Inject constructor(
                 selectedNoteAttachments = attachments,
                 allTagPaths = tg.tree.tagPaths(),
                 collapsedSections = editor.collapsedSections,
+                selectedNoteBacklinks = links,
+                infoOpen = info,
                 undo = tg.undo,
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
@@ -450,6 +481,17 @@ class DuckShellViewModel @Inject constructor(
             flush()
             handle[KEY_SELECTED] = null
         }
+    }
+
+    /**
+     * Opens or closes the backlinks panel.
+     *
+     * Not cleared when the selection changes: the panel is a *mode* the user chose, and slamming it
+     * shut every time they followed a backlink — which selects a note — would fight the one gesture
+     * it exists to support. The query follows the new note, so the panel simply repopulates.
+     */
+    fun onToggleInfo() {
+        handle[KEY_INFO_OPEN] = !(handle.get<Boolean>(KEY_INFO_OPEN) ?: false)
     }
 
     fun onToggleTag(path: String) {
@@ -748,6 +790,7 @@ class DuckShellViewModel @Inject constructor(
         private const val KEY_FILTER = "shell.filter"
         private const val KEY_SELECTED = "shell.selectedNoteId"
         private const val KEY_EXPANDED = "shell.expandedTagPaths"
+        private const val KEY_INFO_OPEN = "shell.infoOpen"
 
         /**
          * One prefix, two consumers — [foldedKey] mints them and [onToggleSection]'s sweep reaps

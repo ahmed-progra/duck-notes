@@ -14,12 +14,14 @@ import app.duck.notes.data.local.entity.NoteEntity
 import app.duck.notes.data.repository.AttachmentRepositoryImpl
 import app.duck.notes.data.repository.AttachmentStorageImpl
 import app.duck.notes.data.repository.NoteRepositoryImpl
+import app.duck.notes.data.repository.LinkRepositoryImpl
 import app.duck.notes.data.repository.TagRepositoryImpl
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.usecase.AddTagToNote
 import app.duck.notes.domain.usecase.AttachImage
 import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
+import app.duck.notes.domain.usecase.GetBacklinks
 import app.duck.notes.domain.usecase.DeriveTitle
 import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
@@ -27,6 +29,7 @@ import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
 import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.ResolveWikiLinks
 import app.duck.notes.domain.usecase.PinTag
 import app.duck.notes.domain.usecase.RenameTag
 import app.duck.notes.domain.usecase.SaveNote
@@ -92,8 +95,8 @@ class AutosaveDurabilityTest {
      */
     private fun shell(): DuckShellViewModel {
         val notes = NoteRepositoryImpl(db.noteDao())
-        val tags = TagRepositoryImpl(db, db.tagDao(), db.noteDao(), DeriveTitle(), parseTags)
-        val saveNote = SaveNote(notes, DeriveTitle(), parseTags, Clock { System.currentTimeMillis() })
+        val tags = TagRepositoryImpl(db, db.tagDao(), db.noteDao(), DeriveTitle(), parseTags, ResolveWikiLinks())
+        val saveNote = SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() })
         val attachments = AttachmentRepositoryImpl(db.attachmentDao())
         val attachStorage = AttachmentStorageImpl(ApplicationProvider.getApplicationContext())
         return DuckShellViewModel(
@@ -113,6 +116,7 @@ class AutosaveDurabilityTest {
             attachImage = AttachImage(attachStorage, attachments, notes, saveNote, Clock { System.currentTimeMillis() }),
             deleteAttachment = DeleteAttachment(attachStorage, attachments, notes, saveNote),
             observeAttachments = ObserveAttachments(attachments),
+            getBacklinks = GetBacklinks(LinkRepositoryImpl(db.noteLinkDao())),
             clock = Clock { System.currentTimeMillis() },
         )
     }

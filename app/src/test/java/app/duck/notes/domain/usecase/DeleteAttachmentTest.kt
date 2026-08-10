@@ -27,7 +27,7 @@ class DeleteAttachmentTest {
     private val storage = FakeAttachmentStorage()
     private val clock = FixedClock(7_000L)
     private val parseTags = ParseTags()
-    private val save = SaveNote(notes, DeriveTitle(), parseTags, clock)
+    private val save = SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), clock)
     private val attach = AttachImage(storage, attachments, notes, save, clock)
     private val delete = DeleteAttachment(storage, attachments, notes, save)
 

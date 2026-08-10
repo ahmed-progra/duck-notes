@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Backlinks, 9b. Tinted at the call site by DuckIconImage; fillColor here is a placeholder.
+
+  Its own glyph rather than reusing duckformat_link: that one is already the LINK format action, and
+  two identical icons in the same toolbar row read as a duplicated button rather than two features.
+  An arrow turning back into a stack of lines — what points *at* this note.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M13,5h8v2h-8zM13,11h8v2h-8zM13,17h8v2h-8zM7.5,7.5L3,12l4.5,4.5 1.4,-1.4 -2.1,-2.1H10v-2H6.8l2.1,-2.1z" />
+</vector>

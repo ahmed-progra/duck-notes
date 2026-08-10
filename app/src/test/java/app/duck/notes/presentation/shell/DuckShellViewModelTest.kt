@@ -4,14 +4,17 @@ import androidx.lifecycle.SavedStateHandle
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.fake.FakeAttachmentRepository
 import app.duck.notes.domain.fake.FakeAttachmentStorage
+import app.duck.notes.domain.fake.FakeLinkRepository
 import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FakeTagRepository
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.NoteLink
 import app.duck.notes.domain.model.Tag
 import app.duck.notes.domain.usecase.AddTagToNote
 import app.duck.notes.domain.usecase.AttachImage
 import app.duck.notes.domain.usecase.DeleteAttachment
 import app.duck.notes.domain.usecase.DeleteTag
+import app.duck.notes.domain.usecase.GetBacklinks
 import app.duck.notes.domain.usecase.DeriveTitle
 import app.duck.notes.domain.usecase.ObserveAttachments
 import app.duck.notes.domain.usecase.ObserveNote
@@ -19,6 +22,7 @@ import app.duck.notes.domain.usecase.ObserveNotes
 import app.duck.notes.domain.usecase.ObserveTagCounts
 import app.duck.notes.domain.usecase.ObserveTagTree
 import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.ResolveWikiLinks
 import app.duck.notes.domain.usecase.PinTag
 import app.duck.notes.domain.usecase.RenameTag
 import app.duck.notes.domain.usecase.SaveNote
@@ -94,11 +98,16 @@ class DuckShellViewModelTest {
 
     private val parseTags = ParseTags()
 
+    /** Set before [runShell] to give the open note incoming links. Empty for every other test. */
+    private var backlinks: List<NoteLink> = emptyList()
+
+    private fun saveNote() = SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { now })
+
     private fun shell(handle: SavedStateHandle = SavedStateHandle()) = DuckShellViewModel(
         handle = handle,
         observeNotes = ObserveNotes(notes),
         observeNote = ObserveNote(notes),
-        saveNote = SaveNote(notes, DeriveTitle(), parseTags, Clock { now }),
+        saveNote = saveNote(),
         observeTagTree = ObserveTagTree(tags),
         observeTagCounts = ObserveTagCounts(tags),
         parseTags = parseTags,
@@ -106,17 +115,12 @@ class DuckShellViewModelTest {
         renameTag = RenameTag(tags),
         deleteTag = DeleteTag(tags),
         setTagIcon = SetTagIcon(tags),
-        addTagToNote = AddTagToNote(notes, parseTags, SaveNote(notes, DeriveTitle(), parseTags, Clock { now })),
+        addTagToNote = AddTagToNote(notes, parseTags, saveNote()),
         undoTagChange = UndoTagChange(tags),
-        attachImage = AttachImage(
-            attachStorage, attachments, notes,
-            SaveNote(notes, DeriveTitle(), parseTags, Clock { now }), Clock { now },
-        ),
-        deleteAttachment = DeleteAttachment(
-            attachStorage, attachments, notes,
-            SaveNote(notes, DeriveTitle(), parseTags, Clock { now }),
-        ),
+        attachImage = AttachImage(attachStorage, attachments, notes, saveNote(), Clock { now }),
+        deleteAttachment = DeleteAttachment(attachStorage, attachments, notes, saveNote()),
         observeAttachments = ObserveAttachments(attachments),
+        getBacklinks = GetBacklinks(FakeLinkRepository(backlinks)),
         clock = Clock { now },
     )
 
@@ -350,5 +354,62 @@ class DuckShellViewModelTest {
         settle()
 
         assertNull(vm.state.value.undo)
+    }
+
+    // --- backlinks panel (9b) -------------------------------------------------
+
+    /**
+     * Backlinks follow the **selection**, not the note list.
+     *
+     * The query is keyed by the open note's id, so selecting `n2` must swap the panel's contents even
+     * though nothing about the list changed. `flatMapLatest` on `selectedId` is what does that, and a
+     * `combine` against a fixed flow would look identical at rest and never update.
+     */
+    @Test
+    fun backlinksFollowTheSelectedNote() {
+        // Before runShell, which builds the ViewModel — the fake is constructed with its rows.
+        backlinks = listOf(NoteLink(sourceId = "n1", targetId = "n2", linkText = "Two", sourceTitle = "n1"))
+        runShell { vm, settle ->
+            notes.seed(note("n1"))
+            notes.seed(note("n2"))
+            settle()
+
+            vm.onSelectNote("n2")
+            settle()
+            assertEquals(listOf("n1"), vm.state.value.selectedNoteBacklinks.map { it.sourceId })
+
+            vm.onSelectNote("n1")
+            settle()
+            assertEquals(
+                "n1 is the source, not the target — nothing links to it",
+                emptyList<String>(),
+                vm.state.value.selectedNoteBacklinks.map { it.sourceId },
+            )
+        }
+    }
+
+    /**
+     * The panel is a mode the user chose, so following a backlink must not slam it shut.
+     *
+     * Tapping a backlink row calls `onSelectNote`, and clearing [ShellUiState.infoOpen] on a
+     * selection change would close the panel with the very gesture it exists to support.
+     */
+    @Test
+    fun theInfoPanelStaysOpenAcrossASelectionChange() = runShell { vm, settle ->
+        notes.seed(note("n1"))
+        notes.seed(note("n2"))
+        settle()
+
+        vm.onToggleInfo()
+        settle()
+        assertEquals(true, vm.state.value.infoOpen)
+
+        vm.onSelectNote("n2")
+        settle()
+        assertEquals(true, vm.state.value.infoOpen)
+
+        vm.onToggleInfo()
+        settle()
+        assertEquals(false, vm.state.value.infoOpen)
     }
 }

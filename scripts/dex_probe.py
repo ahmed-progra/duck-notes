@@ -61,6 +61,10 @@ MUST_BE_PRESENT = [
     # editor scanner and DeriveTitle stop each carrying their own copy — the Phase 4 defect. A present
     # string here means the extraction reached the release dex, not just the source tree.
     "WikiLinkScanner",
+    # 9b. The backlinks panel — the first thing to read the note_links rows 9b starts writing. Its
+    # write half has no class of its own (the rows ride NoteDao's existing save transaction), so this
+    # is the string that proves the phase reached the release dex rather than only the source tree.
+    "DuckInfoPanel",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

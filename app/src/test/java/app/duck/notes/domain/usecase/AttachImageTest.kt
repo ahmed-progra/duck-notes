@@ -35,7 +35,7 @@ class AttachImageTest {
         storage = storage,
         attachments = attachments,
         notes = notes,
-        saveNote = SaveNote(notes, DeriveTitle(), parseTags, clock),
+        saveNote = SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), clock),
         clock = clock,
     )
 

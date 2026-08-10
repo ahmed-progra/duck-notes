@@ -12,6 +12,7 @@ import app.duck.notes.data.local.entity.NoteEntity
 import app.duck.notes.data.local.entity.TagEntity
 import app.duck.notes.domain.usecase.DeriveTitle
 import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.ResolveWikiLinks
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -49,7 +50,7 @@ class TagRewriteTest {
             .setDriver(BundledSQLiteDriver())
             .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
             .build()
-        repo = TagRepositoryImpl(db, db.tagDao(), db.noteDao(), DeriveTitle(), ParseTags())
+        repo = TagRepositoryImpl(db, db.tagDao(), db.noteDao(), DeriveTitle(), ParseTags(), ResolveWikiLinks())
     }
 
     @After
@@ -230,7 +231,7 @@ class TagRewriteTest {
         val parent = seed("#projects note")
         val child = seed("#projects/duck other")
         val failing = TagRepositoryImpl(
-            db, ThrowingTagDao(db.tagDao()), db.noteDao(), DeriveTitle(), ParseTags(),
+            db, ThrowingTagDao(db.tagDao()), db.noteDao(), DeriveTitle(), ParseTags(), ResolveWikiLinks(),
         )
 
         val thrown = runCatching { failing.rename("projects", "work") }.exceptionOrNull()
@@ -250,7 +251,7 @@ class TagRewriteTest {
     fun delete_rollsBackOnFailureMidOperation() = runBlocking {
         val id = seed("#projects note")
         val failing = TagRepositoryImpl(
-            db, ThrowingTagDao(db.tagDao()), db.noteDao(), DeriveTitle(), ParseTags(),
+            db, ThrowingTagDao(db.tagDao()), db.noteDao(), DeriveTitle(), ParseTags(), ResolveWikiLinks(),
         )
 
         val thrown = runCatching { failing.removeTag("projects") }.exceptionOrNull()

@@ -14,4 +14,5 @@ class LinkRepositoryImpl @Inject constructor(
 
     override fun backlinks(noteId: String): Flow<List<NoteLink>> =
         links.observeBacklinks(noteId).map { rows -> rows.map { it.toDomain() } }
+
 }

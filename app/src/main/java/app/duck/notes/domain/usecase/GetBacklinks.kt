@@ -6,8 +6,10 @@ import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 
 /**
- * Notes linking *to* this one. Emits empty until Phase 9 starts writing `note_links` rows on save —
- * the query and its plumbing are real, the data isn't there yet.
+ * Notes linking *to* this one, newest first, with the linking note's current title.
+ *
+ * Sources in the trash are excluded by the query rather than here — see `NoteLinkDao.observeBacklinks`
+ * for why the filter is on the source only and why trash deletes no rows.
  */
 class GetBacklinks @Inject constructor(
     private val links: LinkRepository,

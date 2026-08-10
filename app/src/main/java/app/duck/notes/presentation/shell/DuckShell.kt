@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -128,6 +129,7 @@ fun DuckShell(modifier: Modifier = Modifier, viewModel: DuckShellViewModel = hil
             onUndo = viewModel::onUndo,
             onUndoShown = viewModel::onUndoShown,
             onToggleSection = viewModel::onToggleSection,
+            onToggleInfo = viewModel::onToggleInfo,
             tagsOfNote = viewModel::tagsOfNote,
         ),
         modifier = modifier,
@@ -264,9 +266,24 @@ fun DuckShell(
                         onAttachImages = actions.onAttachImages,
                         focusMode = focusing,
                         onToggleFocus = { focusMode = !focusMode },
+                        onToggleInfo = actions.onToggleInfo,
                     )
                 }
             }
+        }
+
+        /**
+         * The backlinks panel's contents, shared by both hosts — see `DuckInfoPanel`.
+         *
+         * Declared beside [editor] rather than inline in the pane branch so the Expanded pane and the
+         * Compact/Medium sheet cannot drift into two different panels.
+         */
+        val info: @Composable (Modifier) -> Unit = { m ->
+            DuckInfoPanel(
+                backlinks = state.selectedNoteBacklinks,
+                onSelectNote = actions.onSelectNote,
+                modifier = m,
+            )
         }
 
         // statusBarsPadding on the pane rows, not on the root: only Compact routes through a
@@ -292,6 +309,18 @@ fun DuckShell(
                 list(Modifier.width(NOTE_LIST))
                 VerticalDivider(color = colors.divider)
                 editor(Modifier.weight(1f))
+                // The info pane TRAILS the editor, so it must be the last child of this Row — `Row`
+                // lays children out start-to-end per LocalLayoutDirection, which puts it on the right
+                // in LTR and the left in RTL. Moving this call above `editor(...)` would pin it
+                // leading in both directions, and that is exactly the plant
+                // `RtlLayoutTest.theInfoPaneMirrorsWithLayoutDirection` exists to catch: mirroring is
+                // a claim about Compose, and 8d-a established that such claims are measured here, not
+                // assumed. The Expanded pane is fixed-width for the same reason the sidebar and list
+                // are — `weight(1f)` belongs to the editor, which is the one that should absorb slack.
+                if (state.infoOpen) {
+                    VerticalDivider(color = colors.divider)
+                    info(Modifier.width(INFO_PANE))
+                }
             }
 
             // Medium keeps the sidebar in the drawer and shows list + editor together: at 600-839dp
@@ -368,6 +397,26 @@ fun DuckShell(
                         if (noteOpen) editor(Modifier.padding(padding)) else list(Modifier.padding(padding))
                     }
                 }
+            }
+        }
+
+        // The backlinks panel below Expanded, where there is no room for a fourth column.
+        //
+        // Hoisted here for the same reason the SnackbarHost is: Medium lays its panes out directly
+        // with no `Scaffold`, so anything hung off Compact's would reach phones and silently skip
+        // 600-839dp tablets. `mode != Expanded` rather than `mode == Compact`.
+        //
+        // No layout direction is set on the sheet and none should be: `ModalBottomSheet` inherits
+        // LocalLayoutDirection, so its contents lead correctly on their own. That is a claim about
+        // Compose, which this project measures rather than assumes —
+        // `RtlLayoutTest.theInfoSheetMirrorsWithLayoutDirection` does, and the plant that proves it
+        // can fail is a hardcoded `LocalLayoutDirection provides Ltr` wrapped around the panel.
+        if (state.infoOpen && mode != PaneMode.Expanded) {
+            ModalBottomSheet(
+                onDismissRequest = actions.onToggleInfo,
+                containerColor = colors.surfaceElevated,
+            ) {
+                info(Modifier.navigationBarsPadding())
             }
         }
 
@@ -540,3 +589,10 @@ private fun DrawerHost(
 
 private val SIDEBAR = 280.dp
 private val NOTE_LIST = 320.dp
+
+/**
+ * The Expanded backlinks pane. Narrower than [NOTE_LIST] because a backlink row is one title, not a
+ * title plus a two-line preview plus a timestamp — and because Expanded starts at 840dp, where
+ * 280 + 320 + 280 already leaves the editor only 40dp of slack at the breakpoint itself.
+ */
+private val INFO_PANE = 280.dp

@@ -6,6 +6,7 @@ import app.duck.notes.domain.model.Tag
 import app.duck.notes.domain.model.TagRef
 import app.duck.notes.domain.repository.TagRepository
 import app.duck.notes.domain.usecase.ParseTags
+import app.duck.notes.domain.usecase.ResolveWikiLinks
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -67,6 +68,9 @@ class FakeTagRepository(
 
     private val parseTags = ParseTags()
 
+    /** Mirrors `TagRepositoryImpl`, which re-derives links on every body rewrite for the same reason. */
+    private val resolveWikiLinks = ResolveWikiLinks()
+
     fun current() = tags.value
 
     override fun observeAll(): Flow<List<Tag>> = tags
@@ -107,7 +111,7 @@ class FakeTagRepository(
         restores += snapshot
         notes?.let { repo ->
             for ((id, body) in snapshot.bodies) {
-                repo.current(id)?.let { repo.save(it.copy(body = body), parseTags(body)) }
+                repo.current(id)?.let { repo.save(it.copy(body = body), parseTags(body), resolveWikiLinks(body)) }
             }
         }
         afterRestore()
@@ -121,7 +125,7 @@ class FakeTagRepository(
             val next = transform(note.body)
             if (next == note.body) continue
             previous[note.id] = note.body
-            repo.save(note.copy(body = next), parseTags(next))
+            repo.save(note.copy(body = next), parseTags(next), resolveWikiLinks(next))
         }
         return BodySnapshot(previous, emptyList())
     }

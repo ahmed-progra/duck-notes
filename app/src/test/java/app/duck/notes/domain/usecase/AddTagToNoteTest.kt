@@ -21,7 +21,7 @@ class AddTagToNoteTest {
     private val addTag = AddTagToNote(
         notes = notes,
         parseTags = parseTags,
-        saveNote = SaveNote(notes, DeriveTitle(), parseTags, clock),
+        saveNote = SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), clock),
     )
 
     private suspend fun seed(id: String, body: String) =

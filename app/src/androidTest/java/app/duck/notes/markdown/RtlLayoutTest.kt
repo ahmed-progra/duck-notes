@@ -1,6 +1,7 @@
 package app.duck.notes.markdown
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.CompositionLocalProvider
@@ -13,14 +14,17 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.NoteLink
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
 import app.duck.notes.presentation.shell.DuckShell
 import app.duck.notes.presentation.shell.ShellActions
@@ -243,6 +247,126 @@ class RtlLayoutTest {
         )
     }
 
+    /**
+     * The Expanded backlinks pane is a **trailing** column, so it must swap sides with direction —
+     * right of the editor in LTR, left of it in RTL.
+     *
+     * Expected to pass without a production change, for the same reason the fold gutter does: `Row`
+     * lays children out start-to-end per `LocalLayoutDirection`, and the pane is declared *last* in
+     * that `Row`. That is a claim about Compose, and 8d-a's rule is that such claims are measured
+     * here rather than assumed — the fold gutter and the attachment strip both turned out correct
+     * only because a test proved it, and the task box did not.
+     *
+     * **The plant is a pure reorder**: move `info(...)` above `editor(...)` in `DuckShell`'s Expanded
+     * branch. That pins the pane leading in both directions, so the LTR half of the assertion goes
+     * red. No new code, nothing to fail on its own terms — the plant discipline CLAUDE.md asks for.
+     *
+     * Measured against the **editor**, not the field centre: on Expanded the note list is also to the
+     * left of the editor in LTR, so "left of centre" would be satisfied by the list's side of the
+     * screen too. The editor is the pane the panel is about.
+     */
+    @Test
+    fun theInfoPaneMirrorsWithLayoutDirection() {
+        shellWithInfoOpen(width = EXPANDED_WIDTH)
+
+        val ltrPane = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
+        val ltrEditor = fieldBounds()
+        println("DUCK rtl: LTR infoPane=$ltrPane editor=$ltrEditor")
+
+        flipToRtl()
+        val rtlPane = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
+        val rtlEditor = fieldBounds()
+        println("DUCK rtl: RTL infoPane=$rtlPane editor=$rtlEditor")
+
+        assertEquals(
+            "the backlinks pane must trail the editor in both directions: right of it in LTR " +
+                "($ltrPane vs $ltrEditor), left of it in RTL ($rtlPane vs $rtlEditor). Row lays " +
+                "children start-to-end per LocalLayoutDirection and the pane is its last child; " +
+                "this is what proves that rather than assuming it.",
+            PaneTrailingLtr(true) to PaneLeadingRtl(true),
+            PaneTrailingLtr(ltrPane.left >= ltrEditor.right) to
+                PaneLeadingRtl(rtlPane.right <= rtlEditor.left),
+        )
+    }
+
+    /**
+     * Below Expanded the panel is a `ModalBottomSheet`, and its rows must lead with direction — the
+     * title starts at the left in LTR and at the right in RTL.
+     *
+     * The sheet sets no layout direction of its own and must not: `ModalBottomSheet` inherits
+     * `LocalLayoutDirection`, so its contents lead correctly on their own. **The plant is the idiom
+     * `theAttachmentStripMirrorsWithLayoutDirection` already names** — a hardcoded
+     * `CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)` wrapped around
+     * `info(...)` inside the sheet, which pins the rows left in both directions.
+     *
+     * Asserted as *which half of the sheet the row starts in* rather than an absolute coordinate: the
+     * row is `fillMaxWidth`, so its own bounds span the sheet either way and only the **text's**
+     * placement inside it moves. The node measured is the heading, which is padded from the leading
+     * edge and therefore has a side.
+     */
+    @Test
+    fun theInfoSheetMirrorsWithLayoutDirection() {
+        shellWithInfoOpen(width = COMPACT_WIDTH)
+
+        val ltrHeading = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
+        val ltrCentre = COMPACT_WIDTH * 0.5f
+        println("DUCK rtl: LTR sheetHeading=$ltrHeading centre=$ltrCentre")
+
+        flipToRtl()
+        val rtlHeading = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
+        println("DUCK rtl: RTL sheetHeading=$rtlHeading centre=$ltrCentre")
+
+        assertEquals(
+            "the sheet's rows must lead with reading direction: the heading starts in the left " +
+                "half in LTR ($ltrHeading), the right half in RTL ($rtlHeading), against a " +
+                "$COMPACT_WIDTH sheet whose centre is $ltrCentre. ModalBottomSheet inherits " +
+                "LocalLayoutDirection; a hardcoded Ltr inside it would pin the text left in both.",
+            HeadingLeadingLtr(true) to HeadingLeadingRtl(true),
+            HeadingLeadingLtr(ltrHeading.left < ltrCentre) to
+                HeadingLeadingRtl(rtlHeading.right > ltrCentre),
+        )
+    }
+
+    /**
+     * The real [DuckShell] at [width], with a note open and the backlinks panel already showing.
+     *
+     * `infoOpen` is passed in the state rather than reached by clicking the toolbar button, because
+     * these tests drive `DuckShell` with an inert [ShellActions] — `onToggleInfo` would do nothing.
+     * Focus mode's test can click, since focus is `remember`ed inside the shell; this is not.
+     *
+     * One backlink is seeded so the list branch renders rather than the empty state. Both branches
+     * draw the same heading, which is the node measured, but the populated one is the real case.
+     *
+     * **`requiredSize`, not `size`, and that distinction cost a red.** `Modifier.size` is a
+     * *preferred* size and is clamped by the incoming constraints — on a 411dp emulator a
+     * `size(900.dp, …)` box measures 411dp wide, `paneModeFor` returns Compact, and the Expanded test
+     * silently measures the **bottom sheet** instead of the side pane. It failed rather than passing
+     * falsely, but only by luck of which way the numbers fell. `requiredSize` overrides the incoming
+     * constraints, so the pane mode under test is the one asked for.
+     */
+    private fun shellWithInfoOpen(width: Dp) {
+        rule.setContent {
+            CompositionLocalProvider(LocalLayoutDirection provides direction) {
+                DuckTheme {
+                    Box(Modifier.requiredSize(width, 800.dp)) {
+                        DuckShell(
+                            state = ShellUiState(
+                                notes = listOf(EXIT_NOTE),
+                                selectedNoteId = EXIT_NOTE.id,
+                                selectedNoteBody = EXIT_NOTE.body,
+                                selectedNoteBacklinks = listOf(SAMPLE_BACKLINK),
+                                infoOpen = true,
+                            ),
+                            buffer = TextFieldState(EXIT_NOTE.body),
+                            actions = ShellActions(),
+                        )
+                    }
+                }
+            }
+        }
+        rule.waitForIdle()
+    }
+
     /** Named wrappers so failures read `GutterAfterText(false)`, not a bare `false`. */
     private data class GutterBeforeText(val value: Boolean)
 
@@ -259,6 +383,14 @@ class RtlLayoutTest {
     private data class ExitTrailingLtr(val value: Boolean)
 
     private data class ExitLeadingRtl(val value: Boolean)
+
+    private data class PaneTrailingLtr(val value: Boolean)
+
+    private data class PaneLeadingRtl(val value: Boolean)
+
+    private data class HeadingLeadingLtr(val value: Boolean)
+
+    private data class HeadingLeadingRtl(val value: Boolean)
 
     private companion object {
         /** "Hide <title> section" — the collapse label, with the Arabic heading as its argument. */
@@ -279,6 +411,18 @@ class RtlLayoutTest {
 
         /** A minimal open note for the exit-icon case; its body only has to make the field measurable. */
         val EXIT_NOTE = Note(id = "n1", title = "note", body = "text here", createdAt = 0L, modifiedAt = 1L)
+
+        /** The backlinks panel's heading and its toolbar button, from `strings.xml`. */
+        const val BACKLINKS = "Backlinks"
+
+        /** One incoming link, so the panel renders its list branch rather than the empty state. */
+        val SAMPLE_BACKLINK =
+            NoteLink(sourceId = "n0", targetId = "n1", linkText = "note", sourceTitle = "Journal")
+
+        /** Either side of `paneModeFor`'s 840dp and 600dp breakpoints. */
+        val EXPANDED_WIDTH = 900.dp
+
+        val COMPACT_WIDTH = 400.dp
 
         /** Bogus uri on purpose — the tile is fixed-size, so it lays out without a bitmap. */
         val SAMPLE_ATTACHMENT = Attachment(

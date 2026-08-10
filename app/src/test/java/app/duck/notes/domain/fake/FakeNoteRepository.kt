@@ -21,6 +21,16 @@ class FakeNoteRepository : NoteRepository {
     val savedTags = mutableMapOf<String, List<String>>()
 
     /**
+     * Link titles recorded by the most recent [save] of each note — the `note_links` half of
+     * [savedTags].
+     *
+     * The **titles**, not resolved target ids: resolution is a `NoteDao` query against real rows and
+     * belongs to `NoteLinkDaoTest` on a device. What a use case owes is handing the write path the
+     * right list, and that is what this records.
+     */
+    val savedLinks = mutableMapOf<String, List<String>>()
+
+    /**
      * Every [Note] [save] was called with, in order, including seeds.
      *
      * Phase 8a asserts on write *counts*, not just final state: "opening a note writes nothing" and
@@ -44,7 +54,7 @@ class FakeNoteRepository : NoteRepository {
      */
     val writtenTags = mutableListOf<Pair<String, List<String>>>()
 
-    suspend fun seed(note: Note, tags: List<String> = emptyList()) = save(note, tags)
+    suspend fun seed(note: Note, tags: List<String> = emptyList()) = save(note, tags, emptyList())
 
     fun current(id: String) = notes.value.find { it.id == id }
 
@@ -96,8 +106,9 @@ class FakeNoteRepository : NoteRepository {
 
     override suspend fun getNote(id: String): Note? = notes.value.find { it.id == id }
 
-    override suspend fun save(note: Note, tagNames: List<String>) {
+    override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) {
         savedTags[note.id] = tagNames
+        savedLinks[note.id] = linkTitles
         writes += note
         writtenTags += note.id to tagNames
         notes.value = notes.value.filterNot { it.id == note.id } + note
