@@ -10,9 +10,9 @@ import java.io.File
  *
  * Phase 8c gave the editor buttons that *write* syntax, which is the first time anything outside the
  * scanner had a reason to know what bold looks like. A `"**"` in a composable would be the third
- * implementation of one syntax — the exact defect Phase 9 documents for `[[WikiLink]]`, where
- * `ResolveWikiLinks`, `MarkdownScanner` and `DeriveTitle` disagree about code fences. Cheaper to
- * forbid it than to reconcile it later.
+ * implementation of one syntax — the exact defect that once split `[[WikiLink]]` across
+ * `ResolveWikiLinks`, `MarkdownScanner` and `DeriveTitle` until Phase 9a gave it one home in
+ * `WikiLinkScanner`. Cheaper to forbid it than to reconcile it later.
  *
  * The legal route is `MarkdownScanner.markerFor` / `prefixFor`, whose output `MarkdownFormatTest`
  * round-trips back through the real parser.
@@ -32,11 +32,12 @@ import java.io.File
  * thing this ban is for. Widening it would mean an allow-list naming one of the files most worth
  * watching, so the narrower scope is stated instead.
  *
- * `domain/` is **not** scanned by either, and that is deliberate rather than an oversight: the two
- * known duplicate wiki-link regexes live in `domain/usecase`, they are pinned by
- * `TagAgreementTest.aWikiLinkInsideCodeIsResolvedButNotPainted` as an asserted defect, and retiring
- * them is scheduled for Phase 9. A guard that went red on day one would be turned off on day two.
- * This one holds the line that is currently clean.
+ * `domain/` is **not** scanned by the syntax-literal or the `Regex(` ban, and that is deliberate:
+ * `domain/markdown` is where the scanners legitimately spell syntax, and `DeriveTitle` in
+ * `domain/usecase` still hand-rolls the *rest* of its title stripping (block, task, image and link
+ * markers) as regexes — its own separate item, not this guard's. The wiki-link rule that used to be
+ * duplicated there is the one exception now closed: Phase 9a extracted `WikiLinkScanner`, and
+ * [theWikiLinkRuleHasOneHome] holds that specific line so a fourth copy cannot creep back.
  */
 class MarkdownSyntaxSourceTest {
 
@@ -62,6 +63,40 @@ class MarkdownSyntaxSourceTest {
             "a regex in presentation/ or core/ is how a second parser starts",
             emptyList<String>(),
             offenders,
+        )
+    }
+
+    /**
+     * The `[[WikiLink]]` bracket rule lives in exactly one file: `WikiLinkScanner`.
+     *
+     * `ResolveWikiLinks` and `DeriveTitle` each carried a byte-identical `Regex("\\[\\[([^\\[\\]]+)]]")`
+     * until Phase 9a reconciled them — three implementations of one syntax, disagreeing about code
+     * masking. This catches any of them coming back, or a fourth site appearing anywhere in `main`,
+     * which `TagAgreementTest` cannot: a re-added regex that happens to agree on the corpus still
+     * passes the behavioural check while diverging on the input the corpus does not cover.
+     *
+     * The needle is the opening of that regex's capture group, `[[([^`, matched against source with
+     * its backslashes stripped so the escaping in the literal does not have to be mirrored here. It is
+     * specific to the negated-bracket capture: `DeriveTitle`'s surviving task/image/link regexes do
+     * not contain it, and `MarkdownScanner`/`WikiLinkScanner`'s `startsWith("[[")` is not a regex.
+     */
+    @Test
+    fun theWikiLinkRuleHasOneHome() {
+        val needle = "[[([^"
+        val offenders = filesIn(listOf(MAIN_SOURCE))
+            .filter { it.name != "WikiLinkScanner.kt" }
+            .filter { needle in it.readText().replace("\\", "") }
+            .map { it.name }
+        assertEquals(
+            "the [[WikiLink]] bracket rule reappeared outside WikiLinkScanner — route it through the " +
+                "scanner (WikiLinkScanner.titlesIn / matchAt / stripInline), not a second regex",
+            emptyList<String>(),
+            offenders,
+        )
+        // Positive control for the detector: it fires on the retired regex's own source form.
+        assertTrue(
+            "the one-home detector no longer recognises the wiki-link regex it exists to catch",
+            needle in """Regex("\[\[([^\[\]]+)]]")""".replace("\\", ""),
         )
     }
 
@@ -117,6 +152,9 @@ class MarkdownSyntaxSourceTest {
     private companion object {
         val PRESENTATION = File("src/main/java/app/duck/notes/presentation")
         val CORE = File("src/main/java/app/duck/notes/core")
+
+        /** Whole `main` tree — the one-home wiki-link check scans everywhere, not just above the scanner. */
+        val MAIN_SOURCE = File("src/main/java/app/duck/notes")
 
         /** Includes `data/`, which holds `TagRepositoryImpl`. See the class KDoc for the argument. */
         val SYNTAX_SCANNED = listOf(PRESENTATION, CORE, File("src/main/java/app/duck/notes/data"))

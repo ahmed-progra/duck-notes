@@ -365,7 +365,7 @@ object MarkdownScanner {
         while (i < line.length) {
             if (masked[i]) { i++; continue }
 
-            val wiki = wikiLinkAt(line, i)
+            val wiki = WikiLinkScanner.matchAt(line, i)
             if (wiki != null) {
                 out += Token(
                     TokenKind.WIKI_LINK, base + i, base + wiki,
@@ -425,15 +425,6 @@ object MarkdownScanner {
             )
             i = end
         }
-    }
-
-    private fun wikiLinkAt(line: String, i: Int): Int? {
-        if (!line.startsWith("[[", i)) return null
-        val close = line.indexOf("]]", i + 2)
-        if (close < 0) return null
-        // `[[a]]` may not contain a bracket, matching ResolveWikiLinks' `[^\[\]]+`.
-        for (k in i + 2 until close) if (line[k] == '[' || line[k] == ']') return null
-        return if (close > i + 2) close + 2 else null
     }
 
     /** `[text](dest)` or `![alt](dest)` at [i] → (end, textStart, textEnd-at-`]`). */

@@ -122,15 +122,17 @@ class TagAgreementTest {
             .distinct()
 
     /**
-     * The editor paints the wiki links `ResolveWikiLinks` finds — **everywhere the two can agree.**
+     * The editor paints exactly the wiki links `ResolveWikiLinks` finds — across the **whole**
+     * corpus, code fences and inline spans included.
      *
-     * `MarkdownScanner` reimplements the bracket rule for highlighting, so this is worth holding.
-     * What it is *not* is a check that the two implementations agree in general: they provably do
-     * not, and [WIKI_LINK_CODE_MASKING_DEFECT] names the cases and carries the argument.
-     *
-     * Excluding them here rather than weakening the assertion is deliberate. A test that reported
-     * agreement over inputs chosen to avoid the disagreement is what this file did until an audit
-     * noticed, and it is worse than one that says plainly which cases are excluded and why.
+     * Both now route through `WikiLinkScanner`, so what gets written to `note_links` on save and what
+     * gets painted accent-red can no longer disagree. This test once excluded `wikiLinkInFence` and
+     * `wikiLinkInCodeSpan` behind a `WIKI_LINK_CODE_MASKING_DEFECT` set, and a companion test pinned
+     * that divergence as a DEFECT: the bare regex behind `ResolveWikiLinks` (and its byte-identical
+     * copy in `DeriveTitle`) resolved a `[[link]]` inside code that the editor correctly refused to
+     * paint — the Phase 4 defect, one rule with three implementations. Extracting `WikiLinkScanner`
+     * beside `TagScanner` retired all three copies; the exclusion, the set and the pin went with them,
+     * and the corpus regained full coverage here with no other edit — exactly as the pin's KDoc said.
      */
     @Test
     fun theEditorPaintsTheWikiLinksResolveWikiLinksFinds() {
@@ -143,65 +145,10 @@ class TagAgreementTest {
             "empty [[]]",
             "nested [[a[b]]",
             "a [link](url) is not a wiki link",
-        ) + MarkdownCorpus.samples
-            .filterNot { it.first in WIKI_LINK_CODE_MASKING_DEFECT }
-            .map { it.second }
+        ) + MarkdownCorpus.samples.map { it.second }
 
         bodies.forEach { body ->
             assertEquals("editor vs ResolveWikiLinks for body=<$body>", resolveWikiLinks(body), painted(body))
         }
-    }
-
-    /**
-     * **The known divergence, pinned rather than hidden. This test asserts a DEFECT.**
-     *
-     * `ResolveWikiLinks` is a bare `Regex("\\[\\[([^\\[\\]]+)]]")` over the whole body — no fence
-     * tracking, no `codeSpanMask`. `MarkdownScanner` refuses both cases correctly. So a wiki link
-     * written inside a code sample is **not painted** as a link and **is** resolved as one, which
-     * from Phase 9 onward means a `note_links` row the user can neither see nor click.
-     *
-     * This is the exact failure `TagScanner` was extracted to prevent, in the other syntax: one rule,
-     * three implementations. There are **three** call sites to retire, not the two the earlier note
-     * claimed — `ResolveWikiLinks.kt:22`, `MarkdownScanner.wikiLinkAt`, and a byte-identical third
-     * copy in `DeriveTitle.kt:44`, which mis-strips titles the same way.
-     *
-     * **It goes red when the defect is fixed, and that is when to delete it** — along with
-     * [WIKI_LINK_CODE_MASKING_DEFECT], which restores full corpus coverage above with no other edit.
-     * Same shape as `PartialTagMintingTest`: pin the behaviour that exists so the change that alters
-     * it cannot be silent. Do **not** "fix" a red here by loosening the assertion.
-     *
-     * Closes when Phase 9 extracts `WikiLinkScanner` beside `TagScanner`, reusing `codeSpanMask` and
-     * the fence carry, with `ResolveWikiLinks` and `MarkdownScanner` as thin views over it. Not before.
-     */
-    @Test
-    fun aWikiLinkInsideCodeIsResolvedButNotPainted() {
-        val cases = MarkdownCorpus.samples.filter { it.first in WIKI_LINK_CODE_MASKING_DEFECT }
-        assertEquals("the defect's corpus samples went missing", 2, cases.size)
-
-        cases.forEach { (name, body) ->
-            assertEquals(
-                "$name: ResolveWikiLinks still resolves a masked link — if this is now empty the " +
-                    "defect is FIXED, so delete this test and WIKI_LINK_CODE_MASKING_DEFECT",
-                listOf("Hidden"),
-                resolveWikiLinks(body),
-            )
-            assertEquals(
-                "$name: the editor correctly refuses to paint it",
-                emptyList<String>(),
-                painted(body),
-            )
-        }
-    }
-
-    private companion object {
-        /**
-         * Corpus samples where `ResolveWikiLinks` and the editor **disagree**, by name.
-         *
-         * One list, two consumers — [theEditorPaintsTheWikiLinksResolveWikiLinksFinds] excludes them
-         * and [aWikiLinkInsideCodeIsResolvedButNotPainted] asserts them — so the exclusion and the
-         * pin cannot drift apart, and deleting this list in Phase 9 makes both tests do the right
-         * thing with no further edit.
-         */
-        val WIKI_LINK_CODE_MASKING_DEFECT = setOf("wikiLinkInFence", "wikiLinkInCodeSpan")
     }
 }

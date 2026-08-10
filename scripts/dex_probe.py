@@ -57,6 +57,10 @@ MUST_BE_PRESENT = [
     # 8d-d focus mode. The one new class the phase ships: the pure caret-to-paragraph resolver the
     # dimming rides on. A present string here means focus mode's core reached the release dex.
     "FocusParagraph",
+    # 9a. The single home for the [[wiki link]] bracket rule, extracted so ResolveWikiLinks, the
+    # editor scanner and DeriveTitle stop each carrying their own copy — the Phase 4 defect. A present
+    # string here means the extraction reached the release dex, not just the source tree.
+    "WikiLinkScanner",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

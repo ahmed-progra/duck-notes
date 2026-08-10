@@ -1,5 +1,6 @@
 package app.duck.notes.domain.usecase
 
+import app.duck.notes.domain.markdown.WikiLinkScanner
 import javax.inject.Inject
 
 /**
@@ -30,7 +31,8 @@ class DeriveTitle @Inject constructor() {
         }
         // Images before links: running the link rule first would leave `![alt](url)` as `!alt`.
         text = text.replace(IMAGE, "$1")
-        text = text.replace(WIKI_LINK, "$1")
+        // Wiki links through the shared scanner, not a fourth copy of the bracket rule.
+        text = WikiLinkScanner.stripInline(text)
         text = text.replace(LINK, "$1")
         text = text.replace(EMPHASIS, "")
         return text.replace(WHITESPACE, " ").trim()
@@ -41,7 +43,6 @@ class DeriveTitle @Inject constructor() {
         val BLOCK_MARKER = Regex("^(#{1,6}\\s+|[-*+]\\s+|\\d+[.)]\\s+)")
         val TASK_MARKER = Regex("^\\[[ xX]]\\s*")
         val IMAGE = Regex("!\\[([^\\]]*)]\\([^)]*\\)")
-        val WIKI_LINK = Regex("\\[\\[([^\\[\\]]+)]]")
         val LINK = Regex("\\[([^\\]]*)]\\([^)]*\\)")
         val EMPHASIS = Regex("\\*\\*|__|~~|==|[*_`]")
         val WHITESPACE = Regex("\\s+")
