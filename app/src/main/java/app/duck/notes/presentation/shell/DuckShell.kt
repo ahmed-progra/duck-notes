@@ -58,6 +58,7 @@ import app.duck.notes.core.ui.DuckEmptyState
 import app.duck.notes.core.ui.DuckIconButton
 import app.duck.notes.core.ui.DuckTagChip
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -176,6 +177,17 @@ fun DuckShell(
         LaunchedEffect(state.selectedNoteId) { focusMode = false }
         val focusing = focusMode && state.selectedNoteId != null
 
+        // Table-of-contents scroll requests, panel -> editor. Phase 9e.
+        //
+        // Held here rather than on the ViewModel for the same reason [focusMode] and `dialog` are:
+        // it is ephemeral view state — a one-shot gesture between two children of this composable,
+        // not something a pane reads from the repository. Putting it in `ShellUiState` would also
+        // make it a *value*, and tapping the same heading twice has to scroll twice.
+        //
+        // `extraBufferCapacity = 1` so `tryEmit` from the tap handler always succeeds; a `SharedFlow`
+        // with no buffer drops emissions when the collector is momentarily busy.
+        val headingScrolls = remember { MutableSharedFlow<Int>(extraBufferCapacity = 1) }
+
         val sidebar: @Composable () -> Unit = {
             DuckSidebar(
                 filter = state.filter,
@@ -270,22 +282,31 @@ fun DuckShell(
                         onToggleInfo = actions.onToggleInfo,
                         noteTitles = state.allNoteTitles,
                         onOpenWikiLink = actions.onOpenWikiLink,
+                        scrollToOffset = headingScrolls,
                     )
                 }
             }
         }
 
         /**
-         * The backlinks panel's contents, shared by both hosts — see `DuckInfoPanel`.
+         * The info panel's contents, shared by both hosts — see `DuckInfoPanel`.
          *
          * Declared beside [editor] rather than inline in the pane branch so the Expanded pane and the
          * Compact/Medium sheet cannot drift into two different panels.
+         *
+         * [buffer] is handed over whole rather than `state.selectedNoteBody`: the counts and the
+         * contents read the live text, and reading `buffer.text` *here* instead of inside the panel
+         * would recompose this entire shell on every keystroke.
          */
         val info: @Composable (Modifier) -> Unit = { m ->
             DuckInfoPanel(
                 backlinks = state.selectedNoteBacklinks,
                 onSelectNote = actions.onSelectNote,
                 modifier = m,
+                buffer = buffer,
+                createdAt = state.selectedNoteCreatedAt,
+                modifiedAt = state.selectedNoteModifiedAt,
+                onScrollToHeading = { headingScrolls.tryEmit(it) },
             )
         }
 
@@ -403,7 +424,7 @@ fun DuckShell(
             }
         }
 
-        // The backlinks panel below Expanded, where there is no room for a fourth column.
+        // The info panel below Expanded, where there is no room for a fourth column.
         //
         // Hoisted here for the same reason the SnackbarHost is: Medium lays its panes out directly
         // with no `Scaffold`, so anything hung off Compact's would reach phones and silently skip
@@ -594,8 +615,9 @@ private val SIDEBAR = 280.dp
 private val NOTE_LIST = 320.dp
 
 /**
- * The Expanded backlinks pane. Narrower than [NOTE_LIST] because a backlink row is one title, not a
- * title plus a two-line preview plus a timestamp — and because Expanded starts at 840dp, where
- * 280 + 320 + 280 already leaves the editor only 40dp of slack at the breakpoint itself.
+ * The Expanded info pane. Narrower than [NOTE_LIST] because its rows are single lines — a count, a
+ * timestamp, a heading, a backlink title — not a title plus a two-line preview plus a timestamp. And
+ * because Expanded starts at 840dp, where 280 + 320 + 280 already leaves the editor only 40dp of
+ * slack at the breakpoint itself.
  */
 private val INFO_PANE = 280.dp

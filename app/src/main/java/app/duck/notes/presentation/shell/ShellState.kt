@@ -286,8 +286,21 @@ data class ShellUiState(
      * excluded by `NoteLinkDao.observeBacklinks`.
      */
     val selectedNoteBacklinks: List<NoteLink> = emptyList(),
-    /** Whether the backlinks panel is showing — a side pane on Expanded, a bottom sheet below it. */
+    /** Whether the info panel is showing — a side pane on Expanded, a bottom sheet below it. */
     val infoOpen: Boolean = false,
+    /**
+     * The open note's timestamps, for the info panel — Phase 9e. Null when nothing is selected.
+     *
+     * Carried on [Selection][DuckShellViewModel] straight off the `observeNote` row rather than found
+     * in [notes]: selecting a note and then changing the sidebar filter leaves the editor open on a
+     * note the list no longer contains, so `notes.find { it.id == selectedNoteId }` would silently
+     * yield null exactly when the panel is most likely to be open.
+     *
+     * [selectedNoteModifiedAt] is what the **autosave path** wrote — `SaveNote` restamps it on every
+     * save carrying an edit — so it names the last save, not the last keystroke.
+     */
+    val selectedNoteCreatedAt: Long? = null,
+    val selectedNoteModifiedAt: Long? = null,
     /**
      * Candidate titles for the `[[title]]` picker, newest first and **excluding the open note** —
      * Phase 9c. Queried rather than read off [notes], which is narrowed by the sidebar filter and

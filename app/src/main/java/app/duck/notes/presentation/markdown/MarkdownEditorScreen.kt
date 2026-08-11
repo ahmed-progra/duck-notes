@@ -17,6 +17,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -38,6 +39,8 @@ import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.markdown.SectionFolding
 import app.duck.notes.domain.markdown.SpanPlanner
 import app.duck.notes.domain.markdown.WikiLinkScanner
+import kotlinx.coroutines.flow.Flow
+import kotlin.math.roundToInt
 
 /**
  * The editor — the markdown engine over a buffer someone else owns.
@@ -93,6 +96,14 @@ fun MarkdownEditorScreen(
     noteTitles: List<String> = emptyList(),
     /** Follow a tapped `[[WikiLink]]` by title — Phase 9d. Null in previews, which cannot navigate. */
     onOpenWikiLink: ((String) -> Unit)? = null,
+    /**
+     * Requests to scroll a heading into view, as **source** offsets — Phase 9e's table of contents.
+     *
+     * A one-shot event stream rather than a piece of state, because tapping the same heading twice
+     * has to scroll twice and a re-emitted equal value would be swallowed by `remember`. Null in
+     * previews and the gallery, which have no panel to request from.
+     */
+    scrollToOffset: Flow<Int>? = null,
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -150,6 +161,39 @@ fun MarkdownEditorScreen(
         SpanPlanner.wikiLinkTargets(text.toString(), scan.tokens, plan, selection.start, selection.end)
     }
     val sections = remember(text) { SectionFolding.sections(text.toString(), scan.tokens) }
+
+    // Hoisted out of the modifier below so the contents panel can drive it. Phase 9e.
+    val scroll = rememberScrollState()
+
+    // Scroll a heading into view on request from the info panel's table of contents.
+    //
+    // **This is 9e's one rendered-offset surface, and it is forward-only.** A source offset is mapped
+    // through the conceal cuts and then asked of the text layout for a y — the exact three-step chain
+    // [SectionFoldOverlay] already runs per heading every frame to place the chevrons. Nothing is
+    // inverted; no tap coordinate is mapped back to a source offset, and that inverse map still does
+    // not exist in this project.
+    //
+    // The obvious cheaper route does not work: writing `selection = TextRange(headingStart)` and
+    // letting Compose scroll to the caret keeps the whole feature in source space, but
+    // `TextFieldCoreModifier.updateScrollState` returns early unless `showCursor`, which requires the
+    // field to be FOCUSED — and tapping a panel row is precisely the gesture that takes focus away.
+    // Requesting focus instead opens the IME over the heading just scrolled to, which is worse and is
+    // also more code. `InfoPanelUiTest.aTocRowScrollsTheEditorToItsHeading` is what holds this.
+    //
+    // `bounds.top` is in the text layout's space and the scrolling Column has a 12dp top inset above
+    // this Row, so scrolling to exactly `top` lands the heading 12dp below the viewport edge — the
+    // editor's own inset, which is where a heading should sit, not an off-by-padding error.
+    LaunchedEffect(scrollToOffset) {
+        scrollToOffset?.collect { source ->
+            val measured = layout ?: return@collect
+            val rendered = SpanPlanner.renderedOffset(source, plan.conceal.sortedBy { it.first })
+            // The same one-frame-behind guard the two overlays carry: on the frame the text changes,
+            // an offset computed from the new plan can point past the end of the old layout, and
+            // getBoundingBox would throw.
+            if (rendered >= measured.layoutInput.text.length) return@collect
+            scroll.animateScrollTo(measured.getBoundingBox(rendered).top.roundToInt())
+        }
+    }
 
     // Paste (and drag-and-drop, and keyboard rich content): image items route to onAttachImages, the
     // same AttachImage path the picker uses. The ContentResolver is the authoritative source of a
@@ -217,7 +261,7 @@ fun MarkdownEditorScreen(
                 // start is 0 because [FOLD_GUTTER] supplies the left inset now: the text begins
                 // 48dp in, where it began 20dp in before the gutter existed.
                 .padding(start = 0.dp, end = 20.dp, top = 12.dp, bottom = 12.dp)
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(scroll),
         ) {
             // Two columns, and the split is the fix for a defect 8c-c shipped.
             //

@@ -73,6 +73,14 @@ MUST_BE_PRESENT = [
     # rendered offsets so nothing has to be inverted. A present string here means the tap target itself
     # reached the release dex, not merely the mapping behind it.
     "WikiLinkOverlay",
+    # 9e. Counts, timestamps and the table of contents. The only new *class* the phase ships: the
+    # word/character counter. Everything else 9e adds is rows inside DuckInfoPanel (already above) and
+    # one scroll effect inside MarkdownEditorScreen, neither of which mints a name to probe for.
+    #
+    # Note the trap-11 property when planting against this one: the entry substring-matches the
+    # `NoteStats.kt` filename embedded in the dex debug info as well as the class descriptor, so a
+    # plant that renames the object must rename the FILE too or it reports present and fakes a green.
+    "NoteStats",
 ]
 
 # Debug-only code. src/debug must never reach a release build.

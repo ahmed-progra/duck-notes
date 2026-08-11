@@ -117,4 +117,30 @@
     -->
     <string name="editor_backlinks">Backlinks</string>
     <string name="editor_backlinks_empty">No notes link here yet</string>
+
+    <!--
+      Phase 9e. Counts, timestamps and the table of contents — the rest of the info panel.
+
+      Plurals rather than "%1$d words", because Android formats `%d` through the resource locale:
+      that gives grouped, locale-correct digits for free, and "1 word" instead of "1 words". Counts
+      are over RAW SOURCE — `**bold**` is one word and eight characters — see NoteStats for why.
+
+      `editor_created` / `editor_modified` take an already-formatted relative span from
+      DateUtils.getRelativeTimeSpanString, the same renderer DuckNoteCard uses, so the panel and the
+      note list cannot describe one timestamp two ways.
+
+      `editor_contents` heads the table of contents. There is no empty variant: a note with no
+      headings shows no section at all, unlike backlinks, where "nothing links here" is information.
+    -->
+    <plurals name="editor_word_count">
+        <item quantity="one">%1$d word</item>
+        <item quantity="other">%1$d words</item>
+    </plurals>
+    <plurals name="editor_char_count">
+        <item quantity="one">%1$d character</item>
+        <item quantity="other">%1$d characters</item>
+    </plurals>
+    <string name="editor_created">Created %1$s</string>
+    <string name="editor_modified">Modified %1$s</string>
+    <string name="editor_contents">Contents</string>
 </resources>

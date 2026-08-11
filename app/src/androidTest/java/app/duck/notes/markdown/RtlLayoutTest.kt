@@ -329,7 +329,66 @@ class RtlLayoutTest {
     }
 
     /**
-     * The real [DuckShell] at [width], with a note open and the backlinks panel already showing.
+     * The counts row must lead with reading direction — **and digits are why this is its own test.**
+     *
+     * Every other assertion in this file asks whether a *container* lays its children out per
+     * `LocalLayoutDirection`. This asks something a container test cannot answer: a count reads
+     * `"2 words"`, whose first characters are **strong left-to-right** inside an otherwise
+     * right-to-left line. Text alignment is expected to resolve from the layout direction rather than
+     * from the run's own directionality, so the row should still start at the right under RTL. That
+     * is a claim about Compose, and 8d-a's rule is that such claims are measured.
+     *
+     * ## Why the assertion is full containment, and the two plants that were wrong first
+     *
+     * Recorded because a later reader will otherwise read this as fussier than it needs to be and
+     * loosen it back to one of the broken forms.
+     *
+     * **First plant, rejected: `textAlign = TextAlign.Left` on the counts row.** It needs a new
+     * import, so it can fail to *compile* — CLAUDE.md's own warning that a plant is code and can be
+     * wrong on its own terms. A plant that cannot run proves nothing about the guard.
+     *
+     * **Second plant, rejected as vacuous: `Modifier.fillMaxWidth()` against a "starts before the
+     * centre" assertion.** A full-width node's bounds span the panel in *both* directions, so
+     * `left < centre` holds under LTR **and** `right > centre` holds under RTL — the plant is applied,
+     * the defect is real, and both halves stay green. This is the exact shape
+     * [theInfoSheetMirrorsWithLayoutDirection]'s KDoc warns about one test over, arrived at
+     * independently by someone who had just read it.
+     *
+     * **Tightening to full containment is what makes the second plant a real one.** `right <= centre`
+     * and `left >= centre` are false for a node spanning the panel, so `fillMaxWidth` — a symbol
+     * `DuckInfoPanel` already imports, added as one argument to an existing call — turns both halves
+     * red and cannot fail on its own terms. The guard got stronger as a side effect of needing a
+     * plant that works, which is the argument for naming plants before writing them.
+     *
+     * The measured node is therefore deliberately **not** `fillMaxWidth` in production. Do not add it
+     * there, and do not relax this to a centre comparison.
+     */
+    @Test
+    fun theCountsRowLeadsWithLayoutDirection() {
+        shellWithInfoOpen(width = COMPACT_WIDTH)
+        val centre = COMPACT_WIDTH * 0.5f
+
+        val ltrCounts = rule.onNodeWithText(WORD_COUNT).getUnclippedBoundsInRoot()
+        println("DUCK rtl: LTR counts=$ltrCounts centre=$centre")
+
+        flipToRtl()
+        val rtlCounts = rule.onNodeWithText(WORD_COUNT).getUnclippedBoundsInRoot()
+        println("DUCK rtl: RTL counts=$rtlCounts centre=$centre")
+
+        assertEquals(
+            "the counts row must sit ENTIRELY in the leading half in both directions: left of " +
+                "$centre in LTR ($ltrCounts), right of it in RTL ($rtlCounts). A digit-initial " +
+                "string is strong LTR inside an RTL line; alignment must still come from the layout " +
+                "direction. Containment, not a centre comparison — a fillMaxWidth node satisfies " +
+                "both halves of a centre comparison while being wrong.",
+            CountsLeadingLtr(true) to CountsLeadingRtl(true),
+            CountsLeadingLtr(ltrCounts.right <= centre) to
+                CountsLeadingRtl(rtlCounts.left >= centre),
+        )
+    }
+
+    /**
+     * The real [DuckShell] at [width], with a note open and the info panel already showing.
      *
      * `infoOpen` is passed in the state rather than reached by clicking the toolbar button, because
      * these tests drive `DuckShell` with an inert [ShellActions] — `onToggleInfo` would do nothing.
@@ -506,6 +565,10 @@ class RtlLayoutTest {
 
     private data class LinkInsideRtl(val value: Boolean)
 
+    private data class CountsLeadingLtr(val value: Boolean)
+
+    private data class CountsLeadingRtl(val value: Boolean)
+
     private companion object {
         /** "Hide <title> section" — the collapse label, with the Arabic heading as its argument. */
         const val HIDE_SECTION = "Hide ملاحظات section"
@@ -528,6 +591,14 @@ class RtlLayoutTest {
 
         /** The backlinks panel's heading and its toolbar button, from `strings.xml`. */
         const val BACKLINKS = "Backlinks"
+
+        /**
+         * What `editor_word_count` renders for [EXIT_NOTE]'s two-word body — Phase 9e.
+         *
+         * Short on purpose: the containment assertion needs the row to fit inside half of
+         * [COMPACT_WIDTH], and a five-figure count would not.
+         */
+        const val WORD_COUNT = "2 words"
 
         /** One incoming link, so the panel renders its list branch rather than the empty state. */
         val SAMPLE_BACKLINK =

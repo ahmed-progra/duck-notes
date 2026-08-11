@@ -170,7 +170,9 @@ class DuckShellViewModel @Inject constructor(
     @OptIn(ExperimentalCoroutinesApi::class)
     private val selection: StateFlow<Selection> = selectedId.flatMapLatest { id ->
         if (id == null) flowOf(Selection())
-        else observeNote(id).map { note -> note?.let { Selection(id, it.body) } ?: Selection() }
+        else observeNote(id).map { note ->
+            note?.let { Selection(id, it.body, it.createdAt, it.modifiedAt) } ?: Selection()
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), Selection())
 
     /**
@@ -253,6 +255,8 @@ class DuckShellViewModel @Inject constructor(
                 collapsedSections = editor.collapsedSections,
                 selectedNoteBacklinks = link.backlinks,
                 infoOpen = link.infoOpen,
+                selectedNoteCreatedAt = editor.selection.createdAt,
+                selectedNoteModifiedAt = editor.selection.modifiedAt,
                 allNoteTitles = link.noteTitles,
                 undo = tg.undo,
             )
@@ -809,7 +813,18 @@ class DuckShellViewModel @Inject constructor(
             .toInstant().toEpochMilli()
     }
 
-    private data class Selection(val id: String? = null, val body: String = "")
+    /**
+     * The open note, flattened to the four fields the panes read.
+     *
+     * The timestamps ride here rather than being looked up in [notes] because the editor can be open
+     * on a note the active filter excludes — see [ShellUiState.selectedNoteCreatedAt].
+     */
+    private data class Selection(
+        val id: String? = null,
+        val body: String = "",
+        val createdAt: Long? = null,
+        val modifiedAt: Long? = null,
+    )
 
     private data class EditorState(
         val filter: ShellFilter,
