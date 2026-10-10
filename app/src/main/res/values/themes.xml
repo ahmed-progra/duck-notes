@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Window theme used before Compose takes over. Compose (DuckTheme + enableEdgeToEdge)
-         owns all in-app styling; this only sets the pre-draw window. -->
-    <style name="Theme.Duck" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.Duck" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/duck_window_surface</item>
+    </style>
+    <style name="Theme.Duck.Starting" parent="Theme.SplashScreen.IconBackground">
+        <item name="windowSplashScreenBackground">@color/duck_window_surface</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/duck_mascot</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/duck_splash_icon_surface</item>
+        <item name="postSplashScreenTheme">@style/Theme.Duck</item>
+    </style>
 </resources>

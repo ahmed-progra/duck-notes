@@ -166,7 +166,7 @@ fun DuckInfoPanel(
                 Text(
                     text = section.title,
                     style = DuckTheme.type.uiLabel,
-                    color = colors.accent,
+                    color = colors.accentText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
@@ -195,7 +195,7 @@ fun DuckInfoPanel(
                 Text(
                     text = link.sourceTitle,
                     style = DuckTheme.type.uiLabel,
-                    color = colors.accent,
+                    color = colors.accentText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier

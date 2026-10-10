@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <instrumentation
+        android:name="app.duck.notes.settings.SettingsTestRunner"
+        android:targetPackage="app.duck.notes"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+</manifest>

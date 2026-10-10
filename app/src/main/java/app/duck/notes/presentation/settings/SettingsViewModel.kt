@@ -23,6 +23,18 @@ data class SettingsUiState(
     val startupTimedOut: Boolean = false,
 )
 
+internal fun isAppearanceReady(
+    snapshot: SettingsSnapshot,
+    appliedTheme: ThemePreference?,
+    appliedDark: Boolean?,
+    resourceDark: Boolean,
+    systemDark: Boolean,
+): Boolean {
+    val dark = app.duck.notes.domain.model.effectiveDark(snapshot.settings.theme, systemDark)
+    return snapshot.readStatus != SettingsReadStatus.Loading &&
+        appliedTheme == snapshot.settings.theme && appliedDark == dark && resourceDark == dark
+}
+
 internal fun shouldKeepStartupSplash(
     startElapsedMs: Long,
     nowElapsedMs: Long,
@@ -40,7 +52,8 @@ class SettingsViewModel @Inject constructor(
     private val pendingWrite = MutableStateFlow(false)
     private val writeFailed = MutableStateFlow(false)
     private val startupTimedOut = MutableStateFlow(false)
-    private var firstLaunchElapsedMs: Long? = null
+    internal var firstLaunchElapsedMs: Long? = null
+        private set
     private var lastRequestedTheme: ThemePreference? = null
 
     val uiState = combine(snapshot, pendingWrite, writeFailed, startupTimedOut) {
@@ -95,7 +108,8 @@ class SettingsViewModel @Inject constructor(
     fun shouldHoldStartup(nowElapsedMs: Long, appearanceReady: Boolean): Boolean {
         val startElapsedMs = firstLaunchElapsedMs ?: return false
         val ready = snapshot.value.readStatus != SettingsReadStatus.Loading && appearanceReady
-        val hold = shouldKeepStartupSplash(startElapsedMs, nowElapsedMs, ready)
+        val hold = (snapshot.value.readStatus != SettingsReadStatus.Loading && !ready) ||
+            shouldKeepStartupSplash(startElapsedMs, nowElapsedMs, ready)
         if (!hold && !ready) startupTimedOut.value = true
         return hold
     }

@@ -75,6 +75,7 @@ fun DuckSidebar(
     onToggleTag: (String) -> Unit,
     modifier: Modifier = Modifier,
     onTagMenu: (TagRow, TagMenuAction) -> Unit = { _, _ -> },
+    onSettings: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -137,6 +138,15 @@ fun DuckSidebar(
                 selected = filter == ShellFilter.Trash,
                 onClick = { onFilter(ShellFilter.Trash) },
             )
+        }
+        if (onSettings != null) {
+            item {
+                SidebarRow(
+                    label = stringResource(R.string.settings_title),
+                    selected = false,
+                    onClick = onSettings,
+                )
+            }
         }
     }
 }
