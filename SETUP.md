@@ -127,11 +127,11 @@ Use either of these instead — both report correctly:
 gradle assembleDebug assembleDebugAndroidTest
 adb install -r -t app/build/outputs/apk/debug/app-debug.apk
 adb install -r -t app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb shell am instrument -w -r app.duck.notes.test/androidx.test.runner.AndroidJUnitRunner
+adb shell am instrument -w -r app.duck.notes.test/app.duck.notes.settings.SettingsTestRunner
 
 # ...or one class:
 adb shell am instrument -w -r -e class app.duck.notes.markdown.OutputTransformationCaretSpikeTest \
-  app.duck.notes.test/androidx.test.runner.AndroidJUnitRunner
+  app.duck.notes.test/app.duck.notes.settings.SettingsTestRunner
 ```
 
 Android Studio's own test runner also reports correctly — use it for interactive runs.
@@ -419,7 +419,7 @@ the live stream:
 
 ```powershell
 $out = "instrument_full.log"
-& $ADB shell am instrument -w -r app.duck.notes.test/androidx.test.runner.AndroidJUnitRunner > $out
+& $ADB shell am instrument -w -r app.duck.notes.test/app.duck.notes.settings.SettingsTestRunner > $out
 Select-String -Path $out -Pattern "^OK \(|^Tests run|^FAILURES|INSTRUMENTATION_CODE"
 Select-String -Path $out -Pattern "^\d+\) "      # the failing test NAMES
 ```
@@ -596,3 +596,117 @@ PY
 when the move fails, which is precisely how Plant 11 got through. Run the steps separately and read
 the exit code, or use plain `mv` — **an untracked file is exactly the situation a class added by the
 current phase is in**, which is when this fires.
+
+
+## Settings completion audit (2026-10-09)
+
+Settings candidates are 14a (persistence), 14b (UI and readiness), 14c (scoped
+autosave lifecycle harness), then 14d (gate and tracking), before welcome 9f.
+Commit file lists and mixed hunks require explicit approval. Welcome-owned hunks
+remain frozen.
+
+Evidence inventory refreshed on 2026-10-10. Final acceptance is determined by
+`settings-completion-20261009/closure-final/closure-tally.json`, outside the repository.
+Its `accepted` field must be true; saved intermediate gates do not replace it.
+Commit approval remains separate.
+
+The strict plant tally (`all-plant-review-20261010T145945Z/verification.json`)
+accepts 26 tracked-repository proofs covering all 26 Settings methods: 30 intended
+assertion failures, zero RED errors/skips, 30 restored GREEN tests with zero
+failures/errors/skips, and 26 exact restorations. Every proof contains four
+whole-tree maps of 284 files bound to C09, edit-landed evidence, its own XML
+assertion reason, before/planted/reverted SHA-256 and the dirty status after
+restoration. Ten complete pairs recovered from a failed publisher batch retain
+individual credit; that batch itself remains failed and its unstarted record
+remains excluded.
+
+The Settings-only 14a cumulative candidate
+(`settings-candidate-builds/14a/results.json`) contains 538 JVM tests in each of
+Debug and Release, with zero failures, errors or skips. Its source discovery
+records 109 Android methods; that result contains no instrumentation execution.
+Its accepted result is a JVM/build check for the recorded candidate, not a
+109-test device pass.
+
+Saved C09 preflight evidence (`candidate-09/results.json`) contains 546 Debug JVM
+tests with zero failures, errors or skips, and 12 Settings device tests with
+12 passed, zero failed, errors or skips, `OK (12 tests)` and
+`INSTRUMENTATION_CODE: -1`. This is a preflight result for its recorded source
+hashes, not final completion evidence.
+
+The Settings-only 14b candidate evidence
+(`settings-candidate-builds/14b/results.json`) contains 539 JVM tests in each of
+Debug and Release with zero failures, errors or skips, plus all 118 candidate
+Android methods: 118 passed, zero failed, errors or skips, `OK (118 tests)` and
+`INSTRUMENTATION_CODE: -1`. Its ordinary instrumentation run has no welcome
+filter or dedicated welcome scenarios. It proves that saved cumulative candidate,
+not a plant run or the final combined working tree.
+
+The Settings-only 14c candidate (`settings-candidate-builds/14c/results.json`)
+contains 539 JVM tests in each of Debug and Release and all 121 candidate device
+methods, with zero failures/errors/skips, `OK (121 tests)` and
+`INSTRUMENTATION_CODE: -1`. It includes the scoped lifecycle harness and the
+existing real autosave timer controls, with no welcome filter.
+
+| Item | Status and remaining closure evidence | Repository location |
+|---|---|---|
+| SETTINGS-STARTUP-FALLBACK | Own FALLBACK_LOADING_RESET plant is credited with assertion RED, exact restoration and fresh GREEN; final combined gate remains required. C09's stuck-store test reached the actual System window, bars and captured pixel after the literal 1000ms unresolved-read cap, then cleared the notice after the real read. Platform configuration can settle afterward. | MainActivity.kt; FirstFrameThemeTest.stuckRealStoreReleasesAtTheLiteralCapAndLateReadClearsTheNotice |
+| SETTINGS-ACTION-TEXT | Historical virtualized Palette target was absent before color measurement. C09 exercises the actual launcher color assertions; INFO_CONTENTS_TEXT_ROLE now has its own assertion RED, exact restoration and fresh GREEN; final combined gate remains required. | SettingsActivityTest.actionTextUsesLiteralAccessibleColorInBothRealThemes; DuckInfoPanel.kt |
+| SETTINGS-LIFECYCLE-EDITOR | Historical ComposeNotIdle occurred in setup. C09 exercises actual Room ON_STOP persistence at autosave virtual time 0 and the active autosave control. ON_STOP_EDITOR_NO_FLUSH now has its own Room assertion RED, exact restoration and fresh GREEN; final combined gate remains required. | SettingsLifecycleTest.editorStopWritesActualRoomWhileRealDebounceRemainsAtZero; DuckScreen.kt |
+| SETTINGS-LIFECYCLE-SETTINGS | Historical ComposeNotIdle occurred in setup. Same requirements with Settings open and the editor absent; ON_STOP_SETTINGS_NO_FLUSH now has its own Room assertion RED, exact restoration and fresh GREEN; final combined gate remains required. | SettingsLifecycleTest.settingsOpenStopWritesActualRoomWhileRealDebounceRemainsAtZero; DuckScreen.kt |
+| SETTINGS-DELAYED-THEME | Open. C07 observed Ready at OnDraw with resource mask 16 where 32 was expected. That observation may have followed an earlier Loading cap release; the saved trace does not establish the exact race. Require 20 sequential isolated runs of this single method on one unchanged installed build, recording source and APK hashes and pass/fail/incomplete counts. Any failure or incomplete run leaves this open. | FirstFrameThemeTest.delayedOppositePreferenceIsReadyAtTheFirstPermittedAppDraw; MainActivity.kt |
+| SETTINGS-RETAINED-ORIGIN | C09 compares the actual retained ViewModel origin before and after real recreation and selects that recreated Activity's OnDraw and PixelCopy. STARTUP_ORIGIN_DEVICE is credited for its direct origin assertion RED, exact restoration and fresh GREEN; final combined gate remains required. | SettingsViewModel.firstLaunchElapsedMs/retainFirstLaunch/shouldHoldStartup; FirstFrameThemeTest.recreationDuringThePausedReadDoesNotRestartTheOriginalCap |
+| SETTINGS-COLD-RENDER | Open limitation. Readiness evidence does not bound actual frame/render latency. Historical cold draws exceeded 1000ms; no performance fix or every-frame capture is claimed. | FirstFrameThemeTest timing logs; MainActivity.kt |
+| F8 | Open, separate scope: expanded info-pane geometry at 839/840/900/1200 widths, LTR/RTL, font bounds and taps. Settings text colors do not close it. | DuckInfoPanel.kt; DuckShell.kt; DUCK_NOTES_BUILD_PROMPT.md |
+| F9 | Open, separate scope: attachment, wiki-link and note-save failure feedback and partial-state policies. Settings DataStore retry does not close it. | AttachmentRepositoryImpl.kt; OpenWikiLink.kt; DuckShellViewModel.kt; DUCK_NOTES_BUILD_PROMPT.md |
+| SAVE-RECOVERY | Pending explicit scope: note-id failure state, retry and departure policy, cancellation, real Room rollback and surviving collectors. No implementation in this batch. | DuckShellViewModel.kt; SaveNote.kt; DUCK_NOTES_BUILD_PROMPT.md |
+| F1/F2 provenance | Saved HEAD d781678 does not contain repair 5908be4f87f1c67eb6bb595a660280e5b46302e1; that object was absent from this checkout. External recovered-stage results do not establish current repair. | MarkdownTextCache.kt; DUCK_NOTES_BUILD_PROMPT.md |
+
+The early-read fixture changed. The 300ms pause is now measured from actual
+Activity entry rather than completion of onCreate. C09 independently requires
+both worker release and observed Ready before the literal 1000ms cap, and release
+no earlier than 300ms. C07 only bounded release; its saved delayed run logged
+release=619ms, draw=2480ms, mask=16 and two creations. C09 logged release=302ms,
+Ready observed=470ms, draw=530ms and mask=32. These are individual recorded runs,
+not a 20-run flake result. The saved `flake-20-final/results.json` contains a
+historical 20/20 pass bound to candidate-04, whose FirstFrameThemeTest hash is
+`cff0bbc31719853a5a980827957e6b9ecba9fa4029761c7123377ab88777cbd3`.
+C09 uses `ccee186fdf6c4999f2caab41d4e4c7390d1828a1ace932c31c55ca23f1ab529c`.
+That earlier protocol does not satisfy the final unchanged-build requirement
+for this changed fixture. A read that becomes Ready after cap release is outside
+the early-read fixture and may explain C07; that remains an inference.
+
+The old assertions requiring a delayed draw before 1000ms and a recreated child's
+draw within its own 1000ms deadline were removed. They mixed physical rendering
+latency with the retained unresolved-read cap. The replacement checks the actual
+retained ViewModel origin and its real `shouldHoldStartup(origin + 1000, false)`
+decision, while keeping actual recreated-Activity observation and literal
+window/bar/pixel assertions. This changes the coverage claim; it does not establish
+a physical-frame latency ceiling.
+
+C07's completed Settings result was 12 tests, 8 passed and 4 failed, with
+`FAILURES!!!`, `Tests run: 12, Failures: 4` and `INSTRUMENTATION_CODE: -1`.
+Besides delayed-mask and child-render-deadline assertions, it recorded literal
+dark-surface failures in the theme-row and real retry tests. Those are historical
+C07 failures, distinct from the original four Settings findings above. The
+combined repository runs included welcome changes and cannot establish that any
+Settings failure pre-dated welcome work.
+
+Final acceptance requires all four cumulative candidate result files, the combined
+Debug/Release and complete instrumentation gate, the final fixed 20-run protocol,
+and the fresh frozen-scope audit to satisfy the closure aggregator. The accepted
+plant proofs and candidate 14a/14b/14c results above remain bound to their saved
+source hashes; no later edit inherits their credit. The final gate is
+`scripts/verify_settings_completion.py`. Its ordinary suite and dedicated welcome
+scenarios must cover the grep-discovered methods and exact expected raw count.
+No data is cleared between the preparation and verification of retained-install
+scenarios. Any failure or incomplete delayed-theme run leaves that item unresolved.
+
+Both the repository gate and repaired historical verifier rejected the known
+126-test result containing four failures, each with native exit 1; controls are
+saved in `gate-script-review-20261010T141442Z/verification.json`. Runtime acceptance
+comes from result-file tallies, `OK (N tests)` and `INSTRUMENTATION_CODE`, rather
+than a successful build message.
+
+F3-F7 remain deferred in their own batches. Stable welcome identities and restore
+remain out of scope. Existing welcome scenarios may run as verification without
+editing their welcome-owned sources or clearing data in retained-install steps.
