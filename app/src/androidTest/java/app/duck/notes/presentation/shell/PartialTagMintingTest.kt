@@ -132,6 +132,7 @@ class PartialTagMintingTest {
             observeAttachments = ObserveAttachments(attachments),
             getBacklinks = GetBacklinks(LinkRepositoryImpl(db.noteLinkDao())),
             clock = Clock { System.currentTimeMillis() },
+            autosaveDispatcher = Dispatchers.Main.immediate,
         )
     }
 

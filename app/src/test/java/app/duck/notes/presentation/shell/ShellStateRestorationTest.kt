@@ -110,6 +110,7 @@ class ShellStateRestorationTest {
         observeAttachments = ObserveAttachments(attachments),
         getBacklinks = GetBacklinks(FakeLinkRepository()),
         clock = Clock { 0L },
+        autosaveDispatcher = dispatcher,
     )
 
     @Test

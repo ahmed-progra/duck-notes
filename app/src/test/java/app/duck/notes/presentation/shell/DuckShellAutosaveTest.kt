@@ -135,6 +135,7 @@ class DuckShellAutosaveTest {
         observeAttachments = ObserveAttachments(attachments),
         getBacklinks = GetBacklinks(FakeLinkRepository()),
         clock = clock,
+        autosaveDispatcher = dispatcher,
     )
 
     private fun note(id: String, body: String) =

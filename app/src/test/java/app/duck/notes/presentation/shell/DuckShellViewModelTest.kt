@@ -124,6 +124,7 @@ class DuckShellViewModelTest {
         observeAttachments = ObserveAttachments(attachments),
         getBacklinks = GetBacklinks(FakeLinkRepository(backlinks)),
         clock = Clock { now },
+        autosaveDispatcher = dispatcher,
     )
 
     /** Attaches a collector so `state` actually runs, then drains the scheduler between actions. */

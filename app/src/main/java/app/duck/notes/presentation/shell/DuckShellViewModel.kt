@@ -7,6 +7,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.duck.notes.di.AutosaveDispatcher
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.markdown.MarkdownScanner
 import app.duck.notes.domain.markdown.TagScanner
@@ -35,6 +36,7 @@ import app.duck.notes.domain.usecase.SaveNote
 import app.duck.notes.domain.usecase.SetTagIcon
 import app.duck.notes.domain.usecase.UndoTagChange
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.produce
@@ -106,6 +108,7 @@ class DuckShellViewModel @Inject constructor(
     observeAttachments: ObserveAttachments,
     getBacklinks: GetBacklinks,
     private val clock: Clock,
+    @AutosaveDispatcher autosaveDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
 
     private val filter: Flow<ShellFilter> =
@@ -328,7 +331,7 @@ class DuckShellViewModel @Inject constructor(
         // delivered after the swap and land on note B. The id travels with the text rather than being
         // read again at write time, which is the race a lock alone does not close.
         @OptIn(ExperimentalCoroutinesApi::class)
-        viewModelScope.launch {
+        viewModelScope.launch(autosaveDispatcher) {
             loadedId.flatMapLatest { id ->
                 if (id == null) emptyFlow() else snapshotFlow { buffer.text }.cappedDebounce().map { id }
             }.collect { save(it, suppressInProgressTag = true) }
