@@ -54,6 +54,7 @@ ksp {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     // collectAsStateWithLifecycle — the shell must stop collecting Room flows when backgrounded.
     implementation(libs.androidx.lifecycle.runtime.compose)
