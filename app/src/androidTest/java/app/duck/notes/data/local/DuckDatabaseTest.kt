@@ -44,7 +44,7 @@ class DuckDatabaseTest {
         db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
             // Must match production: system SQLite may lack FTS5, which `notes_fts` requires.
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .addCallback(DuckDatabaseCallback())
             .build()
         notes = db.noteDao()
         tags = db.tagDao()
@@ -126,6 +126,22 @@ class DuckDatabaseTest {
     fun trashedNotesAreExcludedFromSearch() = runBlocking {
         notes.saveNoteWithTagsAndLinks(note("Grebe", "trashed").copy(isTrashed = true), emptyList())
         assertTrue(notes.search("grebe").isEmpty())
+    }
+
+    /** Plants FTS_LITERAL_UNQUOTED, FTS_PREFIX_REMOVED, FTS_TRASH_VISIBLE in NoteDao. */
+    @Test
+    fun literalPrefixSearchIncludesArchiveAndQuotesOperatorsAndEmbeddedQuotes() = runBlocking {
+        val active = note("active", "prefixroot OR blue pre fix")
+        val archived = note("archived", active.body).copy(isArchived = true)
+        val trashed = note("trashed", active.body).copy(isTrashed = true)
+        val withoutOperator = note("other", "prefixroot blue")
+        listOf(active, archived, trashed, withoutOperator).forEach {
+            notes.saveNoteWithTagsAndLinks(it, emptyList())
+        }
+        assertEquals(setOf(active.id, archived.id), notes.search("prefix OR blue").map { it.id }.toSet())
+        assertTrue("OR is a literal word, not an operator", notes.search("prefix OR absent").isEmpty())
+        assertEquals(setOf(active.id, archived.id), notes.search("pre\"fix").map { it.id }.toSet())
+        assertTrue(notes.search("   ").isEmpty())
     }
 
     @Test

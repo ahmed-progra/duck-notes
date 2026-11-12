@@ -102,6 +102,67 @@ class MarkdownFormatTest {
         assertEquals("buy milk", MarkdownScanner.removeImageRef(body, "abc-123"))
     }
 
+    @Test
+    fun attachmentIdsKeepOffsetsAcrossEveryLineSeparator() {
+        listOf(
+            "نص😀\n![صورة](attachment:first)\n![photo](attachment:second)",
+            "نص😀\r\n![صورة](attachment:first)\r\n![photo](attachment:second)",
+            "نص😀\r![صورة](attachment:first)\r![photo](attachment:second)",
+            "نص😀\r\n![صورة](attachment:first)\r![photo](attachment:second)\nنهاية",
+        ).forEach { body ->
+            assertEquals(listOf("first", "second"), MarkdownScanner.attachmentIdsIn(body).toList())
+        }
+    }
+
+    @Test
+    fun attachmentIdsIgnoreCodeAndExternalImagesWithMixedSeparators() {
+        val body = "نص😀\r\n```\r![fenced](attachment:hidden)\n```\r\n" +
+            "`![inline](attachment:code)` ![web](https://example.test/photo)\r" +
+            "![real](attachment:visible)\n~~~\r\n![unclosed](attachment:also-hidden)"
+        assertEquals(listOf("visible"), MarkdownScanner.attachmentIdsIn(body).toList())
+    }
+
+    @Test
+    fun removingAWholeImageLineConsumesTheEntirePrecedingSeparator() {
+        listOf(
+            "نص😀\n![صورة](attachment:x)" to "نص😀",
+            "نص😀\r\n![صورة](attachment:x)" to "نص😀",
+            "نص😀\r![صورة](attachment:x)" to "نص😀",
+            "نص😀\r\n  ![صورة](attachment:x)  \nنهاية" to "نص😀\nنهاية",
+            "نص😀\n![صورة](attachment:x)\r\nنهاية" to "نص😀\r\nنهاية",
+        ).forEach { (body, expected) ->
+            assertEquals(expected, MarkdownScanner.removeImageRef(body, "x"))
+        }
+    }
+
+    @Test
+    fun removingTheFirstImageLineConsumesTheEntireFollowingSeparator() {
+        assertEquals("نهاية😀", MarkdownScanner.removeImageRef("![صورة](attachment:x)\nنهاية😀", "x"))
+        assertEquals("نهاية😀", MarkdownScanner.removeImageRef("![صورة](attachment:x)\r\nنهاية😀", "x"))
+        assertEquals("نهاية😀", MarkdownScanner.removeImageRef("![صورة](attachment:x)\rنهاية😀", "x"))
+        assertEquals("", MarkdownScanner.removeImageRef("![صورة](attachment:x)", "x"))
+    }
+
+    @Test
+    fun removingAnInlineImagePreservesUnicodeAndEveryOtherCharacter() {
+        assertEquals(
+            "نص😀\r\nقبل  بعد\rنهاية\n",
+            MarkdownScanner.removeImageRef("نص😀\r\nقبل ![صورة](attachment:x) بعد\rنهاية\n", "x"),
+        )
+    }
+
+    @Test
+    fun imageRemovalLeavesCodeAndUnmatchedReferencesUntouched() {
+        assertEquals(
+            "نص😀\r\n```\n![صورة](attachment:x)\r```\r\n`![](attachment:x)`\n![](attachment:other)",
+            MarkdownScanner.removeImageRef(
+                "نص😀\r\n```\n![صورة](attachment:x)\r```\r\n`![](attachment:x)`\n![](attachment:other)",
+                "x",
+            ),
+        )
+        assertEquals("![](attachment:x", MarkdownScanner.removeImageRef("![](attachment:x", "x"))
+    }
+
     // --- inline: wrap, unwrap, caret -----------------------------------------
 
     @Test

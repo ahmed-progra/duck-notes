@@ -5,6 +5,7 @@ import app.duck.notes.domain.repository.NoteRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flow
 
 /**
  * In-memory [NoteRepository]. Mirrors the real one's observable contract — upsert by id, trashed
@@ -43,6 +44,8 @@ class FakeNoteRepository : NoteRepository {
      * apart, and reads as though it proved something about `modifiedAt` when it did not.
      */
     val writes = mutableListOf<Note>()
+
+    var beforeSave: (suspend (Note) -> Unit)? = null
 
     /**
      * The `(id, tagNames)` of every [save], in order — the tag half of [writes].
@@ -102,7 +105,18 @@ class FakeNoteRepository : NoteRepository {
             .sortedByDescending { it.modifiedAt }
     }
 
-    override fun observeNote(id: String): Flow<Note?> = notes.map { all -> all.find { it.id == id } }
+    /** Delays updates on existing collectors while fresh Room-style reads remain available. */
+    var beforeObservedUpdate: (suspend (Note?) -> Unit)? = null
+    var beforeInitialObservation: (suspend (Note?) -> Unit)? = null
+    override fun observeNote(id: String): Flow<Note?> = flow {
+        var initial = true
+        notes.collect { all ->
+            val note = all.find { it.id == id }
+            if (initial) beforeInitialObservation?.invoke(note) else beforeObservedUpdate?.invoke(note)
+            initial = false
+            emit(note)
+        }
+    }
 
     /**
      * Mirrors `NoteDao.observeTitles`: active notes only, newest first, and never the note whose id
@@ -116,18 +130,32 @@ class FakeNoteRepository : NoteRepository {
 
     override suspend fun getNote(id: String): Note? = notes.value.find { it.id == id }
 
-    /** Mirrors `NoteDao.noteIdByTitle`: exact match, trashed excluded, most recently modified wins. */
-    override suspend fun noteIdByTitle(title: String): String? = notes.value
-        .filterNot { it.isTrashed }
-        .filter { it.title == title }
-        .maxByOrNull { it.modifiedAt }
-        ?.id
+    override suspend fun noteIdByTitle(title: String): String? {
+        val literal = title.trim()
+        if (literal.isEmpty()) return null
+        val candidates = notes.value.filterNot { it.isTrashed }
+            .sortedWith(compareByDescending<Note> { it.modifiedAt }.thenBy { it.id })
+        return candidates.firstOrNull { it.title == literal }?.id
+            ?: candidates.firstOrNull {
+                it.title == app.duck.notes.domain.usecase.DeriveTitle()(literal)
+            }?.id
+    }
 
     override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) {
+        beforeSave?.invoke(note)
         savedTags[note.id] = tagNames
         savedLinks[note.id] = linkTitles
         writes += note
         writtenTags += note.id to tagNames
         notes.value = notes.value.filterNot { it.id == note.id } + note
+    }
+    var attachments: app.duck.notes.domain.repository.AttachmentRepository? = null
+    override suspend fun saveWithAttachment(note: Note, tagNames: List<String>, linkTitles: List<String>, attachment: app.duck.notes.domain.model.Attachment) {
+        save(note, tagNames, linkTitles)
+        requireNotNull(attachments) { "Fixture must bind its attachment repository" }.insert(attachment)
+    }
+    override suspend fun saveWithoutAttachment(note: Note, tagNames: List<String>, linkTitles: List<String>, attachmentId: String) {
+        save(note, tagNames, linkTitles)
+        requireNotNull(attachments) { "Fixture must bind its attachment repository" }.delete(attachmentId)
     }
 }

@@ -51,4 +51,11 @@ class ImagePasteReceiverTest {
     fun anImageUriWhoseTypeIsUnknownYieldsNull() {
         assertNull(shouldAttach(ClipData.Item(imageUri)) { null })
     }
+
+    /** Plant MIME_REVOKED_UNCAUGHT: remove the SecurityException catch in resolveImageMime. */
+    @Test fun revokedAndUnavailableProvidersLeavePasteUnconsumed() {
+        assertNull(shouldAttach(ClipData.Item(imageUri)) { throw SecurityException("synthetic revoked grant") })
+        assertNull(resolveImageMime(imageUri) { throw IllegalArgumentException("synthetic missing provider") })
+        assertEquals("image/png", resolveImageMime(imageUri) { "image/png" })
+    }
 }

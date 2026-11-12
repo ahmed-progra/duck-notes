@@ -54,6 +54,7 @@ import app.duck.notes.domain.markdown.MarkdownFormat
 fun FormatToolbar(
     state: TextFieldState,
     enabled: Boolean,
+    canEdit: () -> Boolean = { true },
     modifier: Modifier = Modifier,
     onEnterFocus: (() -> Unit)? = null,
     onToggleInfo: (() -> Unit)? = null,
@@ -74,7 +75,7 @@ fun FormatToolbar(
                     icon = action.icon,
                     contentDescription = stringResource(action.label),
                     enabled = enabled,
-                    onClick = { state.applyFormat(action) },
+                    onClick = { if (canEdit()) state.applyFormat(action) },
                 )
             }
             // Focus toggle trails the format actions. `enabled = true` unconditionally — entering

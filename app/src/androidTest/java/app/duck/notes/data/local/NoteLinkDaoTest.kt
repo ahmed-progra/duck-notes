@@ -21,9 +21,7 @@ import java.util.UUID
  * `note_links` against a real database — Phase 9b.
  *
  * The JVM suite pins what `SaveNote` *hands* the write path; everything below is what only real rows
- * can answer: whether a title resolves at all, which note it resolves to when two share a title, that
- * a save rewrites one note's links and no other note's, and that the backlink query's `is_trashed`
- * filter is on the source rather than the target.
+ * can answer: title resolution, unresolved references, live target changes, and both trash filters.
  *
  * Room is built exactly as `DuckDatabaseTest` builds it, `BundledSQLiteDriver` included: the system
  * SQLite may lack FTS5, which `notes_fts` requires, and this database declares it.
@@ -40,7 +38,7 @@ class NoteLinkDaoTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .addCallback(DuckDatabaseCallback())
             .build()
         notes = db.noteDao()
         links = db.noteLinkDao()
@@ -91,15 +89,13 @@ class NoteLinkDaoTest {
         assertEquals("Pond", row.linkText)
     }
 
-    /**
-     * An unresolved title is silently no row. `target_id` is non-null and create-on-tap is a later
-     * phase, so a link to a note that does not exist yet is simply not a link yet.
-     */
+    /** Plant LINK_DROP_UNRESOLVED: skip inserting a reference whose title has no target yet. */
     @Test
-    fun anUnresolvedTitleProducesNoRow() = runBlocking {
+    fun anUnresolvedReferenceResolvesWhenItsTargetArrives() = runBlocking {
         save(note("source", "Journal"), listOf("Nothing Called This"))
-
         assertEquals(emptyList<String>(), backlinkSourceIds("target"))
+        save(note("target", "Nothing Called This"))
+        assertEquals(listOf("source"), backlinkSourceIds("target"))
     }
 
     /**
@@ -205,23 +201,59 @@ class NoteLinkDaoTest {
         )
     }
 
-    /**
-     * A **trashed target** keeps its backlinks. The filter is deliberately one-sided.
-     *
-     * `ShellFilter.Trash` can open a note in the bin, and the useful answer there is the active notes
-     * still pointing at it. A filter on the target as well would empty that panel for no reason.
-     */
+    /** Plant LINK_TARGET_TRASH_VISIBLE: remove t.is_trashed = 0 from the live backlink query. */
     @Test
-    fun aTrashedTargetStillShowsItsBacklinks() = runBlocking {
-        save(note("target", "Pond", trashed = true))
-        save(note("source", "Journal"), listOf("Pond"))
-
-        // The link resolves against an active title only, so seed it before trashing the target.
+    fun targetTrashAndRestoreChangeResolutionWithoutSavingTheSource() = runBlocking {
         save(note("target", "Pond", trashed = false))
         save(note("source", "Journal"), listOf("Pond"))
-        save(note("target", "Pond", trashed = true))
-
         assertEquals(listOf("source"), backlinkSourceIds("target"))
+        save(note("target", "Pond", trashed = true))
+        assertEquals(emptyList<String>(), backlinkSourceIds("target"))
+        assertEquals(null, notes.noteIdByTitle("Pond"))
+        save(note("target", "Pond", trashed = false))
+        assertEquals(listOf("source"), backlinkSourceIds("target"))
+    }
+
+    @Test fun targetRenameAndReplacementNeverRewriteTheSource() = runBlocking {
+        save(note("target", "Pond"))
+        save(note("source", "Journal"), listOf("Pond"))
+        val source = notes.getById("source")
+        assertEquals(listOf("source"), backlinkSourceIds("target"))
+        save(note("target", "Lake"))
+        assertEquals(emptyList<String>(), backlinkSourceIds("target"))
+        save(note("replacement", "Pond"))
+        assertEquals(listOf("source"), backlinkSourceIds("replacement"))
+        assertEquals(source, notes.getById("source"))
+    }
+
+    /** Plant LINK_FALLBACK_FIRST: reverse COALESCE operands in observeBacklinks. */
+    @Test fun literalPrecedesFallbackAndBothAgreeWithTapResolution() = runBlocking {
+        save(note("derived", "Pond", modifiedAt = 9_000L))
+        save(note("source", "Journal"), listOf("**Pond**"))
+        assertEquals("derived", notes.noteIdByTitle(" **Pond** "))
+        assertEquals(listOf("source"), backlinkSourceIds("derived"))
+        save(note("literal", "**Pond**", modifiedAt = 1L).copy(isArchived = true))
+        assertEquals("literal", notes.noteIdByTitle(" **Pond** "))
+        assertEquals(emptyList<String>(), backlinkSourceIds("derived"))
+        assertEquals(listOf("source"), backlinkSourceIds("literal"))
+        save(note("literal", "**Pond**", trashed = true))
+        assertEquals("derived", notes.noteIdByTitle("**Pond**"))
+        assertEquals(listOf("source"), backlinkSourceIds("derived"))
+    }
+
+    /** Plant LINK_TIE_BREAK_REVERSED: change id ASC to id DESC in the resolution queries. */
+    @Test fun duplicateWinnerTracksModificationAndStableIdWithoutSourceSave() = runBlocking {
+        save(note("z", "Pond", modifiedAt = 1L))
+        save(note("a", "Pond", modifiedAt = 1L))
+        save(note("source", "Journal"), listOf("Pond"))
+        assertEquals("a", notes.noteIdByTitle("Pond"))
+        assertEquals(listOf("source"), backlinkSourceIds("a"))
+        assertEquals(emptyList<String>(), backlinkSourceIds("z"))
+        save(note("z", "Pond", modifiedAt = 2L))
+        assertEquals("z", notes.noteIdByTitle("Pond"))
+        assertEquals(listOf("source"), backlinkSourceIds("z"))
+        assertEquals(emptyList<String>(), backlinkSourceIds("a"))
+        assertEquals(3, notes.count())
     }
 
     /** Nothing links here — the empty state the panel renders, not an error. */

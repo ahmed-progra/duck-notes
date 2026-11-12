@@ -64,9 +64,10 @@ object MarkdownScanner {
      * line's own spacing: `-   [ ] milk` would come back as `- [x] milk`.
      */
     fun toggleTaskAt(body: String, offset: Int): String? {
+        val (lines, starts) = MarkdownTextCache.splitLinesWithOffsets(body)
         var carry = LineCarry()
-        var base = 0
-        for (line in body.lineSequence()) {
+        for ((i, line) in lines.withIndex()) {
+            val base = starts[i]
             if (base > offset) return null
             val (tokens, next) = scanLine(line, base, carry)
             for (token in tokens) {
@@ -76,7 +77,6 @@ object MarkdownScanner {
                 return body.replaceRange(box.first + 1, box.first + 2, state)
             }
             carry = next
-            base += line.length + 1
         }
         return null
     }
@@ -174,8 +174,18 @@ object MarkdownScanner {
         val wholeLine = body.substring(ls, span.first).isBlank() &&
             body.substring(span.last + 1, le + 1).isBlank()
         return if (wholeLine) {
-            val from = if (ls > 0) ls - 1 else ls
-            val to = if (ls > 0) le + 1 else minOf(le + 2, body.length)
+            val from = when {
+                ls == 0 -> 0
+                body.getOrNull(ls - 2) == '\r' && body[ls - 1] == '\n' -> ls - 2
+                else -> ls - 1
+            }
+            val end = le + 1
+            val to = when {
+                ls > 0 -> end
+                body.startsWith("\r\n", end) -> end + 2
+                body.getOrNull(end) == '\r' || body.getOrNull(end) == '\n' -> end + 1
+                else -> end
+            }
             body.removeRange(from, to)
         } else {
             body.removeRange(span.first, span.last + 1)
@@ -187,16 +197,16 @@ object MarkdownScanner {
         body: String,
         action: (dest: String, token: Token, line: IntRange) -> Unit,
     ) {
+        val (lines, starts) = MarkdownTextCache.splitLinesWithOffsets(body)
         var carry = LineCarry()
-        var base = 0
-        for (line in body.lineSequence()) {
+        for ((i, line) in lines.withIndex()) {
+            val base = starts[i]
             val (tokens, next) = scanLine(line, base, carry)
             for (t in tokens) {
                 if (t.kind != TokenKind.IMAGE) continue
                 destOf(body, t)?.let { action(it, t, base until base + line.length) }
             }
             carry = next
-            base += line.length + 1
         }
     }
 

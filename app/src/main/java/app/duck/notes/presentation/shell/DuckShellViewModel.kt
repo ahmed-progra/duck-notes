@@ -37,6 +37,7 @@ import app.duck.notes.domain.usecase.SetTagIcon
 import app.duck.notes.domain.usecase.UndoTagChange
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.produce
@@ -46,7 +47,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -61,32 +61,17 @@ import java.time.Instant
 import java.time.ZoneId
 import javax.inject.Inject
 
-/**
- * The shell's one state holder, and the first ViewModel in the project.
- *
- * **Every piece of shell state lives in [handle], and none of it in `rememberSaveable`.** That is
- * not belt-and-braces, it is the fix for a specific bug: on Compact the sidebar composes inside a
- * `ModalDrawerSheet` and on Expanded inside a `Row`, so crossing the 600dp breakpoint changes the
- * composition position `rememberSaveable` keys on. The saver would find no entry and
- * [expandedTagPaths] would silently reset — a resize losing state that a rotation preserves, which
- * is the confusing direction. A `SavedStateHandle` entry has no composition key at all, so it
- * survives a rotation (the `ViewModelStore` is retained), a resize (same) and process death (the
- * handle is written to the saved-instance bundle).
- *
- * ## Phase 8a folded the editor's buffer in here
- *
- * Phase 6 handed the editor a `String` and said autosave was Phase 8's. This is that. [buffer] lives
- * here rather than in a second ViewModel for one concrete reason: **all four operations that rewrite
- * note bodies from outside the editor are intents on this class** — [onRenameTag], [onDeleteTag],
- * [onAddTagToNote] and [onUndo]. Keeping the buffer here makes "flush before you write" a suspend
- * call in the same coroutine. Split across two Hilt-scoped ViewModels it would need a shared
- * coordinator object with exactly one caller, which the GLOBAL CONTRACT forbids.
- *
- * [buffer] is a plain field, deliberately **not** in [handle]: a `TextFieldState` holds the whole
- * note body, and that is precisely what must stay out of the saved-instance `Bundle`. It survives a
- * rotation and a 600dp resize because the `ViewModelStore` is retained; it does not survive process
- * death, and does not need to, because the body was in Room at most [MAX_WAIT_MS] ago.
- */
+import app.duck.notes.domain.markdown.MarkdownFormat
+import app.duck.notes.domain.model.SearchQuery
+import app.duck.notes.domain.usecase.SearchNotes
+import app.duck.notes.domain.usecase.ArchiveNote
+import app.duck.notes.domain.usecase.DeleteNote
+import app.duck.notes.domain.usecase.RestoreNote
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+
+/** Owns per-note editor sessions; text never changes identity during a suspended operation. */
 @HiltViewModel
 class DuckShellViewModel @Inject constructor(
     private val handle: SavedStateHandle,
@@ -107,779 +92,593 @@ class DuckShellViewModel @Inject constructor(
     private val openWikiLink: OpenWikiLink,
     observeAttachments: ObserveAttachments,
     getBacklinks: GetBacklinks,
+    private val searchNotes: SearchNotes,
+    private val archiveNote: ArchiveNote,
+    private val deleteNote: DeleteNote,
+    private val restoreNote: RestoreNote,
     private val clock: Clock,
-    @AutosaveDispatcher autosaveDispatcher: CoroutineDispatcher,
+    @AutosaveDispatcher private val autosaveDispatcher: CoroutineDispatcher,
 ) : ViewModel() {
+    private val filter = handle.getStateFlow<String?>(KEY_FILTER, null).map(ShellFilter::fromKey)
+    private val selectedId = handle.getStateFlow<String?>(KEY_SELECTED, null)
+    private val expanded = handle.getStateFlow(KEY_EXPANDED, ArrayList<String>()).map { it.toSet() }
+    private val selection = MutableStateFlow(Selection())
+    private val retired = mutableSetOf<EditorSession>()
+    private val writeLock = Mutex()
+    private val emptyBuffer = TextFieldState()
+    /** Compatibility for non-UI callers. Production rendering uses ShellUiState.editorSession. */
+    val buffer: TextFieldState get() = selection.value.session?.buffer ?: emptyBuffer
+    internal val editorSession: EditorSession? get() = selection.value.session
+    private var navigationRevision = 0L
+    private var retryNavigation: (() -> Unit)? = null
+    private val failedSession = MutableStateFlow<EditorSession?>(null)
+    private val operationFailure = MutableStateFlow<OperationFailure?>(null)
+    private val creating = MutableStateFlow(false)
+    private var pendingCreatedId: String? = null
+    private var pendingUndo: PendingUndo? = null
+    private var pickerSession: EditorSession? = null
+    private val undo = MutableStateFlow<TagPrompt?>(null)
+    private val search = MutableStateFlow(SearchState())
+    private var searchJob: Job? = null
+    private var searchRevision = 0L
 
-    private val filter: Flow<ShellFilter> =
-        handle.getStateFlow<String?>(KEY_FILTER, null).map(ShellFilter::fromKey)
-
-    private val selectedId: StateFlow<String?> = handle.getStateFlow(KEY_SELECTED, null)
-
-    private val expanded: Flow<Set<String>> =
-        handle.getStateFlow(KEY_EXPANDED, ArrayList<String>()).map { it.toSet() }
-
-    /** Fold state is keyed by note id, so switching notes cannot leak a heading collapse. */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val collapsedSections: Flow<Set<String>> = selectedId.flatMapLatest { id ->
+    private val notes = filter.flatMapLatest(::notesFor)
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val collapsedSections = selectedId.flatMapLatest { id ->
         if (id == null) flowOf(emptySet())
         else handle.getStateFlow(foldedKey(id), ArrayList<String>()).map { it.toSet() }
     }
-
-    private val tree: Flow<List<TagNode>> = observeTagTree()
-
-    private val counts: Flow<Map<String, TagCount>> = observeTagCounts()
-
-    /**
-     * The undo snapshot, and **the one piece of shell state deliberately not in [handle]**.
-     *
-     * Everything else lives there so it survives process death; this cannot. A [BodySnapshot] holds
-     * N full note bodies, and `SavedStateHandle` is written to the saved-instance `Bundle`, which
-     * shares a **1MB per-process Binder buffer** — the same limit Phase 8's note on the editor's
-     * saver is about. A 200-note rename would put the whole corpus through it and land a
-     * `TransactionTooLargeException`.
-     *
-     * So undo is explicitly transient: it lives as long as the Snackbar and dies with the process.
-     * A durable undo is an operation log, which is Phase 8's undo/redo stack or nothing.
-     */
-    private var pendingUndo: BodySnapshot? = null
-
-    private val undo = MutableStateFlow<TagPrompt?>(null)
-
-    /**
-     * Notes for the current filter. **No longer joined with [tree]** — a tag filter resolves by
-     * *path* straight to a query, so the panes no longer have to wait for the tree to load before
-     * the list can populate, and the ViewModel's `findByPath` walk is gone with it.
-     */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val notes: Flow<List<Note>> = filter.flatMapLatest(::notesFor)
-
-    /**
-     * The selected note's body, followed independently of [notes].
-     *
-     * Not read out of the list: selecting a note and then switching the sidebar filter leaves the
-     * editor open on a note the list no longer contains, which is correct. A null emission — the
-     * note was trashed or purged from under us — collapses to "nothing selected" rather than
-     * stranding the editor on a dead id.
-     *
-     * A `StateFlow`, not a cold `Flow`, since 8a. Two consumers now read it — [state]'s `combine` and
-     * the buffer-sync collector in `init` — and sharing means **one** `observeNote` query rather than
-     * two subscriptions to the same row.
-     *
-     * The buffer collector never unsubscribes, so `WhileSubscribed` never actually times out for this
-     * one flow. That is the deliberate cost of keeping the open note's body live: adopting an
-     * external change (a tag rename that rewrote it) is only possible while something is watching.
-     */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val selection: StateFlow<Selection> = selectedId.flatMapLatest { id ->
-        if (id == null) flowOf(Selection())
-        else observeNote(id).map { note ->
-            note?.let { Selection(id, it.body, it.createdAt, it.modifiedAt) } ?: Selection()
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), Selection())
-
-    /**
-     * The open note's attachments, followed by id like [selection] is. A cold `Flow`, not a shared
-     * `StateFlow`: it has one consumer ([state]'s `combine`), so `WhileSubscribed` on the outer state
-     * is the only sharing it needs, and `flatMapLatest` cancels the old note's Room query on a switch.
-     */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val selectedAttachments: Flow<List<Attachment>> = selectedId.flatMapLatest { id ->
-        if (id == null) flowOf(emptyList()) else observeAttachments(id)
+    private val selectedAttachments = selectedId.flatMapLatest { id ->
+        if (id == null) flowOf(Owned<List<Attachment>>(null, emptyList()))
+        else observeAttachments(id).map { Owned(id, it) }
     }
-
-    /**
-     * Backlinks for the open note, followed by id the way [selectedAttachments] is — a cold `Flow`
-     * with one consumer, so `flatMapLatest` cancels the previous note's query on a switch.
-     *
-     * Followed even while the panel is closed. Gating the query on [infoOpen] would trade a cheap
-     * indexed read for a visible empty-then-populate flash the first time the panel is opened, and
-     * `WhileSubscribed` already tears it down when the shell stops.
-     */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val backlinks: Flow<List<NoteLink>> = selectedId.flatMapLatest { id ->
-        if (id == null) flowOf(emptyList()) else getBacklinks(id)
+    private val backlinks = selectedId.flatMapLatest { id ->
+        if (id == null) flowOf(Owned<List<NoteLink>>(null, emptyList()))
+        else getBacklinks(id).map { Owned(id, it) }
     }
-
-    /**
-     * Panel open/closed. In [handle] like every other piece of shell state, so it survives the 600dp
-     * resize that moves it from a bottom sheet to a side pane — the exact case the class KDoc says
-     * `rememberSaveable` gets wrong.
-     */
-    private val infoOpen: Flow<Boolean> = handle.getStateFlow(KEY_INFO_OPEN, false)
-
-    /**
-     * Candidate titles for the `[[title]]` picker, excluding the open note — Phase 9c.
-     *
-     * Followed by id like [backlinks] is, so `flatMapLatest` both cancels the previous note's query
-     * on a switch and re-runs the exclusion for the new one. A note must not offer itself a link to
-     * itself; with nothing selected there is nothing to exclude and nothing to complete into, so the
-     * list is empty rather than everything.
-     */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val noteTitles: Flow<List<String>> = selectedId.flatMapLatest { id ->
-        if (id == null) flowOf(emptyList()) else observeNotes.titles(id)
+    private val noteTitles = selectedId.flatMapLatest { id ->
+        if (id == null) flowOf(Owned<List<String>>(null, emptyList()))
+        else observeNotes.titles(id).map { Owned(id, it) }
     }
-
-    /** Three flows bundled into one, because `combine` tops out at five. */
-    private val tagState: Flow<TagState> = combine(tree, counts, undo, ::TagState)
-
-    /**
-     * Phase 9's three, bundled for the same reason [tagState] is: `combine` tops out at five and the
-     * top-level one was already there. Backlinks, the panel's open state and the picker's candidates
-     * are the linking feature's state, so they travel together rather than being split by arity.
-     */
-    private val linkState: Flow<LinkState> = combine(backlinks, infoOpen, noteTitles, ::LinkState)
-
-    private val editorState: Flow<EditorState> =
-        combine(filter, notes, selection, expanded, collapsedSections) { f, n, sel, exp, collapsed ->
-            EditorState(f, n, sel, exp, collapsed)
-        }
-
-    val state: StateFlow<ShellUiState> =
-        combine(
-            editorState,
-            tagState,
-            selectedAttachments,
-            linkState,
-        ) { editor, tg, attachments, link ->
-            ShellUiState(
-                filter = editor.filter,
-                notes = editor.notes,
-                selectedNoteId = editor.selection.id,
-                selectedNoteBody = editor.selection.body,
-                pinnedTags = tg.tree.pinned(tg.counts),
-                tagRows = tg.tree.flatten(editor.expanded, tg.counts),
-                // Derived from the body already in hand, not queried. The chip row and the
-                // note_tags rows therefore cannot disagree — they come from one scanner.
-                selectedNoteTags = parseTags(editor.selection.body),
-                selectedNoteAttachments = attachments,
-                allTagPaths = tg.tree.tagPaths(),
-                collapsedSections = editor.collapsedSections,
-                selectedNoteBacklinks = link.backlinks,
-                infoOpen = link.infoOpen,
-                selectedNoteCreatedAt = editor.selection.createdAt,
-                selectedNoteModifiedAt = editor.selection.modifiedAt,
-                allNoteTitles = link.noteTitles,
-                undo = tg.undo,
-            )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
-
-    // --- the editor buffer, and the one write path ---------------------------
-
-    /** The open note's text. Hoisted out of the composable in 8a — see the class KDoc. */
-    val buffer = TextFieldState()
-
-    /**
-     * Which note's text [buffer] currently holds. **Not** [selectedId], which moves the instant a row
-     * is tapped, while this moves only once the body has actually been loaded.
-     *
-     * A `StateFlow` because the autosave loop keys on it. Keying on [selectedId] instead looks
-     * equivalent and is not: the loop would start the moment a row was tapped, observe the buffer
-     * still holding the *previous* note (or, on a fresh ViewModel, nothing), and write that. The
-     * empty body then becomes [lastWritten], every later external change reads as "buffer is dirty",
-     * and adoption stops happening at all. Six tests in `DuckShellAutosaveTest` failed on exactly
-     * that cascade before the key moved here.
-     */
-    private val loadedId = MutableStateFlow<String?>(null)
-
-    /**
-     * The exact string last written to Room, or last loaded from it. The gate on **every** save path,
-     * not just [flush]: without it, opening a note would immediately write it straight back and
-     * restamp `modifiedAt` for nothing, reordering the list on a read.
-     */
-    private var lastWritten: String? = null
-
-    /**
-     * Whether the last write dropped a tag that was still being typed, and therefore owes one more
-     * write to mint it.
-     *
-     * Completing a tag changes no character — `#work` is the same string whether the caret sits on
-     * it or not — so the [lastWritten] gate would swallow the write that finally records it, and the
-     * tag would appear only after the *next* edit. This flag is what lets [flush] through.
-     *
-     * **Only a different note retires it — never an [adopt] of our own text.** The ordinary case of
-     * adopting is Room echoing back the very write that took on the debt, so clearing it there means
-     * the flush that should mint the tag finds nothing owed and the tag never appears at all. That
-     * is why [adopt] takes `keepTagDebt`, and it was a real failure, not a hypothetical one:
-     * `aTagLeftUnderTheCaretIsMintedByTheFlush` caught it.
-     *
-     * **And it must not outlive [loadedId].** Left standing across a note switch, the next note's
-     * first flush bypasses its own [lastWritten] gate and writes a note the user only opened. The
-     * path there is [onFilter], which clears the selection *without* flushing — [onSelectNote]
-     * flushes first and so pays the debt on the way out, which is exactly why the leak is invisible
-     * from the obvious route. Same cascade shape that put the autosave loop on [loadedId] instead of
-     * [selectedId].
-     */
-    private var oweFullWrite = false
-
-    /**
-     * Serialises the three entrants to [save] — the debounce, the max-wait, and [flush].
-     *
-     * `flush()` at the top of an intent does not stop a debounced save that is already in flight, so
-     * without this a rename could interleave with the write it was meant to follow.
-     */
-    private val writeLock = Mutex()
+    private val tagState = combine(observeTagTree(), observeTagCounts(), undo, ::TagState)
+    private val linkState = combine(backlinks, handle.getStateFlow(KEY_INFO_OPEN, false), noteTitles, ::LinkState)
+    private val editorState = combine(filter, notes, selection, expanded, collapsedSections, ::EditorState)
+    private val operations = combine(failedSession, operationFailure, creating, search, ::OperationState)
+    val state: StateFlow<ShellUiState> = combine(
+        editorState, tagState, selectedAttachments, linkState, operations,
+    ) { editor, tags, attachments, link, ops ->
+        val session = editor.selection.session
+        val note = editor.selection.note
+        ShellUiState(
+            filter = editor.filter,
+            notes = if (ops.search.query.isBlank()) editor.notes else ops.search.notes,
+            selectedNoteId = session?.noteId,
+            selectedNoteBody = note?.body.orEmpty(),
+            editorSession = session,
+            selectedNoteArchived = note?.isArchived == true,
+            selectedNoteTrashed = note?.isTrashed == true,
+            pinnedTags = tags.tree.pinned(tags.counts),
+            tagRows = tags.tree.flatten(editor.expanded, tags.counts),
+            selectedNoteTags = parseTags(note?.body.orEmpty()),
+            selectedNoteAttachments = attachments.value.takeIf { attachments.id == session?.noteId }.orEmpty(),
+            allTagPaths = tags.tree.tagPaths(),
+            collapsedSections = editor.collapsedSections,
+            selectedNoteBacklinks = link.backlinks.value.takeIf { link.backlinks.id == session?.noteId }.orEmpty(),
+            infoOpen = link.infoOpen,
+            selectedNoteCreatedAt = note?.createdAt,
+            selectedNoteModifiedAt = note?.modifiedAt,
+            allNoteTitles = link.titles.value.takeIf { link.titles.id == session?.noteId }.orEmpty(),
+            undo = tags.undo,
+            saveFailed = ops.failed != null,
+            failedNoteTitle = ops.failed?.note?.title,
+            operationFailure = ops.failure,
+            creatingNote = ops.creating,
+            search = ops.search,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
 
     init {
-        // Buffer sync. Keyed on the note id inside `sync`, so this handles both "a different note was
-        // selected" and "the open note's body changed underneath us".
-        viewModelScope.launch { selection.collect(::syncBuffer) }
-
-        // Autosave. flatMapLatest on the id is what makes the (id, text) pairing atomic: a note
-        // switch CANCELS the collector, so an emission produced while note A was open can never be
-        // delivered after the swap and land on note B. The id travels with the text rather than being
-        // read again at write time, which is the race a lock alone does not close.
         @OptIn(ExperimentalCoroutinesApi::class)
-        viewModelScope.launch(autosaveDispatcher) {
-            loadedId.flatMapLatest { id ->
-                if (id == null) emptyFlow() else snapshotFlow { buffer.text }.cappedDebounce().map { id }
-            }.collect { save(it, suppressInProgressTag = true) }
+        viewModelScope.launch {
+            selectedId.flatMapLatest { id ->
+                if (id == null) flowOf(null to null)
+                else observeNote(id).map { id to it }
+            }.collect { (requested, _) ->
+                writeLock.withLock {
+                    if (requested != selectedId.value) return@withLock
+                    // An emission can queue behind a body rewrite. Read again while owning the
+                    // writer lock so an older emission cannot replace the committed editor text.
+                    val note = requested?.let { observeNote(it).first() }
+                    val current = editorSession
+                    if (current == null && note != null) {
+                        publish(note)
+                    } else if (current != null && current.noteId == requested && note != null) {
+                        current.note = note
+                        current.readOnly = note.isTrashed
+                        if (current.buffer.text.toString() == current.lastWritten) adopt(current, note.body, true)
+                        selection.value = Selection(current, note)
+                    } else if (current != null && current.noteId == requested && note == null) {
+                        if (current.buffer.text.toString() == current.lastWritten) publish(null)
+                        else {
+                            current.missing = true
+                            current.readOnly = true
+                            failedSession.value = current
+                        }
+                    } else if (current == null && note == null && requested != null) {
+                        handle[KEY_SELECTED] = null
+                    }
+                }
+            }
+        }
+        viewModelScope.launch {
+            observeNotes().distinctUntilChanged().collect {
+                if (search.value.query.isNotBlank()) scheduleSearch(search.value.query)
+            }
         }
     }
 
-    /**
-     * The only write path for a note body in this class. Idempotent: a redundant trigger costs one
-     * string comparison, not a write.
-     *
-     * **Takes no text — it reads [buffer] under the lock.** The emission that triggered this is a
-     * signal that something changed, never the payload. Trusting the payload is a real defect, not a
-     * theoretical one: `adopt` and [rewriteBuffer] mutate the buffer without anything calling
-     * `Snapshot.sendApplyNotifications`, so `snapshotFlow` has not re-emitted and the value still in
-     * flight is the text from *before* the rewrite. A rename would then be reverted by the very next
-     * debounce — `aDirtyBufferIsRewrittenByARenameAndTheOldTagIsNotResurrected` caught exactly that,
-     * with the buffer correct and Room wrong.
-     */
-    private suspend fun save(id: String, suppressInProgressTag: Boolean) = writeLock.withLock {
-        // Adjacent, and in this order: there is no suspension point between them, so `adopt` and
-        // [rewriteBuffer] cannot interleave and the caret cannot be stale against the text it
-        // indexes. Keep them together if this method grows.
-        val text = buffer.text.toString()
-        val selection = buffer.selection
-        // A non-collapsed selection is someone selecting, not someone typing — nothing is in
-        // progress, so nothing is suppressed. Held by
-        // `DuckShellAutosaveTest.aRangeSelectionOverATagSuppressesNothing`, which drives a range
-        // whose `start` lands on a finished tag's span end; without `collapsed` that tag is dropped.
-        // Naming it here because the test that was named for this conjunct spent a phase unable to
-        // reach it — a selection change alone emits nothing, so no save runs at all.
+    private fun publish(note: Note?) {
+        if (note != null && note.id == pendingCreatedId) {
+            pendingCreatedId = null
+            operationFailure.value = null
+        }
+        val outgoing = editorSession
+        if (note != null && outgoing?.noteId == note.id) {
+            outgoing.note = note
+            outgoing.readOnly = note.isTrashed
+            selection.value = Selection(outgoing, note)
+            return
+        }
+        outgoing?.let {
+            it.retired = true
+            if (it.editors == 0) close(it) else retired.add(it)
+        }
+        val next = note?.let(::EditorSession)
+        selection.value = Selection(next, note)
+        handle[KEY_SELECTED] = note?.id
+        if (next != null) next.autosave = viewModelScope.launch(autosaveDispatcher) {
+            snapshotFlow { next.buffer.text }.cappedDebounce().collect {
+                try {
+                    writeLock.withLock { save(next, true) }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) { failedSession.value = next }
+            }
+        }
+    }
+
+    fun onEditorAttached(session: EditorSession) {
+        if (!session.closed) {
+            if (session.editors == 0) session.detached = kotlinx.coroutines.CompletableDeferred()
+            session.editors++
+        }
+    }
+
+    fun onEditorDetached(session: EditorSession) {
+        session.editors = (session.editors - 1).coerceAtLeast(0)
+        if (session.editors != 0) return
+        session.detached.complete(Unit)
+        if (session.retired) viewModelScope.launch {
+            try {
+                writeLock.withLock {
+                    flush(session)
+                    close(session)
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { failedSession.value = session }
+        }
+    }
+
+    private fun close(session: EditorSession) {
+        session.closed = true
+        session.autosave?.cancel()
+        retired.remove(session)
+    }
+
+    /** Called under writeLock; the session remains the owner across every suspension. */
+    private suspend fun save(session: EditorSession, suppressInProgressTag: Boolean) {
+        if (session.closed) return
+        check(!session.missing) { "The originating note is no longer available" }
+        val text = session.buffer.text.toString()
+        val selection = session.buffer.selection
         val caret = selection.start.takeIf { suppressInProgressTag && selection.collapsed }
-
-        // The buffer holds [loadedId]'s text, which is NOT always the selected id: between a row
-        // being tapped and its body arriving they differ, and the buffer still holds the old note —
-        // or, on a fresh ViewModel, nothing at all. Writing then would save an empty body over the
-        // incoming note. `aSelectionRestoredOntoADeletedNoteClearsItself` caught exactly that: a
-        // selection restored onto a hard-deleted note re-created it from an empty buffer.
-        if (id != loadedId.value) return@withLock
-
-        // Unchanged text still owes a write when the last one suppressed a tag — completing `#work`
-        // changes no character, so this gate would otherwise swallow the write that mints it.
-        val owed = oweFullWrite && !suppressInProgressTag
-        if (text == lastWritten && !owed) return@withLock
-
-        // An owed write carries no new keystrokes, only the tag, so it must not age the note.
-        saveNote(id, text, caret, restamp = !(owed && text == lastWritten))
-        lastWritten = text
-        oweFullWrite = caret != null && parseTags(text, caret) != parseTags(text)
-    }
-
-    /**
-     * Write now, without waiting for the debounce. Called before anything that rewrites bodies, and
-     * on `ON_STOP` so an orderly departure loses nothing.
-     *
-     * Suspends until the write lands, so callers can rely on Room being current when it returns.
-     */
-    suspend fun flush() {
-        // Suppresses nothing: the user is leaving, or handing control to an intent that rewrites the
-        // body. There is no next keystroke to wait for, so a tag typed and left is minted here.
-        save(loadedId.value ?: return, suppressInProgressTag = false)
-    }
-
-    /**
-     * `ON_STOP` — the hook that turns "≤2s of typing at risk" into "nothing at risk" for every
-     * departure the user can cause from the UI: home, recents, screen off, task switch.
-     *
-     * **[viewModelScope], deliberately.** A `rememberCoroutineScope()` is cancelled when the
-     * composable leaves the composition, which is exactly what is happening at `ON_STOP` — the flush
-     * would be cancelled by the event that triggered it. `viewModelScope` outlives the composition.
-     *
-     * Nothing recovers a kill that fires no `ON_STOP` at all — a crash, `am force-stop`, a kernel OOM
-     * — short of a Room write per keystroke. That residual is bounded by [MAX_WAIT_MS] and is stated
-     * in the phase's amended success bar rather than papered over.
-     */
-    fun onStop() {
-        viewModelScope.launch { flush() }
-    }
-
-    /**
-     * Reconciles [buffer] with what Room says the open note holds.
-     *
-     * Three cases, and the third is the one that matters:
-     * - **A different note** (or none): load it. [lastWritten] is set *before* the buffer is written,
-     *   or `snapshotFlow` fires against a stale gate and the load writes itself straight back.
-     * - **Same note, buffer clean**: an external change — adopt it.
-     * - **Same note, buffer dirty**: ignore. The user's unsaved keystrokes win, and the intent that
-     *   caused the external change has already applied the same transform to the buffer via
-     *   [rewriteBuffer]. Adopting here would discard what they typed.
-     *
-     * **Holds [writeLock].** [loadedId], [lastWritten], [oweFullWrite] and the buffer describe one
-     * note between them, so they have to move together — a save landing mid-swap would otherwise see
-     * a mixture of the two. [onUndo] already holds the lock across its own [adopt] and acquires
-     * nothing new, so this introduces no nesting.
-     */
-    private suspend fun syncBuffer(sel: Selection) = writeLock.withLock {
-        if (sel.id == loadedId.value) {
-            if (buffer.text.toString() == lastWritten) adopt(sel.body, keepTagDebt = true)
-            return@withLock
+        val owed = session.oweFullWrite && !suppressInProgressTag
+        if (text != session.lastWritten || owed) {
+            val note = saveNote(session.noteId, text, caret, restamp = !(owed && text == session.lastWritten))
+            session.note = note
+            session.lastWritten = text
+            session.oweFullWrite = caret != null && parseTags(text, caret) != parseTags(text)
         }
-        adopt(sel.body)
-        // Last, deliberately: this is what starts the autosave loop for the new note, and it must not
-        // start until the buffer and the gate below both hold that note's text.
-        loadedId.value = sel.id
+        if (session.buffer.text.toString() == session.lastWritten && !session.oweFullWrite && failedSession.value === session) {
+            failedSession.value = null
+            retryNavigation = null
+        }
     }
 
-    /**
-     * @param keepTagDebt true only when adopting **the same note's** body. [oweFullWrite] describes a
-     *   tag still owed for the text in the buffer, and the ordinary case of adopting here is Room
-     *   echoing back the very write that took on the debt — clearing it there means the flush that
-     *   should mint the tag finds nothing owed and the tag never appears at all. A different note
-     *   retires the debt, because the text it referred to is gone.
-     *
-     * **A Phase 8a defect, found by 8c-b, fixed here.** `syncBuffer`'s "same note, buffer clean"
-     * branch reaches this with [body] equal to what [buffer] already holds — Room echoing back the
-     * write that just landed — on every successful autosave. Adopting unconditionally therefore
-     * re-clamped the caret to the end of the note after every save, not just on a real external
-     * change. The guard below is the whole fix: nothing to adopt, so nothing moves.
-     */
-    private fun adopt(body: String, keepTagDebt: Boolean = false) {
-        lastWritten = body
-        if (!keepTagDebt) oweFullWrite = false
-        if (body == buffer.text.toString()) return // nothing to adopt; do not move the caret
-        buffer.setTextAndPlaceCursorAtEnd(body)
-        // Undo must not walk backwards across a change the user did not make: the result would be
-        // text that is neither the pre- nor the post-change body.
-        buffer.undoState.clearHistory()
+    private suspend fun flush(session: EditorSession?) {
+        if (session == null || session.closed) return
+        try {
+            do { save(session, false) }
+            while (session.buffer.text.toString() != session.lastWritten || session.oweFullWrite)
+        } catch (failure: Exception) {
+            if (failure !is CancellationException) failedSession.value = session
+            throw failure
+        }
     }
 
-    /**
-     * Applies a body transform to the **live** buffer, so an external rewrite is not lost to unsaved
-     * typing — and, more importantly, so the next autosave does not write the pre-rewrite text back.
-     *
-     * Adopt-when-clean alone is not enough. It blocks the adoption but leaves the old tag sitting in
-     * a dirty buffer, and the following save then re-derives tags from it and `ensureTag` **mints the
-     * deleted row again**. The buffer is rewritten, never discarded.
-     *
-     * [lastWritten] gets the same transform, because Room's copy underwent exactly this one: a buffer
-     * that was clean before stays clean, and one that was dirty stays dirty by the user's own edits.
-     *
-     * ponytail: whole-buffer replace, so the caret is re-clamped rather than offset-mapped — it
-     * drifts by one length delta per occurrence before it (`work`->`job` is 1 char each). Exact
-     * mapping would need `TagScanner` to return edit positions, for a drift after an operation
-     * started in the sidebar rather than the editor. Revisit if 8b's toolbar needs real offset maps.
-     */
-    private fun rewriteBuffer(transform: (String) -> String) {
-        val current = buffer.text.toString()
+    suspend fun flush() = writeLock.withLock {
+        (retired.toList() + listOfNotNull(editorSession)).forEach { session ->
+            try { flush(session) } catch (failure: Exception) {
+                if (failure !is CancellationException) failedSession.value = session
+                throw failure
+            }
+        }
+    }
+
+    private suspend fun settleRetired() {
+        retired.toList().forEach { session ->
+            if (session.editors > 0) session.detached.await()
+            writeLock.withLock {
+                try { flush(session); close(session) }
+                catch (failure: Exception) {
+                    if (failure !is CancellationException) failedSession.value = session
+                    throw failure
+                }
+            }
+        }
+    }
+
+    fun onStop() {
+        viewModelScope.launch {
+            try { flush() } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* flush retains the failed session for Retry. */ }
+        }
+    }
+
+    private fun adopt(session: EditorSession, body: String, keepTagDebt: Boolean = false) {
+        session.lastWritten = body
+        if (!keepTagDebt) session.oweFullWrite = false
+        if (body == session.buffer.text.toString()) return
+        session.buffer.setTextAndPlaceCursorAtEnd(body)
+        session.buffer.undoState.clearHistory()
+    }
+
+    private fun rewriteBuffer(session: EditorSession, transform: (String) -> String) {
+        if (session.closed) return
+        val current = session.buffer.text.toString()
         val next = transform(current)
-        lastWritten = lastWritten?.let(transform)
+        session.lastWritten = transform(session.lastWritten)
         if (next == current) return
-        buffer.edit {
+        session.buffer.edit {
             val caret = selection.start
             replace(0, length, next)
             selection = TextRange(caret.coerceAtMost(length))
         }
-        buffer.undoState.clearHistory()
+        session.buffer.undoState.clearHistory()
     }
 
-    // --- intents -------------------------------------------------------------
-
-    /** Changing the filter clears the selection: the open note is usually not in the new list. */
-    fun onFilter(next: ShellFilter) {
-        handle[KEY_FILTER] = next.key
-        handle[KEY_SELECTED] = null
-    }
-
-    /** Flushes the outgoing note **before** the id moves, or its last keystrokes are lost. */
-    fun onSelectNote(id: String) {
+    private fun navigate(replay: Boolean = true, action: suspend (Long, EditorSession?) -> Unit) {
+        val revision = ++navigationRevision
+        val origin = editorSession
+        retryNavigation = null
         viewModelScope.launch {
-            flush()
-            handle[KEY_SELECTED] = id
+            try {
+                settleRetired()
+                flush()
+                if (revision != navigationRevision || origin !== editorSession) return@launch
+                action(revision, origin)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (revision == navigationRevision) {
+                    if (failedSession.value != null && replay) retryNavigation = { navigate(action = action) }
+                    if (failedSession.value == null) operationFailure.value = OperationFailure.Open
+                }
+            }
         }
     }
 
-    /**
-     * Follows a tapped `[[WikiLink]]` — Phase 9d.
-     *
-     * **[flush] first, and it is not optional.** The tap navigates away from a buffer that may hold
-     * up to `MAX_WAIT_MS` of unwritten keystrokes, and it also hands `OpenWikiLink` the body it will
-     * re-save. Without the flush the source's last words are lost *and* its links are re-derived from
-     * a stale body. This is the same ordering [onSelectNote] uses, for the first of those reasons;
-     * 9d adds the second.
-     *
-     * The buffer is read **after** the flush, so `sourceBody` is exactly what Room now holds and the
-     * relinking save writes the same text back.
-     */
-    fun onOpenWikiLink(title: String) {
-        viewModelScope.launch {
-            flush()
-            handle[KEY_SELECTED] = openWikiLink(title, loadedId.value, buffer.text.toString())
+    private suspend fun select(note: Note?, revision: Long, origin: EditorSession?, nextFilter: ShellFilter? = null) {
+        writeLock.withLock {
+            if (revision != navigationRevision || origin !== editorSession) return@withLock
+            try { flush(origin) } catch (failure: Exception) {
+                if (failure !is CancellationException) failedSession.value = origin
+                throw failure
+            }
+            val current = note?.let { observeNote(it.id).first() }
+            if (revision != navigationRevision) return@withLock
+            check(note == null || current != null) { "The selected note is no longer available" }
+            nextFilter?.let { handle[KEY_FILTER] = it.key; onSearchChanged("") }
+            publish(current)
         }
     }
 
-    fun onClearSelection() {
+    fun onFilter(next: ShellFilter) = navigate { revision, origin -> select(null, revision, origin, next) }
+    fun onSelectNote(id: String) = navigate { revision, origin ->
+        val note = observeNote(id).first() ?: return@navigate
+        select(note, revision, origin)
+    }
+    fun onClearSelection() = navigate { revision, origin -> select(null, revision, origin) }
+    fun onRetryNavigation() {
+        val retry = retryNavigation
+        if (retry != null) retry() else navigate { _, _ -> }
+    }
+
+    fun onNewNote() {
+        if (creating.value) return
+        creating.value = true
+        val revision = ++navigationRevision
+        val origin = editorSession
+        retryNavigation = null
+        operationFailure.value = null
         viewModelScope.launch {
-            flush()
-            handle[KEY_SELECTED] = null
+            try {
+                settleRetired()
+                flush()
+                if (revision != navigationRevision) return@launch
+                val created = pendingCreatedId?.let { id ->
+                    observeNote(id).first()?.takeUnless { it.isTrashed } ?: run {
+                        pendingCreatedId = null
+                        error("The created note is no longer available")
+                    }
+                } ?: saveNote(null, "").also { pendingCreatedId = it.id }
+                select(created, revision, origin, ShellFilter.All)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (revision == navigationRevision) {
+                    operationFailure.value = OperationFailure.Create
+                    val id = pendingCreatedId
+                    if (id != null && failedSession.value != null) retryNavigation = {
+                        navigate { nextRevision, nextOrigin ->
+                            val created = observeNote(id).first()?.takeUnless { it.isTrashed }
+                            if (created == null) {
+                                if (pendingCreatedId == id) pendingCreatedId = null
+                                error("The created note is no longer available")
+                            }
+                            select(created, nextRevision, nextOrigin, ShellFilter.All)
+                        }
+                    }
+                }
+            }
+            finally { creating.value = false }
         }
     }
 
-    /**
-     * Opens or closes the backlinks panel.
-     *
-     * Not cleared when the selection changes: the panel is a *mode* the user chose, and slamming it
-     * shut every time they followed a backlink — which selects a note — would fight the one gesture
-     * it exists to support. The query follows the new note, so the panel simply repopulates.
-     */
-    fun onToggleInfo() {
-        handle[KEY_INFO_OPEN] = !(handle.get<Boolean>(KEY_INFO_OPEN) ?: false)
+    fun onOpenWikiLink(title: String) = onOpenWikiLink(editorSession, title)
+    fun onOpenWikiLink(origin: EditorSession?, title: String) {
+        if (origin == null || origin !== editorSession || !origin.canEdit) return
+        operationFailure.value = null
+        navigate(replay = false) { revision, _ ->
+            val target = openWikiLink(title)
+            val note = observeNote(target).first() ?: return@navigate
+            select(note, revision, origin)
+        }
     }
 
+    fun onSearchChanged(query: String) = scheduleSearch(query)
+    fun onRetrySearch() = scheduleSearch(search.value.query)
+    private fun scheduleSearch(query: String) {
+        val revision = ++searchRevision
+        searchJob?.cancel()
+        search.value = SearchState(query, if (query.isBlank()) SearchPhase.Idle else SearchPhase.Pending)
+        if (query.isBlank()) return
+        searchJob = viewModelScope.launch {
+            delay(200)
+            try {
+                val matches = searchNotes(SearchQuery(query))
+                if (revision == searchRevision) search.value = SearchState(query, SearchPhase.Results, matches)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (revision == searchRevision) search.value = SearchState(query, SearchPhase.Failed)
+            }
+        }
+    }
+    fun onDismissOperationFailure() { operationFailure.value = null }
+
+    fun onArchiveNote(origin: EditorSession? = editorSession) = changeStatus(origin) { archiveNote(it.noteId, !it.note.isArchived) }
+    fun onTrashNote(origin: EditorSession? = editorSession) = changeStatus(origin, readOnly = true) { deleteNote(it.noteId) }
+    fun onRestoreNote(origin: EditorSession? = editorSession) = changeStatus(origin) { restoreNote(it.noteId) }
+    private fun changeStatus(origin: EditorSession?, readOnly: Boolean = false, action: suspend (EditorSession) -> Unit) {
+        val session = origin ?: return
+        if (session.closed || session !== editorSession) return
+        ++navigationRevision
+        retryNavigation = null
+        if (readOnly) session.readOnly = true
+        viewModelScope.launch {
+            writeLock.withLock {
+                if (readOnly) session.readOnly = true
+                try {
+                    flush(session)
+                    action(session)
+                    val note = observeNote(session.noteId).first() ?: return@withLock
+                    session.note = note
+                    session.readOnly = note.isTrashed
+                    flush(session)
+                    if (session === editorSession) selection.value = Selection(session, session.note)
+                } catch (cancelled: CancellationException) { session.readOnly = session.note.isTrashed; throw cancelled }
+                catch (_: Exception) {
+                    session.readOnly = session.note.isTrashed
+                    operationFailure.value = OperationFailure.Change
+                }
+            }
+        }
+    }
+
+    fun onToggleInfo() { handle[KEY_INFO_OPEN] = !(handle.get<Boolean>(KEY_INFO_OPEN) ?: false) }
     fun onToggleTag(path: String) {
         val current = handle.get<ArrayList<String>>(KEY_EXPANDED).orEmpty()
         handle[KEY_EXPANDED] = ArrayList(if (path in current) current - path else current + path)
     }
-
-    /**
-     * Persists a heading fold for the currently selected note in the same saved-state channel as
-     * shell UI, **and keeps only the open note's folds**.
-     *
-     * The sweep is not tidiness. Without it one `shell.foldedSections.<id>` key accumulates per note
-     * folded, for the life of the process, and [handle] is written into the saved-instance `Bundle`
-     * — the 1MB per-process Binder buffer that Phase 8a's saver drop exists to protect. Unbounded
-     * growth there regresses 8a's own invariant, that the `Bundle` carries the filter, the note id
-     * and the expanded tag paths and nothing that scales with content.
-     *
-     * **Evicting rather than consolidating into one map-valued key** is deliberate: a map still
-     * gains an entry per note and puts the same bytes through the same transaction, so it relocates
-     * the growth instead of bounding it. This bounds it structurally at one key, which is a property
-     * a test can state exactly rather than a threshold someone has to defend.
-     *
-     * **Swept on write, not on selection change.** [onFilter] clears the selection without flushing
-     * — the leak path 8a-fix documents — so anything hung off the transition inherits that hole.
-     * Keying off the write cannot miss.
-     *
-     * Cost, stated rather than hidden: folding a section in note A, moving to B and coming back
-     * finds A expanded. Fold state is cosmetic and it never survived a cold launch either way.
-     */
-    fun onToggleSection(key: String) {
-        val id = selectedId.value ?: return
-        val stateKey = foldedKey(id)
-        // toList() first: handle.keys() is a live view, and removing through it would throw.
-        handle.keys().toList()
-            .filter { it.startsWith(FOLD_PREFIX) && it != stateKey }
-            .forEach { handle.remove<Any>(it) }
+    fun onToggleSection(key: String) = onToggleSection(editorSession, key)
+    fun onToggleSection(session: EditorSession?, key: String) {
+        if (session == null || session.closed) return
+        val stateKey = foldedKey(session.noteId)
+        handle.keys().toList().filter { it.startsWith(FOLD_PREFIX) && it != stateKey }.forEach { handle.remove<Any>(it) }
         val current = handle.get<ArrayList<String>>(stateKey).orEmpty().toSet()
         handle[stateKey] = ArrayList(if (key in current) current - key else current + key)
     }
-
-    // --- tag actions ---------------------------------------------------------
-
-    fun onPinTag(tagId: String, pinned: Boolean) {
-        viewModelScope.launch { pinTag(tagId, pinned) }
-    }
-
-    fun onSetTagIcon(tagId: String, iconKey: String?) {
-        viewModelScope.launch { setTagIcon(tagId, iconKey) }
-    }
-
-    /**
-     * Renames, then offers undo.
-     *
-     * If the filter was sitting on the tag being renamed it is **moved to the new path**, not reset
-     * to All: the user is still looking at the same set of notes, and dropping them back to
-     * everything would be the shell losing their place as a side effect of a rename. A renamed
-     * descendant follows the same splice the bodies did.
-     */
-    fun onRenameTag(from: String, to: String) {
+    fun onPinTag(tagId: String, pinned: Boolean) = tagMetadata { pinTag(tagId, pinned) }
+    fun onSetTagIcon(tagId: String, iconKey: String?) = tagMetadata { setTagIcon(tagId, iconKey) }
+    private fun tagMetadata(action: suspend () -> Unit) {
         viewModelScope.launch {
-            // Flush first, so the transaction reads the text the user can see rather than whatever
-            // the last debounce happened to leave in Room.
-            flush()
-            val snapshot = renameTag(from, to) ?: return@launch
-            // Then the same rewrite on the live buffer. No membership check is needed: TagScanner
-            // returns the body unchanged when it does not carry the tag.
-            rewriteBuffer { TagScanner.rename(it, from, to) }
-            followFilter(from) { path -> to + path.removePrefix(from) }
-            offerUndo(snapshot, TagPrompt.Kind.Renamed, to)
+            try { action() } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { operationFailure.value = OperationFailure.Change }
         }
     }
-
-    /** Deleting the tag the list is filtered by leaves nothing to show, so the filter goes home. */
-    fun onDeleteTag(path: String) {
+    private fun mutate(session: EditorSession? = editorSession, action: suspend () -> Unit) {
+        val revision = navigationRevision
+        if (session != null && session === editorSession) retryNavigation = null
         viewModelScope.launch {
-            flush()
-            val snapshot = deleteTag(path)
-            rewriteBuffer { TagScanner.remove(it, path) }
-            followFilter(path) { null }
-            offerUndo(snapshot, TagPrompt.Kind.Deleted, path)
+            try {
+                writeLock.withLock {
+                    try { flush(session) } catch (failure: Exception) {
+                        if (failure !is CancellationException) {
+                            failedSession.value = session
+                            if (session != null && session === editorSession && revision == navigationRevision) {
+                                ++navigationRevision
+                                retryNavigation = null
+                            }
+                        }
+                        throw failure
+                    }
+                    if (session?.closed == true) return@withLock
+                    action()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (failedSession.value == null) operationFailure.value = OperationFailure.Change }
         }
     }
-
-    /**
-     * The one outcome that has to be said out loud is [AddTagResult.NotWritable].
-     *
-     * `AddTagToNote` exists because a body ending in an unclosed fence swallows the appended tag and
-     * the menu item appears to do nothing. Detecting that and then discarding the result would
-     * reproduce the same silence one layer up. `AlreadyPresent` stays quiet on purpose — the note
-     * already carries the tag, which is what the user asked for.
-     */
+    fun onRenameTag(from: String, to: String) = mutate {
+        val snapshot = renameTag(from, to) ?: return@mutate
+        (retired.toList() + listOfNotNull(editorSession)).forEach { rewriteBuffer(it) { text -> TagScanner.rename(text, from, to) } }
+        followFilter(from) { path -> to + path.removePrefix(from) }
+        offerUndo(snapshot, TagPrompt.Kind.Renamed, to)
+    }
+    fun onDeleteTag(path: String) = mutate {
+        val snapshot = deleteTag(path)
+        (retired.toList() + listOfNotNull(editorSession)).forEach { rewriteBuffer(it) { text -> TagScanner.remove(text, path) } }
+        followFilter(path) { null }
+        offerUndo(snapshot, TagPrompt.Kind.Deleted, path)
+    }
     fun onAddTagToNote(noteId: String, name: String) {
-        viewModelScope.launch {
-            // Flush first, so the append lands on the text the user can see. Unlike rename and
-            // delete there is no matching [rewriteBuffer] call, and that asymmetry is deliberate:
-            // the append rule (trimEnd, own line, TagScanner.token) lives inside AddTagToNote, and
-            // re-applying it here would be a second implementation of tag syntax — the one thing
-            // this codebase does not allow.
-            //
-            // ponytail: the append therefore survives only because flush() leaves the buffer clean
-            // and the sync collector then adopts the appended body — NOT because anything reconciles
-            // the two. `anAppendedTagSurvivesAnUnsavedBufferViaFlushAndAdoption` pins that chain, and
-            // it is a chain rather than a mechanism: if a future change makes adoption conditional,
-            // or moves the flush, the tag is silently lost. Ceiling: keystrokes landing *between* the
-            // flush and the adoption still shadow it. Upgrade path is `TagScanner.append`, which
-            // makes the append a transform so `rewriteBuffer` handles it like the other two — worth
-            // doing the moment a second caller wants it, not before.
-            flush()
+        val origin = editorSession?.takeIf { it.noteId == noteId }
+        if (origin != null && !origin.canEdit) return
+        mutate(origin) {
             if (addTagToNote(noteId, name) == AddTagResult.NotWritable) {
                 pendingUndo = null
                 undo.value = TagPrompt(TagPrompt.Kind.AddFailed, name)
+            } else if (origin != null) rewriteBuffer(origin) { AddTagToNote.append(it, name) }
+        }
+    }
+    fun onImagePickerOpened(origin: EditorSession?): Boolean {
+        if (pickerSession != null || origin == null || origin !== editorSession || !origin.canEdit) return false
+        pickerSession = origin
+        return true
+    }
+    fun onImagePickerResult(sourceUri: String?, mime: String) {
+        val origin = pickerSession
+        pickerSession = null
+        if (sourceUri != null) onAttachImages(origin, listOf(sourceUri to mime))
+    }
+    fun onAttachImage(sourceUri: String, mime: String) = onAttachImages(listOf(sourceUri to mime))
+    fun onAttachImages(images: List<Pair<String, String>>) = onAttachImages(editorSession, images)
+    fun onAttachImages(origin: EditorSession?, images: List<Pair<String, String>>) {
+        if (origin == null || !origin.canEdit || images.isEmpty()) return
+        mutate(origin) {
+            images.forEach { (uri, mime) ->
+                var written = ""
+                val attachment = attachImage(origin.noteId, uri, mime, body = {
+                    origin.buffer.text.toString().also { written = it }
+                }) ?: throw IllegalStateException("Image import failed")
+                val current = origin.buffer.text.toString()
+                origin.lastWritten = MarkdownFormat.appendImage(written, attachment.id)
+                val next = MarkdownFormat.appendImage(current, attachment.id)
+                origin.buffer.setTextAndPlaceCursorAtEnd(next)
+                origin.buffer.undoState.clearHistory()
             }
         }
     }
-
-    // --- attachments ---------------------------------------------------------
-
-    /**
-     * Copies a picked image into the note and appends its `![](attachment:id)` reference.
-     *
-     * The exact shape of [onAddTagToNote], for the exact reason: `AttachImage` appends through
-     * `SaveNote`, so the reference reaches the buffer only because [flush] leaves it clean and the
-     * sync collector then **adopts** the appended body. There is no matching [rewriteBuffer] because
-     * `MarkdownFormat.appendImage` — the one home for the `![` literal — lives inside the use case,
-     * and re-applying it here would be a second implementation of image syntax. Same ceiling as the
-     * tag append: a keystroke landing between the flush and the adoption shadows it.
-     *
-     * Best-effort, not atomic: the file is copied, then the row inserted, then the body rewritten, and
-     * a crash between leaves a benign partial state (a stored file with no reference, GC'd next scan).
-     * `AttachImage` returns null if the note is gone or the copy fails; nothing here needs the result.
-     */
-    fun onAttachImage(sourceUri: String, mime: String) = onAttachImages(listOf(sourceUri to mime))
-
-    /**
-     * Attaches several images in **one** coroutine, in order. Paste can deliver more than one at once,
-     * and that is exactly where the single-image path would race: each `AttachImage` reads the note
-     * body, appends its reference and saves, so two concurrent attaches both read the pre-append body
-     * and the second clobbers the first's reference. Flushing once and looping sequentially makes each
-     * append see the previous one's save — the fix 8d-c's plan calls out. The picker's [onAttachImage]
-     * is the singleton case of this, so there is one attach path, not two.
-     */
-    fun onAttachImages(images: List<Pair<String, String>>) {
-        if (images.isEmpty()) return
-        val noteId = selectedId.value ?: return
-        viewModelScope.launch {
-            flush()
-            images.forEach { (sourceUri, mime) -> attachImage(noteId, sourceUri, mime) }
+    fun onDeleteAttachment(id: String) = onDeleteAttachment(editorSession, id)
+    fun onDeleteAttachment(origin: EditorSession?, id: String) {
+        if (origin == null || !origin.canEdit) return
+        mutate(origin) {
+            deleteAttachment(id, origin.noteId)
+            rewriteBuffer(origin) { MarkdownScanner.removeImageRef(it, id) }
         }
     }
-
-    /**
-     * Removes an attachment: file, row, and body reference. The shape of [onDeleteTag].
-     *
-     * `DeleteAttachment` deletes the file and row and rewrites Room via `SaveNote`; the matching
-     * [rewriteBuffer] applies the same `removeImageRef` to the live buffer so unsaved typing keeps the
-     * reference from being resurrected by the next autosave. No undo snapshot — deletion is
-     * best-effort, decided for the phase.
-     */
-    fun onDeleteAttachment(id: String) {
-        viewModelScope.launch {
-            flush()
-            deleteAttachment(id)
-            rewriteBuffer { MarkdownScanner.removeImageRef(it, id) }
-        }
-    }
-
-    /** The tags on a note, scanned on demand from the body already in [state]. */
-    fun tagsOfNote(noteId: String): List<String> =
-        state.value.notes.find { it.id == noteId }?.let { parseTags(it.body) }.orEmpty()
-
-    /**
-     * Restores the snapshot, then **adopts the restored body unconditionally** — the one place that
-     * overrides adopt-when-clean, deliberately.
-     *
-     * A restore is not expressible as a [TagScanner] transform: it writes N exact previous bodies
-     * back. There is nothing to apply to a dirty buffer. And "put it back" is an explicit command
-     * the user just pressed, which is a different thing from a rename happening beside them — so the
-     * restored text wins, and typing done between the Snackbar appearing and Undo being pressed is
-     * discarded.
-     */
+    fun tagsOfNote(noteId: String): List<String> = state.value.notes.find { it.id == noteId }?.let { parseTags(it.body) }.orEmpty()
     fun onUndo() {
         viewModelScope.launch {
-            // NO flush, and this is the one intent that must not have one. The other three flush so
-            // the transaction reads current text; undo's contract is the opposite — *discard what
-            // happened since the snapshot*. Flushing first writes the user's typing to Room and then
-            // restores the snapshot straight over it, so the typing is destroyed **on disk**, not
-            // merely in the buffer, and `SaveNote` restamps `modifiedAt` on the way past for a write
-            // whose entire lifetime is two statements.
-            //
-            // The typing is still lost from the buffer, because `adopt` below is unconditional. That
-            // is undo doing its job. What changes is that Room is never polluted with a body the user
-            // asked to revert, and the note returns to exactly its pre-operation state.
-            val snapshot = pendingUndo
+            val pending = pendingUndo ?: return@launch
             pendingUndo = null
             undo.value = null
-            if (snapshot == null) return@launch
-
-            // The restore and the adopt are ONE critical section, and removing the flush is exactly
-            // why. The flush used to drain the pending debounced save as a side effect; without it,
-            // that save can fire in the gap between the restore transaction and the adopt — reading a
-            // buffer that still holds the user's typing, against a [lastWritten] that is still the
-            // pre-restore value, so the gate waves it through and it overwrites the restored body.
-            // The adopt that follows would then read Room and faithfully adopt the clobbered text.
-            //
-            // Holding the lock across both makes the blocked save harmless rather than merely
-            // unlikely: it resumes after [adopt] has set [lastWritten] to the restored body, sees
-            // buffer == lastWritten, and writes nothing. Cancelling the pending emission instead
-            // would need new machinery to reach inside `cappedDebounce`; this reuses the lock that
-            // already serialises flush against the debounce, and is correct by construction rather
-            // than by timing.
-            writeLock.withLock {
-                undoTagChange(snapshot)
-                loadedId.value?.let { id -> observeNote(id).first()?.let { adopt(it.body) } }
-            }
+            try {
+                writeLock.withLock {
+                    val affected = (retired.toList() + listOfNotNull(editorSession))
+                        .filter { it.noteId in pending.snapshot.bodies }
+                    check(affected.all { it.buffer.text.toString() == pending.expectedBodies[it.noteId] }) {
+                        "Note changed after the tag operation"
+                    }
+                    // Freeze affected inputs across the suspended transaction and adoption, not
+                    // just during the preflight. Later keystrokes must not be overwritten either.
+                    val readOnly = affected.associateWith { it.readOnly }
+                    try {
+                        affected.forEach { it.readOnly = true }
+                        undoTagChange(pending.snapshot, pending.expectedBodies)
+                        affected.forEach { session ->
+                            observeNote(session.noteId).first()?.let { adopt(session, it.body) }
+                        }
+                    } finally {
+                        readOnly.forEach { (session, previous) -> session.readOnly = previous }
+                    }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { operationFailure.value = OperationFailure.Change }
         }
     }
-
-    /** The Snackbar has been shown and dismissed; drop the bodies it was holding. */
-    fun onUndoShown() {
-        pendingUndo = null
-        undo.value = null
-    }
-
-    private fun offerUndo(snapshot: BodySnapshot, kind: TagPrompt.Kind, name: String) {
-        pendingUndo = snapshot
+    fun onUndoShown() { pendingUndo = null; undo.value = null }
+    /** Called under writeLock immediately after the tag operation's committed body rewrite. */
+    private suspend fun offerUndo(snapshot: BodySnapshot, kind: TagPrompt.Kind, name: String) {
+        val expected = snapshot.bodies.keys.associateWith { id ->
+            checkNotNull(observeNote(id).first()).body
+        }
+        pendingUndo = PendingUndo(snapshot, expected)
         undo.value = TagPrompt(kind, name, snapshot.noteCount)
     }
-
-    /**
-     * Moves the active filter when the tag it names is renamed or deleted.
-     *
-     * Applies to descendants too — filtering `projects/duck/ui` while `projects` is renamed has to
-     * follow, or the sidebar keeps naming a path that no longer exists and the list silently empties.
-     */
     private inline fun followFilter(path: String, next: (String) -> String?) {
-        val current = filterKeyPath() ?: return
-        if (current != path && !current.startsWith("$path/")) return
-        handle[KEY_FILTER] = next(current)?.let { ShellFilter.Tag(it).key } ?: ShellFilter.All.key
+        val current = (ShellFilter.fromKey(handle[KEY_FILTER]) as? ShellFilter.Tag)?.path ?: return
+        if (current == path || current.startsWith("$path/")) handle[KEY_FILTER] = next(current)?.let { ShellFilter.Tag(it).key } ?: ShellFilter.All.key
     }
-
-    private fun filterKeyPath(): String? =
-        (ShellFilter.fromKey(handle[KEY_FILTER]) as? ShellFilter.Tag)?.path
-
-    // --- filter → flow -------------------------------------------------------
-
-    /**
-     * Five of the seven rows are a predicate over the active list, so they cost no query. [Untagged]
-     * and [Trash] each needed one, because `observeNotes` hides trashed rows by contract and knows
-     * nothing about tag membership.
-     *
-     * A tag filter resolves its path through [tree] rather than storing a tag id: the id is a UUID
-     * minted on first use, the path is what the user typed, and the path is what the sidebar row is
-     * keyed by. An unresolvable path — the tag lost its last note while selected — yields an empty
-     * list rather than falling back to All, so the sidebar keeps saying what is being filtered.
-     */
     private fun notesFor(filter: ShellFilter): Flow<List<Note>> = when (filter) {
-        ShellFilter.All -> observeNotes().map { list -> list.filterNot(Note::isArchived) }
+        ShellFilter.All -> observeNotes().map { it.filterNot(Note::isArchived) }
         ShellFilter.Untagged -> observeNotes.untagged()
-        ShellFilter.Todo -> observeNotes().map { list ->
-            list.filter { MarkdownScanner.hasOpenTask(it.body) }
-        }
-        ShellFilter.Today -> startOfToday().let { midnight ->
-            observeNotes().map { list -> list.filter { it.modifiedAt >= midnight } }
-        }
-        ShellFilter.Locked -> observeNotes().map { list -> list.filter(Note::isLocked) }
-        ShellFilter.Archive -> observeNotes().map { list -> list.filter(Note::isArchived) }
+        ShellFilter.Todo -> observeNotes().map { it.filter { note -> MarkdownScanner.hasOpenTask(note.body) } }
+        ShellFilter.Today -> startOfToday().let { midnight -> observeNotes().map { it.filter { note -> note.modifiedAt >= midnight } } }
+        ShellFilter.Locked -> observeNotes().map { it.filter(Note::isLocked) }
+        ShellFilter.Archive -> observeNotes().map { it.filter(Note::isArchived) }
         ShellFilter.Trash -> observeNotes.trashed()
         is ShellFilter.Tag -> observeNotes.byTagPath(filter.path)
     }
-
-    /** Local midnight, from the injected [Clock] so the Today row is deterministic under test. */
-    private fun startOfToday(): Long = ZoneId.systemDefault().let { zone ->
-        Instant.ofEpochMilli(clock.nowMillis()).atZone(zone).toLocalDate().atStartOfDay(zone)
-            .toInstant().toEpochMilli()
-    }
-
-    /**
-     * The open note, flattened to the four fields the panes read.
-     *
-     * The timestamps ride here rather than being looked up in [notes] because the editor can be open
-     * on a note the active filter excludes — see [ShellUiState.selectedNoteCreatedAt].
-     */
-    private data class Selection(
-        val id: String? = null,
-        val body: String = "",
-        val createdAt: Long? = null,
-        val modifiedAt: Long? = null,
-    )
-
-    private data class EditorState(
-        val filter: ShellFilter,
-        val notes: List<Note>,
-        val selection: Selection,
-        val expanded: Set<String>,
-        val collapsedSections: Set<String>,
-    )
-
-    private data class TagState(
-        val tree: List<TagNode>,
-        val counts: Map<String, TagCount>,
-        val undo: TagPrompt?,
-    )
-
-    /** Phase 9's state: what links in, whether the panel shows it, and what the picker can complete to. */
-    private data class LinkState(
-        val backlinks: List<NoteLink>,
-        val infoOpen: Boolean,
-        val noteTitles: List<String>,
-    )
-
-    // Not private since 8a: `AutosaveDurabilityTest` waits out [MAX_WAIT_MS] on a real clock, and a
-    // test that hardcoded 2000 would keep passing after the constant moved.
+    private fun startOfToday(): Long = ZoneId.systemDefault().let { zone -> Instant.ofEpochMilli(clock.nowMillis()).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli() }
+    private data class PendingUndo(val snapshot: BodySnapshot, val expectedBodies: Map<String, String>)
+    private data class Selection(val session: EditorSession? = null, val note: Note? = null)
+    private data class Owned<T>(val id: String?, val value: T)
+    private data class EditorState(val filter: ShellFilter, val notes: List<Note>, val selection: Selection, val expanded: Set<String>, val collapsedSections: Set<String>)
+    private data class TagState(val tree: List<TagNode>, val counts: Map<String, TagCount>, val undo: TagPrompt?)
+    private data class LinkState(val backlinks: Owned<List<NoteLink>>, val infoOpen: Boolean, val titles: Owned<List<String>>)
+    private data class OperationState(val failed: EditorSession?, val failure: OperationFailure?, val creating: Boolean, val search: SearchState)
     companion object {
         private const val KEY_FILTER = "shell.filter"
         private const val KEY_SELECTED = "shell.selectedNoteId"
         private const val KEY_EXPANDED = "shell.expandedTagPaths"
         private const val KEY_INFO_OPEN = "shell.infoOpen"
-
-        /**
-         * One prefix, two consumers — [foldedKey] mints them and [onToggleSection]'s sweep reaps
-         * them. Separate literals would drift, and the failure mode of a drifted sweep is silence.
-         */
         private const val FOLD_PREFIX = "shell.foldedSections."
-
         private fun foldedKey(noteId: String) = "$FOLD_PREFIX$noteId"
-
-        /** Outlives a rotation, so Room's flows are not torn down and rebuilt for one. */
         private const val STOP_TIMEOUT_MS = 5_000L
-
-        /** Save this long after the last keystroke. The spec's number. */
         const val IDLE_MS = 400L
-
-        /**
-         * And save at least this often *while* typing continues.
-         *
-         * A debounce fires when typing **stops**, so a continuous typist never triggers one and the
-         * unsaved window is unbounded, not 400ms — 60 seconds of steady typing is 60 seconds at
-         * risk. This is the ceiling that makes the number finite, and it is what the phase's amended
-         * success bar quotes.
-         */
         const val MAX_WAIT_MS = 2_000L
     }
 }
@@ -913,6 +712,7 @@ class DuckShellViewModel @Inject constructor(
  * the two companion constants — so it was already a top-level function wearing a costume. Same
  * argument that made `applyFormat` `internal` for `DuckShellAutosaveTest`.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 internal fun Flow<CharSequence>.cappedDebounce(): Flow<String> = flow {
     coroutineScope {
         val changes = produce(capacity = Channel.CONFLATED) {

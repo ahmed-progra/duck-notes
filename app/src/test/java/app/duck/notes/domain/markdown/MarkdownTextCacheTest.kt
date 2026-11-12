@@ -12,6 +12,67 @@ import org.junit.Test
  */
 class MarkdownTextCacheTest {
 
+    /** CACHE_SINGLE_LINE_SUFFIX restores the old one-line suffix shortcut. */
+    @Test
+    fun separatedEditsRescanTheChangedSuffix() {
+        val cache = MarkdownTextCache()
+        cache.scan("a\nsame\n# old")
+        assertEquals(
+            listOf(Token(TokenKind.BOLD, 7, 14, markers = listOf(7..8, 12..13))),
+            cache.scan("b\nsame\n**new**").tokens,
+        )
+    }
+
+    /** The same separated edit may grow past the old cache's last line. */
+    @Test
+    fun growingAfterAnUnchangedMiddleLineDoesNotReadPastTheOldCache() {
+        val cache = MarkdownTextCache()
+        cache.scan("a\nsame\n# old")
+        assertEquals(
+            listOf(
+                Token(TokenKind.BOLD, 7, 14, markers = listOf(7..8, 12..13)),
+                Token(TokenKind.HEADING, 15, 21, markers = listOf(15..16), level = 1),
+            ),
+            cache.scan("b\nsame\n**new**\n# tail").tokens,
+        )
+    }
+
+    /** CACHE_SUFFIX_REUSE_DISABLED turns off the verified suffix fast path. */
+    @Test
+    fun aVerifiedUnchangedSuffixStillReusesItsTokens() {
+        val cache = MarkdownTextCache()
+        val before = cache.scan("a\nsame\n# old")
+        val after = cache.scan("b\nsame\n# old")
+        assertEquals(listOf(Token(TokenKind.HEADING, 7, 12, markers = listOf(7..8), level = 1)), after.tokens)
+        assertSame(before.lineTokens[2], after.lineTokens[2])
+    }
+
+    /** CACHE_CARRY_IGNORED reuses unchanged text under the wrong fence state. */
+    @Test
+    fun anUnchangedSuffixMustStillMatchItsEnteringFenceState() {
+        val cache = MarkdownTextCache()
+        cache.scan("aaa\nsame\n**new**")
+        assertEquals(
+            listOf(
+                Token(TokenKind.FENCE_MARKER, 0, 3),
+                Token(TokenKind.FENCE_BODY, 4, 8),
+                Token(TokenKind.FENCE_BODY, 9, 16),
+            ),
+            cache.scan("```\nsame\n**new**").tokens,
+        )
+    }
+
+    /** CACHE_SUFFIX_OFFSETS_IGNORED reuses tokens whose absolute positions moved. */
+    @Test
+    fun unchangedTextAtShiftedOffsetsGetsCurrentTokenPositions() {
+        val cache = MarkdownTextCache()
+        cache.scan("a\nsame\n# old")
+        assertEquals(
+            listOf(Token(TokenKind.HEADING, 10, 15, markers = listOf(10..11), level = 1)),
+            cache.scan("long\nsame\n# old").tokens,
+        )
+    }
+
     private fun fullScan(text: String) = MarkdownTextCache.rescan(ScanResult.Empty, text)
 
     private fun assertMatchesFullScan(cache: MarkdownTextCache, text: String) {

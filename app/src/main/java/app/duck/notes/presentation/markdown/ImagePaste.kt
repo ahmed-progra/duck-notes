@@ -28,6 +28,15 @@ import androidx.compose.foundation.content.hasMediaType
 /** An attachable image is any `image/` MIME (`image/png`, `image/jpeg`, …). Pure, so a test can pin it. */
 internal fun isAttachableImage(mimeType: String?): Boolean = mimeType?.startsWith("image/") == true
 
+/** Grants can disappear between receiving a URI and asking its provider for a type. */
+internal fun resolveImageMime(uri: Uri, mimeOf: (Uri) -> String?): String? = try {
+    mimeOf(uri)
+} catch (_: SecurityException) {
+    null
+} catch (_: IllegalArgumentException) {
+    null
+}
+
 /**
  * The per-item paste decision: the item's `(uri, mime)` if it resolves to an attachable image — else
  * null. Returns the resolved mime alongside the uri so the caller neither re-resolves nor guesses.
@@ -37,7 +46,7 @@ internal fun isAttachableImage(mimeType: String?): Boolean = mimeType?.startsWit
  */
 internal fun shouldAttach(item: ClipData.Item, mimeOf: (Uri) -> String?): Pair<Uri, String>? {
     val uri = item.uri ?: return null
-    val mime = mimeOf(uri) ?: return null
+    val mime = resolveImageMime(uri, mimeOf) ?: return null
     return if (isAttachableImage(mime)) uri to mime else null
 }
 

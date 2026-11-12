@@ -268,6 +268,13 @@ data class ShellUiState(
     val notes: List<Note> = emptyList(),
     val selectedNoteId: String? = null,
     val selectedNoteBody: String = "",
+    val editorSession: EditorSession? = null,
+    val selectedNoteArchived: Boolean = false,
+    val selectedNoteTrashed: Boolean = false,
+    val failedNoteTitle: String? = null,
+    val operationFailure: OperationFailure? = null,
+    val creatingNote: Boolean = false,
+    val search: SearchState = SearchState(),
     val pinnedTags: List<TagRow> = emptyList(),
     val tagRows: List<TagRow> = emptyList(),
     /** Every tag on the open note, for the chip row above the editor. Derived, never queried. */
@@ -308,22 +315,33 @@ data class ShellUiState(
      */
     val allNoteTitles: List<String> = emptyList(),
     val undo: TagPrompt? = null,
+    val saveFailed: Boolean = false,
 )
 
 /** Everything a tap in the shell can do. Hoisted so the gallery can drive it from a fixture. */
 @Immutable
 data class ShellActions(
+    val onNewNote: (() -> Unit)? = null,
+    val onSearchChanged: ((String) -> Unit)? = null,
+    val onRetrySearch: () -> Unit = {},
+    val onArchiveNote: (() -> Unit)? = null,
+    val onTrashNote: (() -> Unit)? = null,
+    val onRestoreNote: (() -> Unit)? = null,
+    val onDismissOperationFailure: () -> Unit = {},
+    val onImagePickerOpened: () -> Boolean = { false },
+    val onImagePickerResult: (sourceUri: String?, mime: String) -> Unit = { _, _ -> },
+    val onEditorAttached: (EditorSession) -> Unit = {},
+    val onEditorDetached: (EditorSession) -> Unit = {},
     val onFilter: (ShellFilter) -> Unit = {},
     val onSelectNote: (String) -> Unit = {},
     val onClearSelection: () -> Unit = {},
+    val onRetryNavigation: () -> Unit = {},
     val onToggleTag: (String) -> Unit = {},
     val onPinTag: (tagId: String, pinned: Boolean) -> Unit = { _, _ -> },
     val onRenameTag: (from: String, to: String) -> Unit = { _, _ -> },
     val onDeleteTag: (path: String) -> Unit = {},
     val onSetTagIcon: (tagId: String, iconKey: String?) -> Unit = { _, _ -> },
     val onAddTagToNote: (noteId: String, name: String) -> Unit = { _, _ -> },
-    /** A picked image's durable-copy source and its mime, to attach to the open note. */
-    val onAttachImage: (sourceUri: String, mime: String) -> Unit = { _, _ -> },
     /** Pasted images as `sourceUri to mime` pairs, attached in order — see `onAttachImages`. */
     val onAttachImages: (images: List<Pair<String, String>>) -> Unit = {},
     /** Remove an attachment: its file, its row, and its `![](attachment:id)` reference. */
@@ -349,3 +367,7 @@ data class ShellActions(
      */
     val tagsOfNote: (noteId: String) -> List<String> = { emptyList() },
 )
+
+enum class OperationFailure { Create, Open, Change }
+enum class SearchPhase { Idle, Pending, Results, Failed }
+data class SearchState(val query: String = "", val phase: SearchPhase = SearchPhase.Idle, val notes: List<Note> = emptyList())

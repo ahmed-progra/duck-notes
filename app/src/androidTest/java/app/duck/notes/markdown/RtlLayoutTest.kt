@@ -12,7 +12,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
-import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -71,7 +74,11 @@ class RtlLayoutTest {
         rule.waitForIdle()
     }
 
-    private fun fieldBounds() = rule.onNode(hasSetTextAction()).getUnclippedBoundsInRoot()
+    private fun fieldBounds() = rule.onNodeWithTag("noteEditor").getUnclippedBoundsInRoot()
+
+    private fun infoBounds() = rule.onNode(
+        hasScrollToIndexAction() and hasAnyDescendant(hasText(BACKLINKS)),
+    ).getUnclippedBoundsInRoot()
 
     /**
      * The fold gutter is a leading column, so it must swap sides with reading direction.
@@ -268,7 +275,7 @@ class RtlLayoutTest {
      */
     @Test
     fun theInfoPaneMirrorsWithLayoutDirection() {
-        shellWithInfoOpen(width = EXPANDED_WIDTH)
+        shellWithInfoOpen(width = 1200.dp)
 
         val ltrPane = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
         val ltrEditor = fieldBounds()
@@ -292,39 +299,36 @@ class RtlLayoutTest {
 
     /**
      * Below Expanded the panel is a `ModalBottomSheet`, and its rows must lead with direction — the
-     * title starts at the left in LTR and at the right in RTL.
+     * title fits entirely in the left half in LTR and the right half in RTL.
      *
-     * The sheet sets no layout direction of its own and must not: `ModalBottomSheet` inherits
-     * `LocalLayoutDirection`, so its contents lead correctly on their own. **The plant is the idiom
-     * `theAttachmentStripMirrorsWithLayoutDirection` already names** — a hardcoded
-     * `CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr)` wrapped around
-     * `info(...)` inside the sheet, which pins the rows left in both directions.
+     * The real info LazyColumn supplies the bounds: the modal has its own window and can be wider
+     * than the compact shell fixture. Both the heading and panel use that window's root coordinates.
      *
-     * Asserted as *which half of the sheet the row starts in* rather than an absolute coordinate: the
-     * row is `fillMaxWidth`, so its own bounds span the sheet either way and only the **text's**
-     * placement inside it moves. The node measured is the heading, which is padded from the leading
-     * edge and therefore has a side.
+     * INFO_SHEET_HEADING_SPANS_PANEL adds `fillMaxWidth()` to SectionHeading's existing modifier.
+     * Whole-text containment must reject a node spanning both halves, even if its text still leads.
      */
     @Test
     fun theInfoSheetMirrorsWithLayoutDirection() {
         shellWithInfoOpen(width = COMPACT_WIDTH)
 
         val ltrHeading = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
-        val ltrCentre = COMPACT_WIDTH * 0.5f
-        println("DUCK rtl: LTR sheetHeading=$ltrHeading centre=$ltrCentre")
+        val ltrPanel = infoBounds()
+        val ltrCentre = (ltrPanel.left + ltrPanel.right) * 0.5f
+        println("DUCK rtl: LTR sheetHeading=$ltrHeading panel=$ltrPanel centre=$ltrCentre")
 
         flipToRtl()
         val rtlHeading = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
-        println("DUCK rtl: RTL sheetHeading=$rtlHeading centre=$ltrCentre")
+        val rtlPanel = infoBounds()
+        val rtlCentre = (rtlPanel.left + rtlPanel.right) * 0.5f
+        println("DUCK rtl: RTL sheetHeading=$rtlHeading panel=$rtlPanel centre=$rtlCentre")
 
         assertEquals(
-            "the sheet's rows must lead with reading direction: the heading starts in the left " +
-                "half in LTR ($ltrHeading), the right half in RTL ($rtlHeading), against a " +
-                "$COMPACT_WIDTH sheet whose centre is $ltrCentre. ModalBottomSheet inherits " +
-                "LocalLayoutDirection; a hardcoded Ltr inside it would pin the text left in both.",
+            "the heading must sit ENTIRELY in the leading half: left of $ltrCentre in LTR " +
+                "($ltrHeading inside $ltrPanel), right of $rtlCentre in RTL " +
+                "($rtlHeading inside $rtlPanel). Each centre comes from the real info panel.",
             HeadingLeadingLtr(true) to HeadingLeadingRtl(true),
-            HeadingLeadingLtr(ltrHeading.left < ltrCentre) to
-                HeadingLeadingRtl(rtlHeading.right > ltrCentre),
+            HeadingLeadingLtr(ltrHeading.left >= ltrPanel.left && ltrHeading.right <= ltrCentre) to
+                HeadingLeadingRtl(rtlHeading.left >= rtlCentre && rtlHeading.right <= rtlPanel.right),
         )
     }
 
@@ -360,30 +364,34 @@ class RtlLayoutTest {
      * red and cannot fail on its own terms. The guard got stronger as a side effect of needing a
      * plant that works, which is the argument for naming plants before writing them.
      *
-     * The measured node is therefore deliberately **not** `fillMaxWidth` in production. Do not add it
-     * there, and do not relax this to a centre comparison.
+     * INFO_COUNTS_SPANS_PANEL adds `modifier = Modifier.fillMaxWidth()` to the word-count Text.
+     * Its whole rectangle must remain inside the real info LazyColumn's leading half.
      */
     @Test
     fun theCountsRowLeadsWithLayoutDirection() {
         shellWithInfoOpen(width = COMPACT_WIDTH)
-        val centre = COMPACT_WIDTH * 0.5f
 
         val ltrCounts = rule.onNodeWithText(WORD_COUNT).getUnclippedBoundsInRoot()
-        println("DUCK rtl: LTR counts=$ltrCounts centre=$centre")
+        val ltrPanel = infoBounds()
+        val ltrCentre = (ltrPanel.left + ltrPanel.right) * 0.5f
+        println("DUCK rtl: LTR counts=$ltrCounts panel=$ltrPanel centre=$ltrCentre")
 
         flipToRtl()
         val rtlCounts = rule.onNodeWithText(WORD_COUNT).getUnclippedBoundsInRoot()
-        println("DUCK rtl: RTL counts=$rtlCounts centre=$centre")
+        val rtlPanel = infoBounds()
+        val rtlCentre = (rtlPanel.left + rtlPanel.right) * 0.5f
+        println("DUCK rtl: RTL counts=$rtlCounts panel=$rtlPanel centre=$rtlCentre")
 
         assertEquals(
             "the counts row must sit ENTIRELY in the leading half in both directions: left of " +
-                "$centre in LTR ($ltrCounts), right of it in RTL ($rtlCounts). A digit-initial " +
+                "$ltrCentre in LTR ($ltrCounts inside $ltrPanel), right of $rtlCentre in RTL " +
+                "($rtlCounts inside $rtlPanel). A digit-initial " +
                 "string is strong LTR inside an RTL line; alignment must still come from the layout " +
                 "direction. Containment, not a centre comparison — a fillMaxWidth node satisfies " +
                 "both halves of a centre comparison while being wrong.",
             CountsLeadingLtr(true) to CountsLeadingRtl(true),
-            CountsLeadingLtr(ltrCounts.right <= centre) to
-                CountsLeadingRtl(rtlCounts.left >= centre),
+            CountsLeadingLtr(ltrCounts.left >= ltrPanel.left && ltrCounts.right <= ltrCentre) to
+                CountsLeadingRtl(rtlCounts.left >= rtlCentre && rtlCounts.right <= rtlPanel.right),
         )
     }
 
@@ -596,7 +604,7 @@ class RtlLayoutTest {
          * What `editor_word_count` renders for [EXIT_NOTE]'s two-word body — Phase 9e.
          *
          * Short on purpose: the containment assertion needs the row to fit inside half of
-         * [COMPACT_WIDTH], and a five-figure count would not.
+         * the info panel, and a five-figure count would not.
          */
         const val WORD_COUNT = "2 words"
 
@@ -625,9 +633,6 @@ class RtlLayoutTest {
         const val FIRST_TITLE = "Pond"
 
         const val SECOND_TITLE = "Ponder this"
-
-        /** Either side of `paneModeFor`'s 840dp and 600dp breakpoints. */
-        val EXPANDED_WIDTH = 900.dp
 
         val COMPACT_WIDTH = 400.dp
 

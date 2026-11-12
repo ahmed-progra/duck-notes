@@ -107,7 +107,13 @@ class FakeTagRepository(
      */
     var afterRestore: suspend () -> Unit = {}
 
-    override suspend fun restore(snapshot: BodySnapshot) {
+    override suspend fun restore(snapshot: BodySnapshot, expectedBodies: Map<String, String>?) {
+        if (expectedBodies != null) {
+            require(expectedBodies.keys == snapshot.bodies.keys)
+            check(expectedBodies.all { (id, body) -> notes?.current(id)?.body == body }) {
+                "Note changed after the tag operation"
+            }
+        }
         restores += snapshot
         notes?.let { repo ->
             for ((id, body) in snapshot.bodies) {

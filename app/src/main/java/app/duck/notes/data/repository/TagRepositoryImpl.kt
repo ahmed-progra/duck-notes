@@ -18,6 +18,7 @@ import app.duck.notes.domain.usecase.ParseTags
 import app.duck.notes.domain.usecase.ResolveWikiLinks
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 import javax.inject.Inject
 
 /**
@@ -73,19 +74,18 @@ class TagRepositoryImpl @Inject constructor(
      * One transaction, all-or-nothing. A rename that renamed 140 of 200 notes would leave two tags
      * where the user asked for one, and no way to tell which notes are in which half.
      *
-     * The order matters. Bodies are rewritten **first**, so the new rows exist by the time
-     * customization is carried onto them; then the old rows are deleted, which they need explicitly
-     * because `deleteOrphanTags` spares pinned and icon'd ones.
+     * Vacate source rows before rewriting so an overlapping destination cannot be deleted or moved.
      */
     override suspend fun rename(from: String, to: String): BodySnapshot = inTransaction {
+        if (from == to) return@inTransaction BodySnapshot(emptyMap(), emptyList())
         val affected = notes.notesByTagPathOnce(from)
         val oldRows = tags.rowsUnderPath(from).map { it.toDomain() }
+        val newNames = oldRows.map { to + it.name.removePrefix(from) }
+        val createdNames = newNames.filter { tags.getByName(it) == null }
 
-        val bodies = rewriteAll(affected) { TagScanner.rename(it, from, to) }
-
-        val createdNames = oldRows.map { to + it.name.removePrefix(from) }
-        carryCustomization(oldRows, createdNames)
         oldRows.forEach { tags.deleteByName(it.name) }
+        val bodies = rewriteAll(affected) { TagScanner.rename(it, from, to) }
+        carryCustomization(oldRows, newNames)
 
         BodySnapshot(bodies = bodies, tags = oldRows, createdNames = createdNames)
     }
@@ -112,32 +112,40 @@ class TagRepositoryImpl @Inject constructor(
      *
      * Restoring bodies restores tag **membership** for free, because `saveNoteWithTagsAndLinks` re-derives
      * `note_tags` from the text. It is what makes undo honest even after a merge, which no inverse
-     * rename could achieve. The two steps after it are the two things bodies do not carry:
-     * customization, since `ensureTag` mints a fresh row without it; and the sweep, since a created
-     * row that inherited a pin survives `deleteOrphanTags` and would be left behind, empty.
+     * rename could achieve. Orphan aliases are removed before restoring customization, so renamed
+     * source IDs cannot move a restored name out from under another source row.
+     * The editor supplies expected post-operation bodies; conflicts reject the whole transaction
+     * before any restore writes, so later saved text cannot be overwritten by an old snapshot.
      */
-    override suspend fun restore(snapshot: BodySnapshot) = inTransaction {
+    override suspend fun restore(snapshot: BodySnapshot, expectedBodies: Map<String, String>?) = inTransaction {
+        if (expectedBodies != null) {
+            require(expectedBodies.keys == snapshot.bodies.keys)
+            // Check the entire set before restoring even its first body or tag customization.
+            for ((id, body) in expectedBodies) {
+                check(notes.getById(id)?.body == body) { "Note changed after the tag operation" }
+            }
+        }
         for ((id, body) in snapshot.bodies) {
             val note = notes.getById(id) ?: continue
             writeBody(note, body)
+        }
+        (snapshot.createdNames + snapshot.tags.map { it.name }).distinct().forEach {
+            tags.deleteIfOrphaned(it)
         }
         snapshot.tags.forEach { old ->
             val current = tags.getByName(old.name)
             when {
                 current != null -> tags.upsert(current.copy(iconKey = old.iconKey, isPinned = old.isPinned))
-                // Null when no restored body names this tag — a pinned or icon'd row with no notes,
-                // which exists only because `deleteOrphanTags` spares it. There is no minted row to
-                // graft customization onto, so put the old one back whole. Without this branch undo
-                // silently kept nothing: `?.let` skipped, and the row stayed destroyed. Covers the
-                // delete path too, which reaches this same line.
-                old.isPinned || old.iconKey != null -> tags.upsert(old.toEntity())
+                old.isPinned || old.iconKey != null -> {
+                    // Overlap can leave this ID referenced under another restored name.
+                    val restoredId = if (tags.getById(old.id) == null) old.id else UUID.randomUUID().toString()
+                    tags.upsert(old.toEntity().copy(id = restoredId))
+                }
                 // A plain row with no body to re-create it is not resurrected: `setPinned`'s rule is
                 // that tags only come from note bodies, and the next save reaps it anyway.
                 else -> Unit
             }
         }
-        // Conditional: on a merge undo the target still holds its own original notes and must live.
-        snapshot.createdNames.forEach { tags.deleteIfOrphaned(it) }
     }
 
     // --- shared machinery ----------------------------------------------------
@@ -216,12 +224,7 @@ class TagRepositoryImpl @Inject constructor(
         oldRows.zip(newNames).forEach { (old, newName) ->
             if (!old.isPinned && old.iconKey == null) return@forEach
             val current = tags.getByName(newName)
-                // No body carries this tag, so `saveNoteWithTagsAndLinks` never minted a row to carry onto.
-                // Move the old row itself rather than dropping it: `upsert` is keyed on `id`, so
-                // rewriting it under the new name *relocates* it, and the `deleteByName(old.name)`
-                // that follows then matches nothing. Reachable only because `deleteOrphanTags`
-                // spares pinned and icon'd rows — which is the same exemption that lets a tag with
-                // no notes exist at all. Dropping it here destroyed a pinned tag outright.
+                // No body minted this destination; the source ID was vacated before rewriting.
                 ?: return@forEach tags.upsert(old.toEntity().copy(name = newName))
             tags.upsert(
                 current.copy(

@@ -2,7 +2,6 @@ package app.duck.notes.di
 
 import android.content.Context
 import androidx.room.Room
-import app.duck.notes.BuildConfig
 import app.duck.notes.data.local.DUCK_MIGRATIONS
 import app.duck.notes.data.local.DuckDatabase
 import app.duck.notes.data.local.DuckDatabaseCallback
@@ -18,7 +17,7 @@ import dagger.hilt.components.SingletonComponent
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import javax.inject.Singleton
 
-/** Wires the Room database and its DAOs into the Hilt graph. Sample notes are seeded in debug only. */
+/** Wires the Room database and its DAOs into the Hilt graph. Welcome notes use the ordinary save path after initialization. */
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
@@ -31,11 +30,8 @@ object DatabaseModule {
             // Installing a driver also means DuckDatabaseCallback must override the
             // SQLiteConnection callbacks; the SupportSQLiteDatabase ones are never invoked.
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = BuildConfig.DEBUG))
+            .addCallback(DuckDatabaseCallback())
             .addMigrations(*DUCK_MIGRATIONS)
-            // A downgrade rebuilds the DB; the callback's onDestructiveMigration re-creates
-            // and repopulates the FTS index. Forward migrations still go through DUCK_MIGRATIONS.
-            .fallbackToDestructiveMigrationOnDowngrade()
             .build()
 
     @Provides

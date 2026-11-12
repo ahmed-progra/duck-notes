@@ -1,5 +1,9 @@
 package app.duck.notes.presentation.shell
 
+import app.duck.notes.domain.usecase.SearchNotes
+import app.duck.notes.domain.usecase.ArchiveNote
+import app.duck.notes.domain.usecase.DeleteNote
+import app.duck.notes.domain.usecase.RestoreNote
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.text.TextRange
@@ -38,14 +42,19 @@ import app.duck.notes.domain.usecase.SaveNote
 import app.duck.notes.domain.usecase.SetTagIcon
 import app.duck.notes.domain.usecase.UndoTagChange
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
@@ -84,9 +93,12 @@ class DuckShellAutosaveTest {
     // `notes` passed in: 8a's subject is two writers racing over one body, so the fake has to rewrite
     // bodies for real (through TagScanner) rather than only recording the call. See its KDoc.
     private val tags = FakeTagRepository(listOf(Tag(id = "work", name = "work")), notes = notes)
-    private val attachments = FakeAttachmentRepository()
+    private val attachments = FakeAttachmentRepository().also { notes.attachments = it }
     private val attachStorage = FakeAttachmentStorage()
     private val parseTags = ParseTags()
+    private val searchCalls = mutableListOf<String>()
+    private var searchHandler: suspend (app.duck.notes.domain.model.SearchQuery) -> List<Note> = { query -> notes.all().filter { !it.isTrashed && it.body.contains(query.text, ignoreCase = true) } }
+
 
     /**
      * **Strictly increasing**, and that is what makes the `modifiedAt` tests able to fail.
@@ -135,6 +147,10 @@ class DuckShellAutosaveTest {
         observeAttachments = ObserveAttachments(attachments),
         getBacklinks = GetBacklinks(FakeLinkRepository()),
         clock = clock,
+        searchNotes = SearchNotes(object : app.duck.notes.domain.repository.SearchRepository { override suspend fun search(query: app.duck.notes.domain.model.SearchQuery): List<Note> { searchCalls += query.text; return searchHandler(query) } }),
+        archiveNote = ArchiveNote(notes, parseTags, ResolveWikiLinks(), Clock { 10_000L }),
+        deleteNote = DeleteNote(notes, parseTags, ResolveWikiLinks(), Clock { 10_000L }),
+        restoreNote = RestoreNote(notes, parseTags, ResolveWikiLinks(), Clock { 10_000L }),
         autosaveDispatcher = dispatcher,
     )
 
@@ -186,8 +202,7 @@ class DuckShellAutosaveTest {
         vm.onSelectNote(id)
         advanceUntilIdle()
         notes.writes.clear()
-        block(vm)
-        scope.cancel()
+        try { block(vm) } finally { scope.cancel() }
     }
 
     // --- the debounce and its ceiling ---------------------------------------
@@ -367,12 +382,526 @@ class DuckShellAutosaveTest {
     }
 
     @Test
+    fun changingFilterPersistsPendingMixedScriptTextBeforeDeparture() = withOpenNote { vm ->
+        val edited = "My note — ملاحظتي 🦆\nPending words #work"
+        vm.type(edited)
+        assertEquals("precondition: debounce has not saved", "hello", notes.current("n1")?.body)
+
+        vm.onFilter(ShellFilter.Untagged)
+
+        assertEquals("filter departure must persist pending text", edited, notes.current("n1")?.body)
+        assertEquals(listOf("work"), notes.savedTags["n1"])
+        assertEquals(ShellFilter.Untagged, vm.state.value.filter)
+        assertEquals(null, vm.state.value.selectedNoteId)
+    }
+
+    @Test
+    fun filterDepartureAlsoPersistsTypingAcceptedDuringTheWrite() = withOpenNote { vm ->
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = { note ->
+            if (note.body == "first edit") {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        vm.type("first edit")
+        vm.onFilter(ShellFilter.Archive)
+        assertTrue("precondition: persistence is suspended", entered.isCompleted)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        vm.type("latest edit — آخر تعديل 🦆")
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("latest edit — آخر تعديل 🦆", notes.current("n1")?.body)
+        assertEquals(ShellFilter.Archive, vm.state.value.filter)
+        assertEquals(null, vm.state.value.selectedNoteId)
+    }
+
+    @Test
+    fun anOlderFilterDepartureCannotClearANewerNoteSelection() = withOpenNote { vm ->
+        notes.seed(note("n2", "second note"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = { note ->
+            if (note.body == "pending edit") {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        vm.type("pending edit")
+        vm.onFilter(ShellFilter.Archive)
+        assertTrue(entered.isCompleted)
+        vm.onSelectNote("n2")
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        assertEquals("pending edit", notes.current("n1")?.body)
+        assertEquals("second note", notes.current("n2")?.body)
+    }
+
+    @Test
+    fun failedFilterDepartureRetainsTextAndRetriesTheLatestEdit() = withOpenNote { vm ->
+        var failures = 0
+        notes.beforeSave = { failures++; throw java.io.IOException("controlled save failure") }
+        vm.type("pending — معلّق")
+        vm.onFilter(ShellFilter.Archive)
+        assertEquals(1, failures)
+        assertEquals("hello", notes.current("n1")?.body)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals("pending — معلّق", vm.buffer.text.toString())
+        assertTrue(vm.state.value.saveFailed)
+
+        notes.beforeSave = null
+        vm.type("latest retry — آخر محاولة")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("latest retry — آخر محاولة", notes.current("n1")?.body)
+        assertEquals(ShellFilter.Archive, vm.state.value.filter)
+        assertEquals(null, vm.state.value.selectedNoteId)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    @Test
+    fun filterDepartureFromACleanNoteDoesNotWrite() = withOpenNote { vm ->
+        val stamp = notes.current("n1")?.modifiedAt
+        vm.onFilter(ShellFilter.Archive)
+        assertEquals(ShellFilter.Archive, vm.state.value.filter)
+        assertEquals(emptyList<String>(), writesTo("n1"))
+        assertEquals(stamp, notes.current("n1")?.modifiedAt)
+    }
+
+    @Test
+    fun aFailedAutosaveKeepsCollectingAndPersistsTheNextEdit() = withOpenNote { vm ->
+        var failures = 0
+        notes.beforeSave = { failures++; throw java.io.IOException("controlled autosave failure") }
+        vm.type("first unsaved edit")
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertEquals(1, failures)
+        assertEquals("hello", notes.current("n1")?.body)
+        assertEquals("first unsaved edit", vm.buffer.text.toString())
+        assertTrue(vm.state.value.saveFailed)
+
+        notes.beforeSave = null
+        vm.type("second edit survives")
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertEquals("second edit survives", notes.current("n1")?.body)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    @Test
+    fun failureDuringOnStopCanRetryWithoutNavigatingAway() = withOpenNote { vm ->
+        notes.beforeSave = { throw java.io.IOException("controlled lifecycle save failure") }
+        vm.type("backgrounded edit")
+        vm.onStop()
+        assertTrue(vm.state.value.saveFailed)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals("hello", notes.current("n1")?.body)
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("backgrounded edit", notes.current("n1")?.body)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    @Test
+    fun recoveredAutosaveRetiresAnOldFailedNavigationBeforeALaterFailure() = withOpenNote { vm ->
+        notes.beforeSave = { throw java.io.IOException("controlled navigation failure") }
+        vm.type("first edit")
+        vm.onFilter(ShellFilter.Archive)
+        assertTrue(vm.state.value.saveFailed)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+
+        notes.beforeSave = null
+        vm.type("recovered edit")
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertEquals("recovered edit", notes.current("n1")?.body)
+        assertFalse(vm.state.value.saveFailed)
+
+        notes.beforeSave = { throw java.io.IOException("unrelated lifecycle failure") }
+        vm.type("later edit")
+        vm.onStop()
+        assertTrue(vm.state.value.saveFailed)
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("later edit", notes.current("n1")?.body)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    @Test
+    fun revertingFailedEditsRetiresTheWarningAndOldDestinationWithoutWriting() = withOpenNote { vm ->
+        notes.beforeSave = { throw java.io.IOException("controlled navigation failure") }
+        vm.type("unsaved edit")
+        vm.onFilter(ShellFilter.Archive)
+        assertTrue(vm.state.value.saveFailed)
+        vm.type("hello")
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertEquals(emptyList<String>(), writesTo("n1"))
+        assertFalse(vm.state.value.saveFailed)
+
+        vm.type("later edit")
+        vm.onStop()
+        assertTrue(vm.state.value.saveFailed)
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("later edit", notes.current("n1")?.body)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+    }
+
+    @Test
+    fun anOwedTagWriteKeepsItsFailureUntilTheFullWriteSucceeds() = withOpenNote { vm ->
+        vm.type("#work")
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertEquals("#work", notes.current("n1")?.body)
+        assertEquals(emptyList<String>(), notes.savedTags["n1"])
+        notes.beforeSave = { throw java.io.IOException("controlled tag completion failure") }
+        vm.onFilter(ShellFilter.Archive)
+        assertTrue(vm.state.value.saveFailed)
+
+        vm.type("temporary edit")
+        advanceTimeBy(200)
+        vm.type("#work")
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertTrue(vm.state.value.saveFailed)
+        assertEquals(emptyList<String>(), notes.savedTags["n1"])
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals(listOf("work"), notes.savedTags["n1"])
+        assertEquals(ShellFilter.Archive, vm.state.value.filter)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    @Test
+    fun cancelledFilterDepartureRetainsTextWithoutReportingAStorageFailure() = withOpenNote { vm ->
+        notes.beforeSave = { throw CancellationException("controlled navigation cancellation") }
+        vm.type("cancelled departure edit")
+        vm.onFilter(ShellFilter.Archive)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertEquals("cancelled departure edit", vm.buffer.text.toString())
+        assertEquals("hello", notes.current("n1")?.body)
+        assertFalse(vm.state.value.saveFailed)
+        notes.beforeSave = null
+        vm.onFilter(ShellFilter.Archive)
+        advanceUntilIdle()
+        assertEquals("cancelled departure edit", notes.current("n1")?.body)
+        assertEquals(ShellFilter.Archive, vm.state.value.filter)
+    }
+
+    @Test
+    fun cancelledAutosaveDoesNotReportAStorageFailure() = withOpenNote { vm ->
+        notes.beforeSave = { throw CancellationException("controlled autosave cancellation") }
+        vm.type("cancelled autosave edit")
+        advanceTimeBy(401)
+        advanceUntilIdle()
+        assertEquals("hello", notes.current("n1")?.body)
+        assertEquals("cancelled autosave edit", vm.buffer.text.toString())
+        assertFalse(vm.state.value.saveFailed)
+        notes.beforeSave = null
+        vm.flush()
+        assertEquals("cancelled autosave edit", notes.current("n1")?.body)
+    }
+
+    @Test
+    fun cancelledOnStopDoesNotReportAStorageFailure() = withOpenNote { vm ->
+        notes.beforeSave = { throw CancellationException("controlled lifecycle cancellation") }
+        vm.type("cancelled background edit")
+        vm.onStop()
+        assertEquals("hello", notes.current("n1")?.body)
+        assertEquals("cancelled background edit", vm.buffer.text.toString())
+        assertFalse(vm.state.value.saveFailed)
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("cancelled background edit", notes.current("n1")?.body)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+    }
+
+    @Test
     fun onStopFlushes() = withOpenNote { vm ->
         vm.type("typed then backgrounded")
         vm.onStop()
         advanceUntilIdle()
 
         assertEquals(listOf("typed then backgrounded"), writesTo("n1"))
+    }
+
+    /** Plant ACTION_FLUSH_WARNING_OFF: set the operation flush catch's saveFailed to false. */
+    private fun failedOperationRetainsTextAndRetriesOnlyTheSave(
+        action: (DuckShellViewModel) -> Unit,
+        assertApplied: () -> Unit,
+    ) = withOpenNote(body = "hello #work") { vm ->
+        vm.onAttachImage("content://existing", "image/png")
+        advanceUntilIdle()
+        val persisted = requireNotNull(notes.current("n1")).body
+        val existingAttachments = attachments.all()
+        val existingFiles = attachStorage.files.toSet()
+        val existingCopies = attachStorage.stored.toList()
+        assertEquals("positive control: a real attachment exists", 1, existingAttachments.size)
+        var failures = 0
+        notes.beforeSave = { failures++; throw java.io.IOException("controlled operation flush failure") }
+        vm.type("pending — معلّق #work")
+
+        action(vm)
+
+        assertEquals("the operation must attempt its own flush before autosave runs", 1, failures)
+        assertTrue("the failed operation flush must immediately publish its warning", vm.state.value.saveFailed)
+        assertEquals(persisted, notes.current("n1")?.body)
+        assertEquals("pending — معلّق #work", vm.buffer.text.toString())
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertEquals(emptyList<Pair<String, String>>(), tags.renames)
+        assertEquals(emptyList<String>(), tags.deletes)
+        assertEquals(existingAttachments, attachments.all())
+        assertEquals(existingFiles, attachStorage.files)
+        assertEquals(existingCopies, attachStorage.stored)
+
+        notes.beforeSave = null
+        val latest = "$persisted\nlatest — آخر تعديل #work"
+        vm.type(latest)
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals(latest, notes.current("n1")?.body)
+        assertEquals(latest, vm.buffer.text.toString())
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertFalse(vm.state.value.saveFailed)
+        assertEquals(emptyList<Pair<String, String>>(), tags.renames)
+        assertEquals(emptyList<String>(), tags.deletes)
+        assertEquals(existingAttachments, attachments.all())
+        assertEquals(existingFiles, attachStorage.files)
+        assertEquals(existingCopies, attachStorage.stored)
+
+        action(vm)
+        advanceUntilIdle()
+        assertApplied()
+    }
+
+    @Test
+    fun failedRenameFlushRetainsTextAndDoesNotReplayTheRename() = failedOperationRetainsTextAndRetriesOnlyTheSave(
+        action = { it.onRenameTag("work", "job") },
+        assertApplied = { assertEquals(listOf("work" to "job"), tags.renames) },
+    )
+
+    @Test
+    fun failedTagDeleteFlushRetainsTextAndDoesNotReplayTheDeletion() = failedOperationRetainsTextAndRetriesOnlyTheSave(
+        action = { it.onDeleteTag("work") },
+        assertApplied = { assertEquals(listOf("work"), tags.deletes) },
+    )
+
+    @Test
+    fun failedTagAddFlushRetainsTextAndDoesNotReplayTheAppend() = failedOperationRetainsTextAndRetriesOnlyTheSave(
+        action = { it.onAddTagToNote("n1", "added") },
+        assertApplied = { assertTrue("explicit repeat must append the tag", "added" in notes.savedTags["n1"].orEmpty()) },
+    )
+
+    @Test
+    fun failedImageAddFlushRetainsTextAndDoesNotReplayTheCopy() = failedOperationRetainsTextAndRetriesOnlyTheSave(
+        action = { it.onAttachImage("content://new", "image/png") },
+        assertApplied = { assertEquals("explicit repeat must copy one image", 2, attachments.all().size) },
+    )
+
+    @Test
+    fun failedImageDeleteFlushRetainsTextAndDoesNotReplayTheDeletion() = failedOperationRetainsTextAndRetriesOnlyTheSave(
+        action = { it.onDeleteAttachment(attachments.all().single().id) },
+        assertApplied = {
+            assertTrue("explicit repeat must delete the row", attachments.all().isEmpty())
+            assertTrue("explicit repeat must delete the file", attachStorage.files.isEmpty())
+        },
+    )
+
+    /** Plant MUTATION_FAILURE_KEEPS_OLD_NAVIGATION: omit invalidation in the failed body flush. */
+    @Test fun failedPendingNavigationCannotRepopulateRetryAfterNewerRename() = withOpenNote(body = "hello #work") { vm ->
+        notes.seed(note("n2", "other note"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.id == "n1") {
+                attempts++
+                if (attempts == 1) { entered.complete(Unit); release.await() }
+                throw java.io.IOException("controlled pending-navigation and rename flush failure")
+            }
+        }
+        vm.type("pending body #work")
+        vm.onSelectNote("n2")
+        assertTrue("the earlier navigation must hold its real body write", entered.isCompleted)
+        vm.onRenameTag("work", "job")
+        release.complete(Unit)
+        runCurrent()
+        assertEquals("both commands must attempt their body flush before autosave", 2, attempts)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertTrue(vm.state.value.saveFailed)
+        assertEquals("hello #work", notes.current("n1")?.body)
+        assertTrue(tags.renames.isEmpty())
+        notes.beforeSave = null
+        vm.type("latest after both failures #work")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("Retry after the newer failed rename must not replay older pending navigation", "n1", vm.state.value.selectedNoteId)
+        assertEquals("latest after both failures #work", notes.current("n1")?.body)
+        assertEquals("other note", notes.current("n2")?.body)
+        assertTrue("Retry must not replay the failed rename", tags.renames.isEmpty())
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Plant MUTATION_FAILURE_CANCELS_NEWER_NAVIGATION: drop the entry-revision comparison. */
+    @Test fun newerSelectionDuringAnOlderFailedRenameStillOpensItsTarget() = withOpenNote(body = "hello #work") { vm ->
+        notes.seed(note("n2", "other note"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.id == "n1") {
+                attempts++
+                if (attempts == 1) {
+                    entered.complete(Unit)
+                    release.await()
+                    throw java.io.IOException("controlled older rename body failure")
+                }
+            }
+        }
+        vm.type("accepted during rename #work")
+        vm.onRenameTag("work", "job")
+        assertTrue("the older rename must hold its real body write", entered.isCompleted)
+        vm.onSelectNote("n2")
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("newer navigation must save after the one-shot mutation failure", 2, attempts)
+        assertEquals("accepted during rename #work", notes.current("n1")?.body)
+        assertTrue(tags.renames.isEmpty())
+        assertEquals("an older failed rename must not cancel newer explicit navigation", "n2", vm.state.value.selectedNoteId)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Plant MUTATION_RETRY_CLEAR_FOREIGN_OWNER: unconditionally clear Retry at mutation entry. */
+    @Test fun retiredPickerFailurePreservesTheCurrentFailedNavigationRetry() = withOpenNote { vm ->
+        val origin = requireNotNull(vm.editorSession)
+        vm.onEditorAttached(origin)
+        assertTrue(vm.onImagePickerOpened(origin))
+        notes.seed(note("n2", "second note"))
+        notes.seed(note("n3", "third note"))
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertTrue(origin !== vm.editorSession && origin.retired && origin.canEdit)
+        origin.buffer.setTextAndPlaceCursorAtEnd("late outgoing edit")
+        Snapshot.sendApplyNotifications()
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.id == "n1") { attempts++; throw java.io.IOException("controlled retired body failure") }
+        }
+        vm.onEditorDetached(origin)
+        runCurrent()
+        assertEquals("detaching must really attempt the retired flush", 1, attempts)
+        assertFalse(origin.closed)
+        vm.onSelectNote("n3")
+        runCurrent()
+        assertEquals("current navigation must fail while settling the same retired body", 2, attempts)
+        assertTrue(vm.state.value.saveFailed)
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        vm.onImagePickerResult("content://late-picker", "image/png")
+        runCurrent()
+        assertEquals("the retired picker must attempt its own preflush", 3, attempts)
+        assertTrue(attachments.all().isEmpty())
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("a retired picker failure must preserve the current navigation Retry", "n3", vm.state.value.selectedNoteId)
+        assertEquals("late outgoing edit", notes.current("n1")?.body)
+        assertEquals("second note", notes.current("n2")?.body)
+        assertTrue(attachments.all().isEmpty())
+        assertTrue(origin.closed)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Plant MUTATION_FAILURE_CANCELS_RETIRED_NAVIGATION: remove current-owner qualification in the catch. */
+    @Test fun retiredPickerFailurePreservesTheCurrentPendingSelection() = withOpenNote { vm ->
+        val origin = requireNotNull(vm.editorSession)
+        vm.onEditorAttached(origin)
+        assertTrue(vm.onImagePickerOpened(origin))
+        notes.seed(note("n2", "second note"))
+        notes.seed(note("n3", "third note"))
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertTrue(origin !== vm.editorSession && origin.retired && origin.canEdit)
+        origin.buffer.setTextAndPlaceCursorAtEnd("late outgoing edit")
+        Snapshot.sendApplyNotifications()
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.id == "n1") { attempts++; throw java.io.IOException("controlled attached retired body failure") }
+        }
+        vm.onSelectNote("n3")
+        runCurrent()
+        assertEquals("navigation must wait for the still-attached outgoing editor", 0, attempts)
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        vm.onImagePickerResult("content://late-picker", "image/png")
+        runCurrent()
+        assertEquals("the retired picker must really fail its preflush", 1, attempts)
+        assertTrue(vm.state.value.saveFailed)
+        assertTrue(attachments.all().isEmpty())
+        notes.beforeSave = null
+        vm.onEditorDetached(origin)
+        advanceUntilIdle()
+        assertEquals("a retired picker failure must not cancel the current pending selection", "n3", vm.state.value.selectedNoteId)
+        assertEquals("late outgoing edit", notes.current("n1")?.body)
+        assertEquals("second note", notes.current("n2")?.body)
+        assertTrue(attachments.all().isEmpty())
+        assertTrue(origin.closed)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Recovery control: an already-failed navigation must not replay after a mutation fails. */
+    @Test
+    fun failedOperationFlushRetiresAnOlderFailedNavigation() = withOpenNote { vm ->
+        notes.beforeSave = { throw java.io.IOException("controlled save failure") }
+        vm.type("pending #work")
+        vm.onFilter(ShellFilter.Archive)
+        assertTrue(vm.state.value.saveFailed)
+        vm.onRenameTag("work", "job")
+        notes.beforeSave = null
+        vm.type("latest #work")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("latest #work", notes.current("n1")?.body)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertEquals(emptyList<Pair<String, String>>(), tags.renames)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Plant ACTION_FLUSH_CANCEL_SWALLOWED: return false instead of rethrowing cancellation. */
+    @Test
+    fun cancelledOperationFlushCancelsItsJobWithoutWarningOrMutation() = withOpenNote(body = "hello #work") { vm ->
+        var operationJob: Job? = null
+        notes.beforeSave = {
+            operationJob = currentCoroutineContext()[Job]
+            throw CancellationException("controlled operation cancellation")
+        }
+        vm.type("pending #work")
+        vm.onRenameTag("work", "job")
+        assertTrue("cancellation must propagate out of the operation", operationJob?.isCancelled == true)
+        assertFalse(vm.state.value.saveFailed)
+        assertEquals("hello #work", notes.current("n1")?.body)
+        assertEquals("pending #work", vm.buffer.text.toString())
+        assertEquals(emptyList<Pair<String, String>>(), tags.renames)
+        notes.beforeSave = null
+        vm.onRenameTag("work", "job")
+        advanceUntilIdle()
+        assertEquals(listOf("work" to "job"), tags.renames)
     }
 
     // --- flush precedes every body-rewriting operation ----------------------
@@ -411,33 +940,25 @@ class DuckShellAutosaveTest {
         assertTrue(notes.current("n1")?.body.orEmpty().startsWith("hello edited"))
     }
 
-    /**
-     * Undo is the one intent that must **not** flush, and this pins the reason.
-     *
-     * The other three flush so the transaction reads current text. Undo's contract is the opposite —
-     * discard what happened since the snapshot — so flushing first writes the user's typing to Room
-     * and then restores the snapshot straight over it. The typing would be destroyed *on disk*, and
-     * `SaveNote` would restamp `modifiedAt` on the way past, for a write that lives two statements.
-     *
-     * The typing is still lost from the buffer; `adopt` is unconditional and that is undo working.
-     * What this asserts is that Room never held it.
-     */
+    /** Plant UNDO_IGNORE_LIVE_CONFLICT: replace the affected.all preflight in onUndo with true. */
     @Test
-    fun undoDoesNotFlushTheTypingItIsAboutToDiscard() = withOpenNote(body = "a #work b") { vm ->
+    fun undoRejectsUnsavedTypingInAnAffectedNoteWithoutDiscardingIt() = withOpenNote(body = "a #work b") { vm ->
         vm.onRenameTag("work", "job")
         advanceUntilIdle()
         notes.writes.clear()
 
-        vm.type("a #job b typed while the snackbar was up")
+        val typed = "a #job b typed while the snackbar was up"
+        vm.type(typed)
         vm.onUndo()
-        advanceUntilIdle()
+        runCurrent()
 
-        assertEquals(1, tags.restores.size)
-        assertFalse(
-            "undo flushed the typing to Room before restoring over it: ${writesTo("n1")}",
-            writesTo("n1").any { "typed while the snackbar was up" in it },
-        )
-        assertEquals("a #work b", vm.buffer.text.toString())
+        assertTrue("conflict must reject the entire restore", tags.restores.isEmpty())
+        assertEquals(OperationFailure.Change, vm.state.value.operationFailure)
+        assertEquals(typed, vm.buffer.text.toString())
+        assertEquals("a #job b", notes.current("n1")?.body)
+        assertTrue(requireNotNull(vm.editorSession).canEdit)
+        vm.flush()
+        assertEquals(typed, notes.current("n1")?.body)
     }
 
     /**
@@ -521,69 +1042,39 @@ class DuckShellAutosaveTest {
         }
 
     /**
-     * A debounced save already in flight cannot clobber the body undo just restored.
-     *
-     * Removing the flush from [DuckShellViewModel.onUndo] removed the only thing that was draining
-     * the pending save as a side effect. Left alone, that save fires in the gap between the restore
-     * transaction and the adopt: it reads a buffer still holding the user's typing, against a
-     * `lastWritten` still holding the pre-restore value, so the gate passes it and it overwrites the
-     * restored body — and the adopt then faithfully adopts the clobbered text back out of Room.
-     *
-     * ## Why the obvious version of this test is worthless
-     *
-     * Leaving a save pending and calling `onUndo()` **passes with or without the fix.** Under
-     * `UnconfinedTestDispatcher` the entire undo coroutine runs to completion before any virtual-time
-     * advance releases the pending save, so the two never interleave and the race is never attempted.
-     * That version was written first and verified to pass against the unfixed code — which is the only
-     * reason it was caught.
-     *
-     * Advancing virtual time from inside the window does not work either — `advanceTimeBy` called
-     * from a coroutine already running on the scheduler will not place the collector there.
-     *
-     * So the racing call is **invoked directly**, on its own coroutine, via
-     * [FakeTagRepository.afterRestore]. `flush()` is not a stand-in: it is the same `save(loadedId)`
-     * the debounce collector calls, taking the same lock and passing the same gate, so this exercises
-     * the real path rather than a model of it. What the hook supplies is only the *timing* the
-     * dispatcher will not.
-     *
-     * It must be a separate coroutine: `Mutex` is not reentrant, and calling `flush()` on `onUndo`'s
-     * own coroutine while it holds the lock would deadlock rather than race.
-     *
-     * With the lock held across restore + adopt the racing save blocks, then finds
-     * `buffer == lastWritten` once `adopt` has run, and writes nothing. Without it, it writes the
-     * typing over the restore and the adopt hands the clobbered text back to the buffer.
+     * Plant UNDO_INPUT_NOT_FROZEN: set affected sessions' readOnly to false instead of true.
+     * The real flush caller must also remain blocked until restore and adoption both complete.
      */
     @Test
-    fun aPendingSaveCannotClobberTheBodyUndoRestored() = withOpenNote(body = "a #work b") { vm ->
+    fun cleanUndoFreezesAffectedInputAndHoldsTheWriteLockUntilAdoption() = withOpenNote(body = "a #work b") { vm ->
         vm.onRenameTag("work", "job")
         advanceUntilIdle()
         assertEquals("a #job b", vm.buffer.text.toString())
         notes.writes.clear()
 
-        // Fire a save in the gap between the restore and the adopt — the only place it is dangerous,
-        // and the only place an unconfined dispatcher will not put one by itself.
-        // UNDISPATCHED is load-bearing. A plain `launch` is *queued* here, so it runs only after
-        // `onUndo` has already adopted — the flush then sees a clean buffer and the race never
-        // happens. Verified: with a plain launch this test passes against the unfixed code too.
-        // UNDISPATCHED starts the body synchronously and runs it up to its first suspension, which is
-        // the mutex — precisely where a real debounced save would find itself.
         val racer = CoroutineScope(dispatcher)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var flushed = false
         tags.afterRestore = {
-            racer.launch(start = CoroutineStart.UNDISPATCHED) { vm.flush() }
+            entered.complete(Unit)
+            racer.launch(start = CoroutineStart.UNDISPATCHED) { vm.flush(); flushed = true }
+            release.await()
         }
 
-        vm.type("a #job b typed after the rename")
-        advanceTimeBy(200)
         vm.onUndo()
+        assertTrue(entered.isCompleted)
+        assertFalse("flush must wait until adoption", flushed)
+        assertFalse("input must be frozen across suspended restore", requireNotNull(vm.editorSession).canEdit)
+        release.complete(Unit)
         advanceUntilIdle()
         racer.cancel()
 
-        assertEquals("the restored body lost to a pending save", "a #work b", vm.buffer.text.toString())
-        assertEquals("the restored body lost to a pending save", "a #work b", notes.current("n1")?.body)
-        assertFalse(
-            "the pending save wrote the typing over the restore: ${writesTo("n1")}",
-            writesTo("n1").any { "typed after the rename" in it },
-        )
+        assertTrue(flushed)
+        assertTrue(requireNotNull(vm.editorSession).canEdit)
+        assertEquals("a #work b", vm.buffer.text.toString())
+        assertEquals("a #work b", notes.current("n1")?.body)
+        assertEquals(1, tags.restores.size)
     }
 
     /**
@@ -684,26 +1175,218 @@ class DuckShellAutosaveTest {
         assertEquals("mine", vm.buffer.text.toString())
     }
 
-    /**
-     * Undo is the one place adopt-when-clean is overridden, deliberately.
-     *
-     * A restore writes N exact previous bodies back; there is no transform to apply to a dirty
-     * buffer, and "put it back" is a command the user just pressed rather than something happening
-     * beside them. Pinned so the asymmetry cannot drift silently into consistency.
-     */
+    /** Plant UNDO_NO_EXPECTED_BODIES: pass null instead of pending.expectedBodies to UndoTagChange. */
     @Test
-    fun undoAdoptsEvenWhenTheBufferIsDirty() = withOpenNote(body = "a #work b") { vm ->
+    fun undoRejectsAutosavedTypingEvenAfterTheAffectedEditorCloses() = withOpenNote(body = "a #work b") { vm ->
+        notes.seed(note("n2", "unrelated"))
         vm.onRenameTag("work", "job")
         advanceUntilIdle()
         assertEquals("a #job b", vm.buffer.text.toString())
 
-        // Type after the rename, then undo. The restore puts the pre-rename body back, and it wins
-        // over the unsaved keystrokes — the one place adopt-when-clean is overridden.
-        vm.type("a #job b typed after the rename")
+        val typed = "a #job b typed after the rename"
+        vm.type(typed)
+        advanceUntilIdle()
+        assertEquals(typed, notes.current("n1")?.body)
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
         vm.onUndo()
         advanceUntilIdle()
 
-        assertEquals("a #work b", vm.buffer.text.toString())
+        assertTrue(tags.restores.isEmpty())
+        assertEquals(OperationFailure.Change, vm.state.value.operationFailure)
+        assertEquals(typed, notes.current("n1")?.body)
+        assertEquals("unrelated", vm.buffer.text.toString())
+    }
+
+    /** Same live conflict guard must protect delete-tag Undo, not only rename. */
+    @Test fun deleteTagUndoRejectsLaterTyping() = withOpenNote(body = "a #work b") { vm ->
+        vm.onDeleteTag("work")
+        advanceUntilIdle()
+        val typed = vm.buffer.text.toString() + " later paragraph"
+        vm.type(typed)
+        vm.onUndo()
+        advanceUntilIdle()
+        assertTrue(tags.restores.isEmpty())
+        assertEquals(OperationFailure.Change, vm.state.value.operationFailure)
+        assertEquals(typed, vm.buffer.text.toString())
+        assertEquals(typed, notes.current("n1")?.body)
+    }
+
+    /** Plant UNDO_ALL_SESSIONS: remove the snapshot.bodies membership filter from onUndo. */
+    @Test fun undoOfAnotherNotesTagChangePreservesUnrelatedUnsavedTyping() = withOpenNote(body = "unrelated") { vm ->
+        notes.seed(note("tagged", "tagged #work"), listOf("work"))
+        vm.onRenameTag("work", "job")
+        advanceUntilIdle()
+        vm.type("unrelated with new typing")
+        vm.onUndo()
+        runCurrent()
+        assertEquals("unrelated with new typing", vm.buffer.text.toString())
+        advanceUntilIdle()
+        assertEquals("unrelated with new typing", notes.current("n1")?.body)
+        assertEquals("tagged #work", notes.current("tagged")?.body)
+    }
+
+    /** Plant OBSERVER_QUEUED_BODY: use the captured emission instead of refreshing under writeLock. */
+    @Test fun queuedOldEmissionCannotReplaceCommittedBodyWhileNewEmissionIsDelayed() = withOpenNote(body = "initial #work") { vm ->
+        val committing = CompletableDeferred<Unit>()
+        val releaseCommit = CompletableDeferred<Unit>()
+        val observedNew = CompletableDeferred<Unit>()
+        val releaseNewEmission = CompletableDeferred<Unit>()
+        notes.beforeSave = { if (it.body.contains("#job")) { committing.complete(Unit); releaseCommit.await() } }
+        notes.beforeObservedUpdate = { if (it?.body?.contains("#job") == true) { observedNew.complete(Unit); releaseNewEmission.await() } }
+        vm.type("typed #work")
+        vm.onRenameTag("work", "job")
+        runCurrent()
+        assertTrue(committing.isCompleted)
+        releaseCommit.complete(Unit)
+        runCurrent()
+        assertTrue(observedNew.isCompleted)
+        assertEquals("typed #job", vm.buffer.text.toString())
+        vm.type("typed #job plus more")
+        releaseNewEmission.complete(Unit)
+        notes.beforeSave = null
+        advanceUntilIdle()
+        assertEquals("typed #job plus more", notes.current("n1")?.body)
+    }
+
+    /** Plant SELECT_CAPTURED_BODY: publish the row captured before acquiring the write lock. */
+    @Test fun incomingSelectionUsesTheBodyCommittedWhileItWaitedForTheWriteLock() = withOpenNote(body = "unrelated") { vm ->
+        notes.seed(note("n2", "incoming #work"), listOf("work"))
+        val captured = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val committing = CompletableDeferred<Unit>()
+        val releaseCommit = CompletableDeferred<Unit>()
+        val observed = CompletableDeferred<Unit>()
+        val releaseObserver = CompletableDeferred<Unit>()
+        var held = false
+        notes.beforeInitialObservation = { note ->
+            if (note?.id == "n2" && !held) {
+                held = true
+                captured.complete(Unit)
+                releaseRead.await()
+            } else if (note?.id == "n2" && vm.editorSession?.noteId == "n2") {
+                observed.complete(Unit)
+                releaseObserver.await()
+            }
+        }
+        notes.beforeSave = { note ->
+            if (note.id == "n2" && note.body.contains("#job")) {
+                committing.complete(Unit)
+                releaseCommit.await()
+            }
+        }
+        try {
+            vm.onSelectNote("n2")
+            runCurrent()
+            assertTrue(captured.isCompleted)
+            vm.onRenameTag("work", "job")
+            runCurrent()
+            assertTrue(committing.isCompleted)
+            releaseRead.complete(Unit)
+            runCurrent()
+            assertEquals("n1", vm.state.value.selectedNoteId)
+            releaseCommit.complete(Unit)
+            runCurrent()
+            assertTrue(observed.isCompleted)
+            assertEquals("incoming #job", vm.buffer.text.toString())
+            vm.type("incoming #job with more typing")
+            releaseObserver.complete(Unit)
+            notes.beforeSave = null
+            advanceUntilIdle()
+            assertEquals("incoming #job with more typing", notes.current("n2")?.body)
+        } finally {
+            notes.beforeInitialObservation = null
+            notes.beforeSave = null
+            releaseRead.complete(Unit)
+            releaseCommit.complete(Unit)
+            releaseObserver.complete(Unit)
+        }
+    }
+
+    /** Plant SELECT_MISSING_PUBLISHED: publish the earlier row when the locked reread is null. */
+    @Test fun vanishedIncomingSelectionPreservesTheEditorAndQueryAndReportsOpenFailure() = withOpenNote { vm ->
+        notes.seed(note("n2", "second"))
+        vm.onSearchChanged("hello")
+        advanceTimeBy(200)
+        runCurrent()
+        val origin = requireNotNull(vm.editorSession)
+        val captured = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        var held = false
+        notes.beforeInitialObservation = { note ->
+            if (note?.id == "n2" && !held) {
+                held = true
+                captured.complete(Unit)
+                releaseRead.await()
+            }
+        }
+        try {
+            vm.onSelectNote("n2")
+            runCurrent()
+            assertTrue(captured.isCompleted)
+            notes.hardDelete("n2")
+            releaseRead.complete(Unit)
+            runCurrent()
+            assertTrue(origin === vm.editorSession)
+            assertEquals("n1", vm.state.value.selectedNoteId)
+            assertEquals("hello", vm.state.value.search.query)
+            assertEquals(OperationFailure.Open, vm.state.value.operationFailure)
+            assertFalse(vm.state.value.saveFailed)
+        } finally {
+            notes.beforeInitialObservation = null
+            releaseRead.complete(Unit)
+        }
+    }
+
+    /** Plant SELECT_REVISION_AFTER_READ_MISSING: omit the revision check after the locked reread. */
+    @Test fun supersededIncomingRereadCannotReplaceNewerNavigationOrLoseOutgoingTyping() = withOpenNote { vm ->
+        notes.seed(note("n2", "second"))
+        val origin = requireNotNull(vm.editorSession)
+        vm.onEditorAttached(origin)
+        val reading = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        var initial = true
+        notes.beforeInitialObservation = { note ->
+            if (note?.id == "n2") {
+                if (initial) initial = false
+                else if (vm.editorSession === origin) {
+                    reading.complete(Unit)
+                    releaseRead.await()
+                }
+            }
+        }
+        try {
+            vm.onSelectNote("n2")
+            runCurrent()
+            assertTrue("incoming selection must reread before publication", reading.isCompleted)
+            assertTrue(origin === vm.editorSession)
+            vm.type("typing during incoming reread")
+            vm.onClearSelection()
+            runCurrent()
+            releaseRead.complete(Unit)
+            advanceUntilIdle()
+            assertEquals(null, vm.state.value.selectedNoteId)
+            assertEquals("typing during incoming reread", notes.current("n1")?.body)
+        } finally {
+            notes.beforeInitialObservation = null
+            releaseRead.complete(Unit)
+            vm.onEditorDetached(origin)
+        }
+    }
+
+    /** Plant STATUS_CURRENT_SESSION: use editorSession instead of the supplied originating session. */
+    @Test fun lateStatusCallbacksCannotChangeAnotherNote() = withOpenNote { vm ->
+        val outgoing = requireNotNull(vm.editorSession)
+        notes.seed(note("n2", "second"))
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        vm.onArchiveNote(outgoing)
+        vm.onTrashNote(outgoing)
+        vm.onRestoreNote(outgoing)
+        advanceUntilIdle()
+        assertFalse(requireNotNull(notes.current("n2")).isArchived)
+        assertFalse(requireNotNull(notes.current("n2")).isTrashed)
+        assertEquals("second", vm.buffer.text.toString())
     }
 
     // --- id/text atomicity ---------------------------------------------------
@@ -883,10 +1566,7 @@ class DuckShellAutosaveTest {
      * **`oweFullWrite` is per-note.** Left standing across a note switch, the next note's first
      * flush bypasses its own `lastWritten` gate and writes a note the user only opened.
      *
-     * Reached through [DuckShellViewModel.onFilter], which clears the selection **without** flushing
-     * — `onSelectNote` flushes first and so pays the debt on the way out, which is exactly why the
-     * leak is invisible from the obvious path. Same cascade shape as keying the autosave loop on
-     * `selectedId` instead of `loadedId`.
+     * Filter departure must pay the outgoing debt without making the next clean note owe a write.
      */
     @Test
     fun anOwedTagWriteDoesNotFollowTheUserToTheNextNote() = withOpenNote(body = "") { vm ->
@@ -896,8 +1576,9 @@ class DuckShellAutosaveTest {
         advanceUntilIdle()
         assertTrue("precondition: the write was suppressed", notes.savedTags["n1"].isNullOrEmpty())
 
-        vm.onFilter(ShellFilter.All) // clears the selection, and does not flush
+        vm.onFilter(ShellFilter.All)
         advanceUntilIdle()
+        assertEquals(listOf("work"), notes.savedTags["n1"])
         val baseline = notes.current("n2")?.modifiedAt ?: 0L
         vm.onSelectNote("n2")
         advanceUntilIdle()
@@ -1131,5 +1812,740 @@ class DuckShellAutosaveTest {
 
         val opened = vm.state.value.selectedNoteId
         assertEquals("Pond", notes.current(requireNotNull(opened))?.title)
+    }
+
+    /** Plant PICKER_KEEP_CANCELLED_OWNER: stop clearing pickerSession on a null result. */
+    @Test fun pickerCancellationAndResultConsumeTheirOwnerExactlyOnce() = withOpenNote { vm ->
+        val origin = requireNotNull(vm.editorSession)
+        assertTrue(vm.onImagePickerOpened(origin))
+        assertFalse("a pending launch cannot be superseded", vm.onImagePickerOpened(origin))
+        vm.onImagePickerResult(null, "image/png")
+        vm.onImagePickerResult("content://cancelled", "image/png")
+        advanceUntilIdle()
+        assertTrue(attachments.all().isEmpty())
+        assertTrue(vm.onImagePickerOpened(origin))
+        vm.onImagePickerResult("content://picked", "image/png")
+        advanceUntilIdle()
+        assertEquals("n1", attachments.all().single().noteId)
+        vm.onImagePickerResult("content://duplicate", "image/png")
+        advanceUntilIdle()
+        assertEquals(1, attachments.all().size)
+    }
+
+    /** Plant PICKER_CURRENT_SELECTION: pass editorSession instead of the captured origin to onAttachImages. */
+    @Test fun pickerResultAfterNavigationNeverAttachesToTheNewSelection() = withOpenNote { vm ->
+        val origin = requireNotNull(vm.editorSession)
+        assertTrue(vm.onImagePickerOpened(origin))
+        notes.seed(note("n2", "second"))
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertTrue(origin.closed)
+        assertFalse(vm.onImagePickerOpened(requireNotNull(vm.editorSession)))
+        vm.onImagePickerResult("content://old-owner", "image/png")
+        advanceUntilIdle()
+        assertTrue(attachments.all().isEmpty())
+        assertEquals("hello", notes.current("n1")?.body)
+        assertEquals("second", notes.current("n2")?.body)
+        assertTrue(vm.onImagePickerOpened(requireNotNull(vm.editorSession)))
+        vm.onImagePickerResult("content://new-owner", "image/png")
+        advanceUntilIdle()
+        assertEquals("n2", attachments.all().single().noteId)
+    }
+
+    /** Plant SESSION_REUSE_BUFFER: publish the outgoing TextFieldState as the incoming session. */
+    @Test fun aDetachedOutgoingEditorSavesLateTypingOnlyToItsOwnNote() = withOpenNote { vm ->
+        notes.seed(note("n2", "second"))
+        val outgoing = requireNotNull(vm.editorSession)
+        vm.onEditorAttached(outgoing)
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        assertTrue(outgoing.buffer !== vm.buffer)
+        outgoing.buffer.setTextAndPlaceCursorAtEnd("late input for first")
+        Snapshot.sendApplyNotifications()
+        vm.onEditorDetached(outgoing)
+        advanceUntilIdle()
+        assertEquals("late input for first", notes.current("n1")?.body)
+        assertEquals("second", notes.current("n2")?.body)
+        assertTrue(outgoing.closed)
+        vm.onAttachImages(outgoing, listOf("content://late" to "image/png"))
+        advanceUntilIdle()
+        assertTrue(attachments.all().isEmpty())
+    }
+
+    /** Plant RETIRED_DROP_FAILURE: close the retired session before flush. */
+    @Test fun aFailedFinalOutgoingSaveRetainsTextAndNoteSpecificRetry() = withOpenNote { vm ->
+        notes.seed(note("n2", "second"))
+        val outgoing = requireNotNull(vm.editorSession)
+        vm.onEditorAttached(outgoing)
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        outgoing.buffer.setTextAndPlaceCursorAtEnd("recover outgoing")
+        Snapshot.sendApplyNotifications()
+        notes.beforeSave = { if (it.id == "n1") throw java.io.IOException("controlled") }
+        vm.onEditorDetached(outgoing)
+        advanceUntilIdle()
+        assertTrue(vm.state.value.saveFailed)
+        assertFalse(outgoing.closed)
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("recover outgoing", notes.current("n1")?.body)
+        assertEquals("second", notes.current("n2")?.body)
+        assertFalse(vm.state.value.saveFailed)
+        assertTrue(outgoing.closed)
+    }
+
+    /** Plant CREATE_NO_BUSY_GUARD: remove the synchronous creating check. */
+    @Test fun repeatedNewNoteTapsCreateOneBlankAndRetryNeverRecreatesIt() = withOpenNote { vm ->
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = { if (it.id != "n1") { entered.complete(Unit); release.await() } }
+        vm.onSearchChanged("hello")
+        advanceUntilIdle()
+        vm.onNewNote()
+        assertTrue(entered.isCompleted)
+        repeat(3) { vm.onNewNote() }
+        vm.type("typing during creation")
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(2, notes.all().size)
+        val created = notes.all().single { it.id != "n1" }
+        assertEquals("", created.body)
+        assertEquals("Untitled", created.title)
+        assertEquals(created.id, vm.state.value.selectedNoteId)
+        assertEquals("typing during creation", notes.current("n1")?.body)
+        assertEquals("", vm.state.value.search.query)
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals(2, notes.all().size)
+    }
+
+    @Test fun creationFailurePreservesContextAndDoesNotReplayFromRetry() = withOpenNote { vm ->
+        vm.onSearchChanged("hello")
+        advanceUntilIdle()
+        notes.beforeSave = { if (it.id != "n1") throw java.io.IOException("controlled create failure") }
+        vm.onNewNote()
+        advanceUntilIdle()
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals("hello", vm.state.value.search.query)
+        assertEquals(OperationFailure.Create, vm.state.value.operationFailure)
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals(1, notes.all().size)
+    }
+
+    /** Plant CREATE_FORGET_COMMITTED: stop retaining the UUID returned by the blank insertion. */
+    @Test fun postInsertionSaveFailureRetryOpensTheSameBlankWithoutCreatingAgain() = assertPostInsertionFailure(retry = true)
+
+    @Test fun postInsertionSaveFailureNewFinishesTheSameCreation() = assertPostInsertionFailure(retry = false)
+
+    private fun assertPostInsertionFailure(retry: Boolean) = withOpenNote { vm ->
+        vm.onSearchChanged("hello")
+        advanceUntilIdle()
+        val inserted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = {
+            if (it.id == "n1") throw java.io.IOException("controlled outgoing failure")
+            inserted.complete(Unit)
+            release.await()
+        }
+        vm.onNewNote()
+        assertTrue(inserted.isCompleted)
+        vm.type("late outgoing words")
+        release.complete(Unit)
+        advanceUntilIdle()
+        val created = notes.all().single { it.id != "n1" }
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals("hello", vm.state.value.search.query)
+        assertTrue(vm.state.value.saveFailed)
+        notes.beforeSave = null
+        if (retry) vm.onRetryNavigation() else vm.onNewNote()
+        advanceUntilIdle()
+        assertEquals(2, notes.all().size)
+        assertEquals(created.id, vm.state.value.selectedNoteId)
+        assertEquals("late outgoing words", notes.current("n1")?.body)
+        assertEquals("", vm.state.value.search.query)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Plant OPEN_AS_SAVE_FAILURE: set failedSession to the origin for an action exception. */
+    @Test fun wikiCreationFailureIsAnOperationFailureAndTheNextTapCanSucceed() = withOpenNote { vm ->
+        notes.beforeSave = { if (it.id != "n1") throw java.io.IOException("controlled target creation failure") }
+        vm.onOpenWikiLink("Pond")
+        advanceUntilIdle()
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertFalse("target failure is not a source save failure", vm.state.value.saveFailed)
+        assertEquals(OperationFailure.Open, vm.state.value.operationFailure)
+        notes.beforeSave = null
+        vm.onOpenWikiLink("Pond")
+        advanceUntilIdle()
+        assertEquals("Pond", notes.current(requireNotNull(vm.state.value.selectedNoteId))?.body)
+        assertEquals(null, vm.state.value.operationFailure)
+    }
+
+    @Test fun supersededInsertionKeepsSelectionAndManualSelectionConsumesItsCommittedUuid() = withOpenNote { vm ->
+        notes.seed(note("n2", "second"))
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = { if (it.id !in setOf("n1", "n2")) release.await() }
+        vm.onNewNote()
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        release.complete(Unit)
+        advanceUntilIdle()
+        val created = notes.all().single { it.id !in setOf("n1", "n2") }
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        vm.onSelectNote(created.id)
+        advanceUntilIdle()
+        assertEquals(3, notes.all().size)
+        assertEquals(created.id, vm.state.value.selectedNoteId)
+        vm.onNewNote()
+        advanceUntilIdle()
+        assertEquals(4, notes.all().size)
+        assertNotEquals(created.id, vm.state.value.selectedNoteId)
+    }
+
+    @Test fun trashedPendingRetryPreservesContextAndNeverRecreatesOrRestores() = withOpenNote { vm ->
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = {
+            if (it.id == "n1") throw java.io.IOException("controlled outgoing failure")
+            release.await()
+        }
+        vm.onSearchChanged("hello")
+        advanceUntilIdle()
+        vm.onNewNote()
+        vm.type("late outgoing words")
+        release.complete(Unit)
+        advanceUntilIdle()
+        val created = notes.all().single { it.id != "n1" }
+        notes.seed(created.copy(isTrashed = true))
+        notes.beforeSave = null
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals("hello", vm.state.value.search.query)
+        assertTrue(requireNotNull(notes.current(created.id)).isTrashed)
+        assertEquals(2, notes.all().size)
+        vm.onNewNote()
+        advanceUntilIdle()
+        val fresh = requireNotNull(vm.state.value.selectedNoteId)
+        assertNotEquals(created.id, fresh)
+        assertEquals(3, notes.all().size)
+    }
+
+    /** Plant CREATION_PENDING_NEW_TRASH_ALLOWED: allow New to reopen a trashed pending UUID. */
+    @Test fun newAgainstATrashedPendingCreationPreservesContextBeforeANewExplicitAttempt() = withOpenNote { vm ->
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = {
+            if (it.id == "n1") throw java.io.IOException("controlled outgoing failure")
+            release.await()
+        }
+        vm.onSearchChanged("hello")
+        advanceUntilIdle()
+        vm.onNewNote()
+        vm.type("late outgoing words")
+        release.complete(Unit)
+        advanceUntilIdle()
+        val created = notes.all().single { it.id != "n1" }
+        notes.seed(created.copy(isTrashed = true))
+        notes.beforeSave = null
+        vm.onNewNote()
+        advanceUntilIdle()
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals("hello", vm.state.value.search.query)
+        assertTrue(requireNotNull(notes.current(created.id)).isTrashed)
+        assertEquals(2, notes.all().size)
+        assertEquals(OperationFailure.Create, vm.state.value.operationFailure)
+        vm.onNewNote()
+        advanceUntilIdle()
+        assertNotEquals(created.id, vm.state.value.selectedNoteId)
+        assertEquals(3, notes.all().size)
+    }
+
+    /** Plant SEARCH_DELAY_201: change the production delay literal from200 to201. */
+    @Test fun basicSearchWaitsExactly200AndIncludesArchiveButExcludesTrash() = withOpenNote { vm ->
+        notes.seed(note("archive", "needle archived").copy(isArchived = true))
+        notes.seed(note("trash", "needle trashed").copy(isTrashed = true))
+        vm.onFilter(ShellFilter.Archive)
+        advanceUntilIdle()
+        vm.onSearchChanged("needle")
+        advanceTimeBy(199)
+        runCurrent()
+        assertEquals(SearchPhase.Pending, vm.state.value.search.phase)
+        assertTrue(searchCalls.isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(listOf("archive"), vm.state.value.notes.map { it.id })
+        assertEquals(SearchPhase.Results, vm.state.value.search.phase)
+        vm.onSearchChanged("")
+        runCurrent()
+        assertEquals(ShellFilter.Archive, vm.state.value.filter)
+        assertEquals(listOf("archive"), vm.state.value.notes.map { it.id })
+    }
+
+    /** Plant SEARCH_STALE_PUBLISH: omit the revision comparison before publishing results. */
+    @Test fun supersededSearchCancelsImmediatelyAndCannotPublishALateResult() = withOpenNote { vm ->
+        val release = CompletableDeferred<Unit>()
+        val cancelled = CompletableDeferred<Unit>()
+        searchHandler = { query ->
+            if (query.text == "first") {
+                try { release.await() } catch (_: CancellationException) {
+                    cancelled.complete(Unit)
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() }
+                }
+                listOf(note("stale", "first"))
+            } else listOf(note("fresh", "second"))
+        }
+        vm.onSearchChanged("first")
+        advanceTimeBy(200)
+        runCurrent()
+        vm.onSearchChanged("second")
+        runCurrent()
+        assertTrue(cancelled.isCompleted)
+        assertEquals(SearchPhase.Pending, vm.state.value.search.phase)
+        release.complete(Unit)
+        runCurrent()
+        assertEquals("second", vm.state.value.search.query)
+        assertEquals(SearchPhase.Pending, vm.state.value.search.phase)
+        assertTrue("a cancelled query cannot flash stale results during the next debounce", vm.state.value.notes.isEmpty())
+        advanceUntilIdle()
+        assertEquals("second", vm.state.value.search.query)
+        assertEquals(listOf("fresh"), vm.state.value.notes.map { it.id })
+    }
+
+    @Test fun searchFailureRefreshAndFailedOutgoingNavigationKeepTheirOwnState() = withOpenNote { vm ->
+        searchHandler = { throw java.io.IOException("controlled search failure") }
+        vm.onSearchChanged("hello")
+        advanceUntilIdle()
+        assertEquals(SearchPhase.Failed, vm.state.value.search.phase)
+        assertFalse(vm.state.value.saveFailed)
+        searchHandler = { notes.all().filterNot { it.isTrashed } }
+        vm.onRetrySearch()
+        advanceUntilIdle()
+        assertEquals(SearchPhase.Results, vm.state.value.search.phase)
+        notes.seed(note("n2", "changed library"))
+        advanceUntilIdle()
+        assertEquals(2, vm.state.value.notes.size)
+        vm.type("unsaved")
+        notes.beforeSave = { throw java.io.IOException("controlled outgoing failure") }
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertEquals("hello", vm.state.value.search.query)
+        assertEquals("unsaved", vm.buffer.text.toString())
+        assertTrue(vm.state.value.saveFailed)
+    }
+
+    /** STATUS_RETRY_KEEPS_OLD_SELECTION also invalidates navigation that fails after status entry. */
+    @Test fun failedPendingNavigationCannotRepopulateRetryAfterNewerTrash() = withOpenNote { vm ->
+        notes.seed(note("n2", "other note"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val origin = requireNotNull(vm.editorSession)
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.id == "n1") {
+                attempts++
+                if (attempts == 1) { entered.complete(Unit); release.await() }
+                throw java.io.IOException("controlled pending-navigation and status flush failure")
+            }
+        }
+        vm.type("pending body for both commands")
+        vm.onSelectNote("n2")
+        assertTrue("the earlier navigation must be suspended in its real body write", entered.isCompleted)
+        vm.onTrashNote(origin)
+        release.complete(Unit)
+        runCurrent()
+        assertEquals("both commands must attempt their own body flush", 2, attempts)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertTrue(vm.state.value.saveFailed)
+        assertTrue(origin.canEdit)
+        assertFalse(requireNotNull(notes.current("n1")).isTrashed)
+        assertEquals("hello", notes.current("n1")?.body)
+        notes.beforeSave = null
+        vm.type("latest after both failures")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("Retry after a newer failed status must not replay an older pending navigation", "n1", vm.state.value.selectedNoteId)
+        assertEquals("latest after both failures", notes.current("n1")?.body)
+        assertFalse(requireNotNull(notes.current("n1")).isTrashed)
+        assertEquals("other note", notes.current("n2")?.body)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** The newest valid command wins even when the older navigation's outgoing save succeeds. */
+    @Test fun newerArchiveSupersedesAnOlderPendingSuccessfulSelection() = withOpenNote { vm ->
+        notes.seed(note("n2", "other note"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var writes = 0
+        notes.beforeSave = {
+            if (it.id == "n1") {
+                writes++
+                if (writes == 1) { entered.complete(Unit); release.await() }
+            }
+        }
+        vm.type("accepted before newer Archive")
+        vm.onSelectNote("n2")
+        assertTrue(entered.isCompleted)
+        vm.onArchiveNote()
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertTrue("the newer Archive must actually commit", requireNotNull(notes.current("n1")).isArchived)
+        assertEquals("accepted before newer Archive", notes.current("n1")?.body)
+        assertEquals("a newer status command must supersede older pending navigation", "n1", vm.state.value.selectedNoteId)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Plant STATUS_FAILURE_CANCELS_NEWER_NAVIGATION: invalidate navigation only after status fails. */
+    @Test fun newerSelectionDuringAnOlderFailedStatusStillOpensItsTarget() = withOpenNote { vm ->
+        notes.seed(note("n2", "other note"))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.id == "n1") {
+                attempts++
+                if (attempts == 1) {
+                    entered.complete(Unit)
+                    release.await()
+                    throw java.io.IOException("controlled one-shot older status body failure")
+                }
+            }
+        }
+        vm.type("accepted while status is pending")
+        vm.onArchiveNote()
+        assertTrue("the older status must really hold its body write", entered.isCompleted)
+        vm.onSelectNote("n2")
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("status failure followed by newer navigation must retry the body once", 2, attempts)
+        assertEquals("accepted while status is pending", notes.current("n1")?.body)
+        assertFalse(requireNotNull(notes.current("n1")).isArchived)
+        assertEquals("an older failed status must not cancel newer explicit navigation", "n2", vm.state.value.selectedNoteId)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** A stale callback cannot supersede a valid pending navigation of the current session. */
+    @Test fun staleStatusCallbackPreservesTheCurrentPendingSelection() = withOpenNote { vm ->
+        val stale = requireNotNull(vm.editorSession)
+        notes.seed(note("n2", "other note"))
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertTrue(stale !== vm.editorSession)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = {
+            if (it.id == "n2") { entered.complete(Unit); release.await() }
+        }
+        vm.type("accepted current note before navigation")
+        vm.onSelectNote("n1")
+        assertTrue(entered.isCompleted)
+        vm.onArchiveNote(stale)
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals("a stale status callback must preserve the current pending navigation", "n1", vm.state.value.selectedNoteId)
+        assertEquals("accepted current note before navigation", notes.current("n2")?.body)
+        assertFalse(requireNotNull(notes.current("n1")).isArchived)
+    }
+
+    /** Plant PRIVATE_FLUSH_FAILURE_CLASSIFICATION_INVERTED: treat cancellation as the save failure. */
+    @Test fun failedArchiveFlushPublishesNoteSpecificRetryWithoutReplayingArchive() = assertStatusFlushFailureRecovers(
+        action = { it.onArchiveNote() },
+        assertApplied = { assertTrue(it.isArchived); assertFalse(it.isTrashed) },
+    )
+
+    @Test fun failedTrashFlushPublishesNoteSpecificRetryWithoutReplayingTrash() = assertStatusFlushFailureRecovers(
+        action = { it.onTrashNote() },
+        assertApplied = { assertTrue(it.isTrashed); assertFalse(it.isArchived) },
+    )
+
+    private fun assertStatusFlushFailureRecovers(
+        action: (DuckShellViewModel) -> Unit,
+        assertApplied: (Note) -> Unit,
+    ) = withOpenNote { vm ->
+        val origin = requireNotNull(vm.editorSession)
+        val started = testScheduler.currentTime
+        var attempts = 0
+        notes.beforeSave = { attempts++; throw java.io.IOException("controlled status body flush failure") }
+        vm.type("pending status text")
+        action(vm)
+        runCurrent()
+        assertEquals("status must attempt its own flush before autosave", 1, attempts)
+        assertEquals(started, testScheduler.currentTime)
+        assertTrue("failed status body flush must publish note-specific save Retry immediately", vm.state.value.saveFailed)
+        assertEquals("n1", vm.state.value.failedNoteTitle)
+        assertEquals(OperationFailure.Change, vm.state.value.operationFailure)
+        assertTrue(origin === vm.editorSession)
+        assertTrue("a rejected status change must restore editing", origin.canEdit)
+        assertEquals("hello", notes.current("n1")?.body)
+        assertEquals("pending status text", origin.buffer.text.toString())
+        assertFalse(requireNotNull(notes.current("n1")).isArchived)
+        assertFalse(requireNotNull(notes.current("n1")).isTrashed)
+        advanceTimeBy(399)
+        runCurrent()
+        assertEquals("autosave must not vouch for the status failure warning", 1, attempts)
+        assertTrue("the originating save warning must persist before autosave", vm.state.value.saveFailed)
+        assertEquals("n1", vm.state.value.failedNoteTitle)
+        notes.beforeSave = null
+        vm.type("latest accepted status text")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("latest accepted status text", notes.current("n1")?.body)
+        assertEquals("latest accepted status text", origin.buffer.text.toString())
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        assertFalse(vm.state.value.saveFailed)
+        assertEquals(null, vm.state.value.failedNoteTitle)
+        assertFalse("Retry must not replay Archive", requireNotNull(notes.current("n1")).isArchived)
+        assertFalse("Retry must not replay Trash", requireNotNull(notes.current("n1")).isTrashed)
+        assertEquals(listOf("latest accepted status text"), writesTo("n1"))
+        action(vm)
+        advanceUntilIdle()
+        assertApplied(requireNotNull(notes.current("n1")))
+        assertEquals("an explicit repeat must commit exactly one status change", 1,
+            notes.writes.count { it.id == "n1" && (it.isArchived || it.isTrashed) })
+    }
+
+    /** Plant STATUS_RETRY_KEEPS_OLD_SELECTION: omit clearing Retry after validating the status owner. */
+    @Test fun failedStatusFlushRetiresAnOlderFailedSelection() = withOpenNote { vm ->
+        notes.seed(note("n2", "other note"))
+        notes.beforeSave = { throw java.io.IOException("controlled outgoing save failure") }
+        vm.type("pending status after failed selection")
+        vm.onSelectNote("n2")
+        runCurrent()
+        assertTrue("the earlier selection must really be waiting for its failed save", vm.state.value.saveFailed)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+        vm.onArchiveNote()
+        runCurrent()
+        assertEquals(OperationFailure.Change, vm.state.value.operationFailure)
+        notes.beforeSave = null
+        vm.type("latest status recovery text")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("status Retry must retire an older failed selection", "n1", vm.state.value.selectedNoteId)
+        assertEquals("latest status recovery text", notes.current("n1")?.body)
+        assertEquals("other note", notes.current("n2")?.body)
+        assertFalse(requireNotNull(notes.current("n1")).isArchived)
+        assertFalse(vm.state.value.saveFailed)
+    }
+
+    /** Plant STATUS_RETRY_CLEARED_BEFORE_OWNER_CHECK: let a stale callback erase the valid current Retry. */
+    @Test fun staleStatusCallbackPreservesTheCurrentFailedSelectionRetry() = withOpenNote { vm ->
+        val stale = requireNotNull(vm.editorSession)
+        notes.seed(note("n2", "other note"))
+        vm.onSelectNote("n2")
+        advanceUntilIdle()
+        assertTrue(stale !== vm.editorSession)
+        notes.beforeSave = { throw java.io.IOException("controlled current outgoing failure") }
+        vm.type("pending current note")
+        vm.onSelectNote("n1")
+        runCurrent()
+        assertTrue(vm.state.value.saveFailed)
+        assertEquals("n2", vm.state.value.selectedNoteId)
+        vm.onArchiveNote(stale)
+        notes.beforeSave = null
+        vm.type("latest current note")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("a stale status callback must preserve the current selection Retry", "n1", vm.state.value.selectedNoteId)
+        assertEquals("latest current note", notes.current("n2")?.body)
+        assertFalse(requireNotNull(notes.current("n1")).isArchived)
+    }
+
+    /** Same private-flush classification plant: a cancelled operation must not publish a save failure. */
+    @Test fun cancelledTrashPreflushRestoresEditingWithoutSaveWarning() = withOpenNote { vm ->
+        val origin = requireNotNull(vm.editorSession)
+        var operationJob: Job? = null
+        var attempts = 0
+        notes.beforeSave = {
+            attempts++
+            operationJob = currentCoroutineContext()[Job]
+            throw CancellationException("controlled status body flush cancellation")
+        }
+        vm.type("pending cancelled trash text")
+        vm.onTrashNote(origin)
+        runCurrent()
+        assertEquals(1, attempts)
+        assertTrue("cancelled status flush must propagate cancellation", operationJob?.isCancelled == true)
+        assertTrue("cancelled Trash preflush must restore editing", origin.canEdit)
+        assertFalse("cancelled status body flush must not publish a save warning", vm.state.value.saveFailed)
+        assertEquals(null, vm.state.value.failedNoteTitle)
+        assertEquals(null, vm.state.value.operationFailure)
+        assertEquals("hello", notes.current("n1")?.body)
+        assertEquals("pending cancelled trash text", origin.buffer.text.toString())
+        assertFalse(requireNotNull(notes.current("n1")).isTrashed)
+        notes.beforeSave = null
+        vm.type("latest after cancellation")
+        vm.onTrashNote(origin)
+        advanceUntilIdle()
+        assertEquals("latest after cancellation", notes.current("n1")?.body)
+        assertTrue(requireNotNull(notes.current("n1")).isTrashed)
+    }
+
+    /** Private-flush classification plant also covers accepted edits after the status transaction. */
+    @Test fun failedPostArchiveFlushRetainsLatestTextAndRetryPreservesCommittedArchive() = withOpenNote { vm ->
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val origin = requireNotNull(vm.editorSession)
+        val started = testScheduler.currentTime
+        var lateAttempts = 0
+        notes.beforeSave = {
+            if (it.isArchived && it.body == "first accepted body") {
+                entered.complete(Unit)
+                release.await()
+            }
+            if (it.body == "latest during archive") {
+                lateAttempts++
+                throw java.io.IOException("controlled post-status body flush failure")
+            }
+        }
+        vm.type("first accepted body")
+        vm.onArchiveNote(origin)
+        assertTrue("the status transaction must really suspend after its first body flush", entered.isCompleted)
+        assertEquals("first accepted body", notes.current("n1")?.body)
+        assertFalse(requireNotNull(notes.current("n1")).isArchived)
+        assertTrue(origin.canEdit)
+        vm.type("latest during archive")
+        release.complete(Unit)
+        runCurrent()
+        assertEquals(started, testScheduler.currentTime)
+        assertEquals(1, lateAttempts)
+        assertTrue("the Archive transaction must really commit before the failed second flush", requireNotNull(notes.current("n1")).isArchived)
+        assertEquals("first accepted body", notes.current("n1")?.body)
+        assertEquals("latest during archive", origin.buffer.text.toString())
+        assertTrue("failed post-status flush must publish note-specific save Retry", vm.state.value.saveFailed)
+        assertEquals("first accepted body", vm.state.value.failedNoteTitle)
+        assertTrue(origin.canEdit)
+        notes.beforeSave = null
+        vm.type("latest accepted after Archive")
+        vm.onRetryNavigation()
+        advanceUntilIdle()
+        assertEquals("latest accepted after Archive", notes.current("n1")?.body)
+        assertEquals("latest accepted after Archive", origin.buffer.text.toString())
+        assertTrue("Retry must preserve the already committed Archive rather than toggling it", requireNotNull(notes.current("n1")).isArchived)
+        assertFalse(vm.state.value.saveFailed)
+        assertEquals("n1", vm.state.value.selectedNoteId)
+    }
+
+    /** Plant STATUS_FAILURE_STAYS_FROZEN: keep the transient freeze after queued failures. */
+    @Test fun queuedFailedTrashRequestsRestoreEditablePersistedState() = assertQueuedTrashFailureRecovers(java.io.IOException("controlled trash failure"))
+
+    /** Plant STATUS_CANCELLATION_STAYS_FROZEN: keep the transient freeze on cancellation. */
+    @Test fun queuedCancelledTrashRequestsRestoreEditablePersistedState() = assertQueuedTrashFailureRecovers(CancellationException("controlled trash cancellation"))
+
+    private fun assertQueuedTrashFailureRecovers(failure: Exception) = withOpenNote { vm ->
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.isTrashed) {
+                attempts++
+                if (attempts == 1) { entered.complete(Unit); release.await() }
+                throw failure
+            }
+        }
+        val session = requireNotNull(vm.editorSession)
+        vm.onTrashNote(session)
+        assertTrue(entered.isCompleted)
+        assertFalse(session.canEdit)
+        vm.onTrashNote(session)
+        release.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(2, attempts)
+        assertFalse(requireNotNull(notes.current("n1")).isTrashed)
+        assertTrue("Failed queued Trash must restore editing from persisted note state", session.canEdit)
+        notes.beforeSave = null
+        vm.type("editable after failed trash")
+        vm.flush()
+        assertEquals("editable after failed trash", notes.current("n1")?.body)
+        vm.onTrashNote(session)
+        advanceUntilIdle()
+        assertTrue(requireNotNull(notes.current("n1")).isTrashed)
+        assertFalse(session.canEdit)
+    }
+
+    /** Plant STATUS_QUEUED_TRASH_NOT_FROZEN: omit the freeze after acquiring the writer lock. */
+    @Test fun queuedTrashRefreezesInputAfterThePreviousRequestFails() = withOpenNote { vm ->
+        val releaseFirst = CompletableDeferred<Unit>()
+        val secondEntered = CompletableDeferred<Unit>()
+        val releaseSecond = CompletableDeferred<Unit>()
+        var attempts = 0
+        notes.beforeSave = {
+            if (it.isTrashed) {
+                attempts++
+                if (attempts == 1) {
+                    releaseFirst.await()
+                    throw java.io.IOException("controlled first trash failure")
+                }
+                secondEntered.complete(Unit)
+                releaseSecond.await()
+            }
+        }
+        val session = requireNotNull(vm.editorSession)
+        assertTrue(session.canEdit)
+        vm.onTrashNote(session)
+        assertEquals(1, attempts)
+        vm.onTrashNote(session)
+        releaseFirst.complete(Unit)
+        assertTrue(secondEntered.isCompleted)
+        assertFalse(requireNotNull(notes.current("n1")).isTrashed)
+        assertFalse("Queued Trash must freeze input throughout its suspended write", session.canEdit)
+        releaseSecond.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(2, attempts)
+        assertTrue(requireNotNull(notes.current("n1")).isTrashed)
+        assertFalse(session.canEdit)
+    }
+
+    @Test fun restorePreservesArchiveAndTrashPreventsSessionMutations() = withOpenNote { vm ->
+        vm.onArchiveNote()
+        advanceUntilIdle()
+        assertTrue(notes.current("n1")?.isArchived == true)
+        vm.onTrashNote()
+        advanceUntilIdle()
+        assertTrue(vm.state.value.selectedNoteTrashed)
+        assertFalse(requireNotNull(vm.editorSession).canEdit)
+        vm.onAttachImage("content://trash", "image/png")
+        advanceUntilIdle()
+        assertTrue(attachments.all().isEmpty())
+        vm.onRestoreNote()
+        advanceUntilIdle()
+        assertFalse(vm.state.value.selectedNoteTrashed)
+        assertTrue(vm.state.value.selectedNoteArchived)
+        assertTrue(requireNotNull(vm.editorSession).canEdit)
+    }
+
+    /** Plant ATTACHMENT_STALE_BODY: read the body before copying instead of invoking the live provider. */
+    @Test fun typingDuringImageCopyAndCommitStaysInTheOriginatingSession() = withOpenNote { vm ->
+        val copying = CompletableDeferred<Unit>()
+        val releaseCopy = CompletableDeferred<Unit>()
+        val committing = CompletableDeferred<Unit>()
+        val releaseCommit = CompletableDeferred<Unit>()
+        attachStorage.beforeStore = { copying.complete(Unit); releaseCopy.await() }
+        var attachmentTransactionBody = ""
+        notes.beforeSave = {
+            if (app.duck.notes.domain.markdown.MarkdownScanner.attachmentIdsIn(it.body).isNotEmpty()) {
+                attachmentTransactionBody = it.body
+                committing.complete(Unit)
+                releaseCommit.await()
+            }
+        }
+        vm.onAttachImage("content://picked", "image/png")
+        assertTrue(copying.isCompleted)
+        vm.type("typed during copy")
+        releaseCopy.complete(Unit)
+        assertTrue(committing.isCompleted)
+        assertTrue("the transaction itself must include typing during copy", attachmentTransactionBody.startsWith("typed during copy"))
+        vm.type("typed during commit")
+        releaseCommit.complete(Unit)
+        advanceUntilIdle()
+        vm.flush()
+        val saved = requireNotNull(notes.current("n1"))
+        assertTrue(saved.body.startsWith("typed during commit"))
+        assertEquals(attachments.all().map { it.id }.toSet(), app.duck.notes.domain.markdown.MarkdownScanner.attachmentIdsIn(saved.body))
+        assertEquals(1, attachments.all().size)
     }
 }

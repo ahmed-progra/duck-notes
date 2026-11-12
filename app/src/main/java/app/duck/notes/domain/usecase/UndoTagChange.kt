@@ -11,9 +11,11 @@ import javax.inject.Inject
  * convenience: an inverse *rename* would silently fail to undo a merge, since two tags that became
  * one carry no record of which notes came from where. Bodies do carry it, and `note_tags` is derived
  * from bodies, so writing them back re-splits the tags exactly.
+ * Supplying expected post-operation bodies makes the repository reject later edits atomically.
  */
 class UndoTagChange @Inject constructor(
     private val tags: TagRepository,
 ) {
-    suspend operator fun invoke(snapshot: BodySnapshot) = tags.restore(snapshot)
+    suspend operator fun invoke(snapshot: BodySnapshot, expectedBodies: Map<String, String>? = null) =
+        tags.restore(snapshot, expectedBodies)
 }

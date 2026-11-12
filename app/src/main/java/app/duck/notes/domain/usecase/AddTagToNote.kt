@@ -54,15 +54,22 @@ class AddTagToNote @Inject constructor(
 ) {
     suspend operator fun invoke(noteId: String, name: String): AddTagResult {
         val note = notes.getNote(noteId) ?: return AddTagResult.NotWritable
+        if (note.isTrashed) return AddTagResult.NotWritable
         if (name in parseTags(note.body)) return AddTagResult.AlreadyPresent
 
-        val trimmed = note.body.trimEnd()
-        val token = TagScanner.token(name)
-        val next = if (trimmed.isEmpty()) token else "$trimmed\n$token"
+        val next = append(note.body, name)
 
         if (name !in parseTags(next)) return AddTagResult.NotWritable
 
         saveNote(noteId, next)
         return AddTagResult.Added
+    }
+    companion object {
+        fun append(body: String, name: String): String {
+            if (name in ParseTags()(body)) return body
+            val trimmed = body.trimEnd()
+            val token = TagScanner.token(name)
+            return if (trimmed.isEmpty()) token else "$trimmed\n$token"
+        }
     }
 }

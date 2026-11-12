@@ -23,7 +23,7 @@ import org.junit.Test
 class DeleteAttachmentTest {
 
     private val notes = FakeNoteRepository()
-    private val attachments = FakeAttachmentRepository()
+    private val attachments = FakeAttachmentRepository().also { notes.attachments = it }
     private val storage = FakeAttachmentStorage()
     private val clock = FixedClock(7_000L)
     private val parseTags = ParseTags()
@@ -63,5 +63,24 @@ class DeleteAttachmentTest {
         delete("nope")
         assertEquals("note", bodyOf("n1"))
         assertTrue(attachments.all().isEmpty())
+    }
+
+    /** Plant DELETE_INTENT_MISSING: omit markForDeletion before the row/reference transaction. */
+    @Test fun failedUnlinkRetainsTargetedCleanupAndRecoveryNeverDeletesReferencedImages() = runTest {
+        seed("n1", "note")
+        val removed = requireNotNull(attach("n1", "content://pick/1", "image/png"))
+        val retained = requireNotNull(attach("n1", "content://pick/2", "image/png"))
+        storage.deleteSucceeds = false
+        delete(removed.id)
+        assertTrue(attachments.all().none { it.id == removed.id })
+        assertFalse(MarkdownScanner.attachmentIdsIn(bodyOf("n1")).contains(removed.id))
+        assertTrue(storage.exists(removed.uri))
+        assertEquals(listOf(removed.uri), storage.pendingDeletions())
+        storage.markForDeletion(retained.uri)
+        storage.deleteSucceeds = true
+        RecoverAttachmentDeletions(attachments, storage)()
+        assertFalse(storage.exists(removed.uri))
+        assertTrue(storage.exists(retained.uri))
+        assertEquals(listOf(retained.uri), storage.pendingDeletions())
     }
 }

@@ -4,6 +4,7 @@ import app.duck.notes.data.local.dao.NoteDao
 import app.duck.notes.data.mapper.toDomain
 import app.duck.notes.data.mapper.toEntity
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.repository.NoteRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -36,4 +37,18 @@ class NoteRepositoryImpl @Inject constructor(
 
     override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) =
         notes.saveNoteWithTagsAndLinks(note.toEntity(), tagNames, linkTitles)
+
+    override suspend fun saveWithAttachment(
+        note: Note,
+        tagNames: List<String>,
+        linkTitles: List<String>,
+        attachment: Attachment,
+    ) = notes.saveNoteWithAttachment(note.toEntity(), tagNames, linkTitles, attachment.toEntity())
+
+    override suspend fun saveWithoutAttachment(
+        note: Note,
+        tagNames: List<String>,
+        linkTitles: List<String>,
+        attachmentId: String,
+    ) = notes.saveNoteWithoutAttachment(note.toEntity(), tagNames, linkTitles, attachmentId)
 }

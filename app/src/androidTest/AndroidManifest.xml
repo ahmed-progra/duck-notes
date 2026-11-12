@@ -1,6 +1,37 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <permission android:name="app.duck.notes.test.READ_IMAGES" android:protectionLevel="signature" />
+    <uses-permission android:name="app.duck.notes.test.READ_IMAGES" />
+    <application>
+        <provider
+            android:name="app.duck.notes.data.repository.ImageSourceProvider"
+            android:authorities="app.duck.notes.test.images"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:readPermission="app.duck.notes.test.READ_IMAGES"
+            android:process=":image_source" />
+    </application>
     <instrumentation
         android:name="app.duck.notes.settings.SettingsTestRunner"
+        android:targetPackage="app.duck.notes"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+    <instrumentation
+        android:name="app.duck.notes.startup.OfflineActivityTestRunner"
+        android:targetPackage="app.duck.notes"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+    <instrumentation
+        android:name="app.duck.notes.data.repository.BackupTransportTestRunner"
+        android:targetPackage="app.duck.notes"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+    <instrumentation
+        android:name="app.duck.notes.startup.WelcomeStartupTestRunner"
+        android:targetPackage="app.duck.notes"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+    <instrumentation
+        android:name="app.duck.notes.startup.WelcomeExistingInstallTestRunner"
         android:targetPackage="app.duck.notes"
         android:functionalTest="false"
         android:handleProfiling="false" />

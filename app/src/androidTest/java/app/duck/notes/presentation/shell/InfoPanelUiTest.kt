@@ -1,17 +1,34 @@
 package app.duck.notes.presentation.shell
 
+import android.os.ParcelFileDescriptor
+import android.provider.Settings
+
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import app.duck.notes.core.theme.DuckMotion
+import app.duck.notes.core.theme.LocalDuckMotion
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.domain.model.Note
 import org.junit.Assert.assertEquals
@@ -21,7 +38,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Phase 9e's two behavioural guards: the counts read the live buffer, and a contents row scrolls.
+ * Behavioural guards drive live counts, contents navigation, and reduced motion through the real shell.
  *
  * Both drive the real [DuckShell] rather than [DuckInfoPanel] alone, because both properties are
  * about *wiring between two panes* — which is the class of defect this project keeps shipping
@@ -119,6 +136,212 @@ class InfoPanelUiTest {
         )
     }
 
+    /** Plant TOC_STALE_PLAN_CAPTURE: retain the initial conceal plan after editing the body. */
+    @Test
+    fun tocNavigationUsesTheEditedBodyPlan() {
+        val editor = shell(WIDE_WIDTH, "", "", { DuckMotion.none })
+        rule.runOnIdle {
+            editor.edit {
+                replace(0, length, EDITED_SCROLL_NOTE)
+                selection = TextRange(length)
+            }
+        }
+        rule.waitForIdle()
+        assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > VIEWPORT_HEIGHT)
+        rule.onNodeWithText(OMEGA).performClick()
+        rule.waitForIdle()
+        val after = rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top
+        assertTrue("contents navigation must use the edited body's conceal plan", after >= 0.dp && after < SCROLLED_HOME)
+    }
+
+    /** Plant TOC_REDUCED_MOTION_ANIMATES: animate instead of snapping when motion is disabled. */
+    @Test
+    fun reducedMotionTocNavigationFinishesWithinTwoFrames() {
+        shell(WIDE_WIDTH, SCROLL_NOTE, SCROLL_NOTE, { DuckMotion.none })
+        assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > VIEWPORT_HEIGHT)
+        val home = rule.onNodeWithContentDescription(HIDE_ALPHA).getUnclippedBoundsInRoot().top
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText(OMEGA).performClick()
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            val after = rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top
+            assertTrue(
+                "reduced-motion contents navigation must land within two frames",
+                after >= home - 1.dp && after <= home + 1.dp,
+            )
+        } finally { rule.mainClock.autoAdvance = true }
+    }
+
+    /** Positive motion control; plant TOC_ALWAYS_SNAPS replaces the enabled animation with scrollTo. */
+    @Test
+    fun enabledMotionTocNavigationAnimatesBeforeFinishing() {
+        shell(WIDE_WIDTH, SCROLL_NOTE, SCROLL_NOTE, { DuckMotion() })
+        assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > VIEWPORT_HEIGHT)
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText(OMEGA).performClick()
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            assertTrue(
+                "enabled contents motion must have an observable intermediate position",
+                rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > SCROLLED_HOME,
+            )
+            rule.mainClock.advanceTimeBy(1_000)
+            rule.waitForIdle()
+            assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top < SCROLLED_HOME)
+        } finally { rule.mainClock.autoAdvance = true }
+    }
+
+    /** Plant TOC_MOTION_LATCHED_AT_REQUEST: ignore a disabled preference during an active scroll. */
+    @Test
+    fun disablingMotionDuringTocNavigationFinishesWithinTwoFrames() {
+        val motion = mutableStateOf(DuckMotion())
+        val editor = shell(WIDE_WIDTH, SCROLL_NOTE, SCROLL_NOTE, { motion.value })
+        val selection = editor.selection
+        assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > VIEWPORT_HEIGHT)
+        val home = rule.onNodeWithContentDescription(HIDE_ALPHA).getUnclippedBoundsInRoot().top
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText(OMEGA).performClick()
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            assertTrue("motion must still be in flight before disabling it",
+                rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > SCROLLED_HOME)
+            rule.runOnUiThread { motion.value = DuckMotion.none }
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            val after = rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top
+            assertTrue("disabling motion must finish the active contents navigation within two frames",
+                after >= home - 1.dp && after <= home + 1.dp)
+            assertEquals(SCROLL_NOTE, editor.text.toString())
+            assertEquals(selection, editor.selection)
+        } finally { rule.mainClock.autoAdvance = true }
+    }
+
+    /** Plant TOC_INTERRUPTION_KILLS_COLLECTOR: collect serially so a touch scroll kills future requests. */
+    @Test
+    fun touchInterruptedTocNavigationAcceptsTheNextRequest() {
+        val editor = shell(WIDE_WIDTH, SCROLL_NOTE, SCROLL_NOTE, { DuckMotion() })
+        val selection = editor.selection
+        assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > VIEWPORT_HEIGHT)
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText(OMEGA).performClick()
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            val beforeTouch = rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top
+            assertTrue("contents motion must still be active before touch interruption", beforeTouch > SCROLLED_HOME)
+            rule.onNodeWithTag("noteEditorViewport").performTouchInput { swipeDown(durationMillis = 80) }
+            rule.mainClock.autoAdvance = true
+            rule.waitForIdle()
+            val afterTouch = rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top
+            assertTrue("the actual touch must move the editor toward the beginning", afterTouch > beforeTouch + 20.dp)
+            assertTrue("the second contents request must still need to scroll", afterTouch > SCROLLED_HOME)
+            rule.onNodeWithText(OMEGA).performClick()
+            rule.waitForIdle()
+            val after = rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top
+            assertTrue("contents navigation must accept another request after touch interruption",
+                after >= 0.dp && after < SCROLLED_HOME)
+            assertEquals(SCROLL_NOTE, editor.text.toString())
+            assertEquals(selection, editor.selection)
+        } finally { rule.mainClock.autoAdvance = true }
+    }
+
+    /** Plant TOC_QUEUES_SUPERSEDED_TARGET: serial collection delays the latest heading behind the old one. */
+    @Test
+    fun latestTocRequestSupersedesTheRunningTarget() {
+        val editor = shell(WIDE_WIDTH, SCROLL_NOTE, SCROLL_NOTE, { DuckMotion() })
+        val selection = editor.selection
+        assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > VIEWPORT_HEIGHT)
+        val home = rule.onNodeWithContentDescription(HIDE_ALPHA).getUnclippedBoundsInRoot().top
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText(OMEGA).performClick()
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            assertTrue("the first request must have moved Alpha offscreen",
+                rule.onNodeWithContentDescription(HIDE_ALPHA).getUnclippedBoundsInRoot().top < 0.dp)
+            rule.onNodeWithText(ALPHA).performClick()
+            rule.mainClock.advanceTimeBy(300)
+            rule.waitForIdle()
+            val after = rule.onNodeWithContentDescription(HIDE_ALPHA).getUnclippedBoundsInRoot().top
+            assertTrue("the latest contents target must finish within the literal 300 ms ceiling",
+                after >= home - 1.dp && after <= home + 1.dp)
+            assertEquals(SCROLL_NOTE, editor.text.toString())
+            assertEquals(selection, editor.selection)
+        } finally { rule.mainClock.autoAdvance = true }
+    }
+
+    /** Plant TOC_SYSTEM_MOTION_OBSERVER_DISABLED: ignore live Settings ContentObserver notifications. */
+    @Test
+    fun systemWindowScaleDisablesAnActiveTocNavigation() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        assertEquals("the system motion test requires the disposable emulator", "1", shellCommand("getprop ro.kernel.qemu").trim())
+        val resolver = instrumentation.targetContext.contentResolver
+        val windowKey = Settings.Global.WINDOW_ANIMATION_SCALE
+        val animatorKey = Settings.Global.ANIMATOR_DURATION_SCALE
+        val transitionKey = Settings.Global.TRANSITION_ANIMATION_SCALE
+        val keys = listOf(windowKey, animatorKey, transitionKey)
+        val original = keys.associateWith { Settings.Global.getString(resolver, it) }
+        keys.forEach { assertEquals("system motion must begin at the normal scale", 1f, Settings.Global.getFloat(resolver, it, 1f), 0f) }
+        val originalWindow = original[windowKey]
+        assertTrue("the exact original setting must be safe to restore through the shell",
+            originalWindow == null || originalWindow.matches(Regex("[0-9.]+")) && originalWindow.toFloatOrNull() == 1f)
+        val observed = AtomicReference<DuckMotion>()
+        val disabled = CountDownLatch(1)
+        val editor = shell(WIDE_WIDTH, SCROLL_NOTE, SCROLL_NOTE, {
+            val actual = LocalDuckMotion.current
+            SideEffect {
+                observed.set(actual)
+                if (!actual.animates) disabled.countDown()
+            }
+            actual
+        })
+        val selection = editor.selection
+        val home = rule.onNodeWithContentDescription(HIDE_ALPHA).getUnclippedBoundsInRoot().top
+        assertTrue("the actual DuckTheme must initially enable motion", observed.get()?.animates == true)
+        assertTrue(rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > VIEWPORT_HEIGHT)
+        rule.mainClock.autoAdvance = false
+        try {
+            rule.onNodeWithText(OMEGA).performClick()
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            assertTrue("the system setting must change while contents motion is still active",
+                rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top > SCROLLED_HOME)
+            shellCommand("settings put global window_animation_scale 0")
+            assertEquals("0", Settings.Global.getString(resolver, windowKey))
+            assertEquals(original[animatorKey], Settings.Global.getString(resolver, animatorKey))
+            assertEquals(original[transitionKey], Settings.Global.getString(resolver, transitionKey))
+            assertEquals(1f, Settings.Global.getFloat(resolver, animatorKey, 1f), 0f)
+            instrumentation.waitForIdleSync()
+            // Allow one recomposition frame to publish the real ContentObserver result.
+            rule.mainClock.advanceTimeBy(16)
+            assertTrue("the live system window-scale observer must disable Duck motion",
+                disabled.await(5, TimeUnit.SECONDS) && observed.get()?.animates == false)
+            rule.mainClock.advanceTimeBy(32)
+            rule.waitForIdle()
+            val after = rule.onNodeWithContentDescription(HIDE_OMEGA).getUnclippedBoundsInRoot().top
+            assertTrue("system-disabled motion must finish the active contents target within two frames",
+                after >= home - 1.dp && after <= home + 1.dp)
+            assertEquals(SCROLL_NOTE, editor.text.toString())
+            assertEquals(selection, editor.selection)
+        } finally {
+            try {
+                shellCommand(if (originalWindow == null) "settings delete global window_animation_scale"
+                    else "settings put global window_animation_scale $originalWindow")
+                assertEquals("the exact original window scale or absence must be restored", originalWindow, Settings.Global.getString(resolver, windowKey))
+                assertEquals(original[animatorKey], Settings.Global.getString(resolver, animatorKey))
+                assertEquals(original[transitionKey], Settings.Global.getString(resolver, transitionKey))
+            } finally { rule.mainClock.autoAdvance = true }
+        }
+    }
+
+    private fun shellCommand(command: String): String =
+        ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command),
+        ).bufferedReader().use { it.readText() }
+
     /** Named wrapper so a failure reads `OmegaOnScreen(false)`, not a bare `false`. */
     private data class OmegaOnScreen(val value: Boolean)
 
@@ -133,9 +356,11 @@ class InfoPanelUiTest {
      * 411dp emulator a `size(1200.dp, …)` box measures 411dp and `paneModeFor` silently returns
      * Compact. The lesson `RtlLayoutTest` records after it cost a red there.
      */
-    private fun shell(width: androidx.compose.ui.unit.Dp, room: String, buffer: String) {
+    private fun shell(width: androidx.compose.ui.unit.Dp, room: String, buffer: String, motion: @Composable () -> DuckMotion = { LocalDuckMotion.current }): TextFieldState {
+        val editor = TextFieldState(buffer)
         rule.setContent {
             DuckTheme {
+                CompositionLocalProvider(LocalDuckMotion provides motion()) {
                 Box(Modifier.requiredSize(width, VIEWPORT_HEIGHT)) {
                     DuckShell(
                         state = ShellUiState(
@@ -146,13 +371,15 @@ class InfoPanelUiTest {
                             selectedNoteCreatedAt = NOTE.createdAt,
                             selectedNoteModifiedAt = NOTE.modifiedAt,
                         ),
-                        buffer = TextFieldState(buffer),
+                        buffer = editor,
                         actions = ShellActions(),
                     )
+                }
                 }
             }
         }
         rule.waitForIdle()
+        return editor
     }
 
     private companion object {
@@ -169,6 +396,8 @@ class InfoPanelUiTest {
         const val LIVE_CHARS = "13 characters"
 
         /** The last heading's own title, which is also its contents row's label. */
+        const val ALPHA = "Alpha"
+        const val HIDE_ALPHA = "Hide Alpha section"
         const val OMEGA = "Omega"
 
         /** `editor_collapse_section` — "Hide %1$s section" — for that heading. */
@@ -191,6 +420,13 @@ class InfoPanelUiTest {
             repeat(60) { append("filler line $it\n") }
             append("# Omega\n")
             repeat(60) { append("tail line $it\n") }
+        }
+
+        val EDITED_SCROLL_NOTE = buildString {
+            append("# Alpha\n")
+            repeat(120) { append("- **filler line $it**\n") }
+            append("# Omega\n")
+            repeat(120) { append("tail line $it\n") }
         }
 
         val VIEWPORT_HEIGHT = 800.dp

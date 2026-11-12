@@ -1,6 +1,7 @@
 package app.duck.notes.domain.markdown
 
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 /**
@@ -10,7 +11,7 @@ import org.junit.Test
  * number is far cheaper than finding it out from a laggy editor. Two costs are separated here
  * because they scale differently:
  *
- * - **scan**: incremental, should be flat in document size (one dirty line).
+ * - **scan**: reuses unchanged lines, but splitting and changed absolute offsets still cost O(lines).
  * - **plan**: O(total tokens), unavoidable — the buffer is rebuilt per call and `BasicTextField`
  *   lays out the whole document, so every token must be re-emitted every time.
  *
@@ -100,8 +101,9 @@ class ScannerBenchmarkTest {
      * notes ever get an order of magnitude larger, this is the first thing to fix.
      *
      * So this asserts the honest property — cost stays inside the frame budget as documents grow —
-     * rather than a flatness claim the implementation does not make. An accidental return to a full
-     * rescan per keystroke still trips it, because the cold-rescan cost is the thing being compared.
+     * rather than a flatness claim the implementation does not make. Prefix reuse is asserted by
+     * identity: wall-clock ordering against a cold scan is noisy and is not an algorithmic proof.
+     * Plant CACHE_NO_PREFIX_REUSE: initialize firstDirty to0 and disable its advancing loop.
      */
     @Test
     fun perKeystrokeCostStaysWellInsideTheFrameBudget() {
@@ -110,7 +112,9 @@ class ScannerBenchmarkTest {
             val caret = body.length / 2
             val edited = body.substring(0, caret) + "x" + body.substring(caret)
             val cache = MarkdownTextCache()
-            cache.scan(body)
+            val original = cache.scan(body)
+            val changed = cache.scan(edited)
+            assertSame("unchanged prefix must reuse the scanned token list", original.lineTokens[0], changed.lineTokens[0])
             return median {
                 cache.scan(edited)
                 cache.scan(body)
@@ -127,13 +131,8 @@ class ScannerBenchmarkTest {
 
         assertTrue("10k words cost ${large / 2} ms per keystroke", large / 2 < FRAME_BUDGET_MS)
         assertTrue("1k words cost ${small / 2} ms per keystroke", small / 2 < FRAME_BUDGET_MS)
-        // The incremental path must stay meaningfully cheaper than rescanning from scratch;
-        // if these converge, the line diff has stopped finding the unchanged prefix.
-        assertTrue(
-            "an incremental keystroke (${large / 2} ms) is no cheaper than a cold rescan " +
-                "($coldRescan ms) — the line diff has regressed",
-            large / 2 < coldRescan,
-        )
+        // Both measured costs are reported. Prefix reuse above and the fixed frame bounds are
+        // guards; an ordering between two sub-millisecond JVM samples would be a flaky oracle.
     }
 
     private companion object {

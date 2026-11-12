@@ -1,9 +1,14 @@
 package app.duck.notes.presentation.shell
 
+import app.duck.notes.domain.usecase.SearchNotes
+import app.duck.notes.domain.usecase.ArchiveNote
+import app.duck.notes.domain.usecase.DeleteNote
+import app.duck.notes.domain.usecase.RestoreNote
 import android.content.Context
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
@@ -44,6 +49,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -93,18 +99,26 @@ class PartialTagMintingTest {
 
     private lateinit var db: DuckDatabase
     private val parseTags = ParseTags()
+    private val scope = CoroutineScope(Dispatchers.Main)
+    private var model: DuckShellViewModel? = null
 
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .addCallback(DuckDatabaseCallback())
             .build()
     }
 
     @After
-    fun tearDown() = db.close()
+    fun tearDown() = runBlocking {
+        withContext(Dispatchers.Main) {
+            scope.cancel()
+            model?.viewModelScope?.cancel()
+        }
+        db.close()
+    }
 
     private fun shell(): DuckShellViewModel {
         val notes = NoteRepositoryImpl(db.noteDao())
@@ -132,8 +146,12 @@ class PartialTagMintingTest {
             observeAttachments = ObserveAttachments(attachments),
             getBacklinks = GetBacklinks(LinkRepositoryImpl(db.noteLinkDao())),
             clock = Clock { System.currentTimeMillis() },
-            autosaveDispatcher = Dispatchers.Main.immediate,
-        )
+            searchNotes = SearchNotes(app.duck.notes.data.repository.SearchRepositoryImpl(db.noteDao())),
+        archiveNote = ArchiveNote(notes, parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() }),
+        deleteNote = DeleteNote(notes, parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() }),
+        restoreNote = RestoreNote(notes, parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() }),
+        autosaveDispatcher = Dispatchers.Main.immediate,
+        ).also { model = it }
     }
 
     private suspend fun tableRows() = db.tagDao().observeAll().first().map { it.name }.sorted()
@@ -149,10 +167,11 @@ class PartialTagMintingTest {
         )
 
         val vm = withContext(Dispatchers.Main) { shell() }
-        val scope = CoroutineScope(Dispatchers.Main)
         scope.launch { vm.state.collect {} }
         withContext(Dispatchers.Main) { vm.onSelectNote("n1") }
-        delay(500)
+        withTimeout(5_000) {
+            vm.state.first { it.selectedNoteId == "n1" && it.editorSession?.noteId == "n1" }
+        }
 
         // One character at a time, each followed by a pause well past the 400ms idle window, so
         // EVERY prefix gets its own save. This is the shape no existing test has.
@@ -190,7 +209,6 @@ class PartialTagMintingTest {
 
         assertEquals("the finished tag must be minted", listOf("work"), tableRows())
         assertEquals(mapOf("work" to 1), refCounts())
-        scope.cancel()
     }
 
     /**
@@ -207,10 +225,11 @@ class PartialTagMintingTest {
         )
 
         val vm = withContext(Dispatchers.Main) { shell() }
-        val scope = CoroutineScope(Dispatchers.Main)
         scope.launch { vm.state.collect {} }
         withContext(Dispatchers.Main) { vm.onSelectNote("n1") }
-        delay(500)
+        withTimeout(5_000) {
+            vm.state.first { it.selectedNoteId == "n1" && it.editorSession?.noteId == "n1" }
+        }
 
         withContext(Dispatchers.Main) {
             vm.buffer.setTextAndPlaceCursorAtEnd("#work")
@@ -218,7 +237,9 @@ class PartialTagMintingTest {
         }
         delay(DuckShellViewModel.IDLE_MS + 2_000)
         assertEquals("precondition: the autosave suppressed it", emptyList<String>(), tableRows())
-        val beforeStop = db.noteDao().getById("n1")?.modifiedAt
+        val beforeFlush = db.noteDao().getById("n1")
+        assertEquals("suppressed autosave must persist the body", "#work", beforeFlush?.body)
+        val beforeStop = beforeFlush?.modifiedAt
 
         withContext(Dispatchers.Main) { vm.flush() }
         delay(1_000)
@@ -227,6 +248,5 @@ class PartialTagMintingTest {
         assertEquals(mapOf("work" to 1), refCounts())
         // ...and must not age the note: those keystrokes were stamped by the write that hid the tag.
         assertEquals("the tag completion restamped", beforeStop, db.noteDao().getById("n1")?.modifiedAt)
-        scope.cancel()
     }
 }

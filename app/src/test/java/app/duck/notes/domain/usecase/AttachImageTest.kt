@@ -27,7 +27,7 @@ import org.junit.Test
 class AttachImageTest {
 
     private val notes = FakeNoteRepository()
-    private val attachments = FakeAttachmentRepository()
+    private val attachments = FakeAttachmentRepository().also { notes.attachments = it }
     private val storage = FakeAttachmentStorage()
     private val clock = FixedClock(7_000L)
     private val parseTags = ParseTags()
@@ -96,5 +96,28 @@ class AttachImageTest {
         assertNull(attach("nope", "content://pick/9", "image/png"))
         assertTrue(attachments.all().isEmpty())
         assertTrue("storage untouched for a dead note", storage.stored.isEmpty())
+    }
+
+    /** Plant ATTACH_FAILURE_LEAK: omit cleanup when the attachment transaction fails. */
+    @Test fun failedTransactionCleansItsCopyAndCancellationAfterCommitPreservesReferencedBytes() = runTest {
+        seed("n1", "note")
+        notes.beforeSave = { throw java.io.IOException("controlled transaction failure") }
+        try { attach("n1", "content://fail", "image/png"); org.junit.Assert.fail("failure swallowed") }
+        catch (_: java.io.IOException) { }
+        assertEquals("note", bodyOf("n1"))
+        assertTrue(attachments.all().isEmpty())
+        assertTrue(storage.files.isEmpty())
+        notes.beforeSave = null
+        notes.attachments = object : app.duck.notes.domain.repository.AttachmentRepository by attachments {
+            override suspend fun insert(attachment: app.duck.notes.domain.model.Attachment) {
+                attachments.insert(attachment)
+                throw kotlinx.coroutines.CancellationException("controlled delivery after commit")
+            }
+        }
+        try { attach("n1", "content://committed", "image/png"); org.junit.Assert.fail("cancellation swallowed") }
+        catch (_: kotlinx.coroutines.CancellationException) { }
+        val committed = attachments.all().single()
+        assertEquals(setOf(committed.id), MarkdownScanner.attachmentIdsIn(bodyOf("n1")))
+        assertTrue(storage.exists(committed.uri))
     }
 }

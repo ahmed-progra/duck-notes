@@ -1,6 +1,7 @@
 package app.duck.notes.domain.repository
 
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.Attachment
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -44,14 +45,14 @@ interface NoteRepository {
     /**
      * The note a `[[title]]` resolves to, or null — the same rule the save path links by.
      *
-     * Exact match, trashed excluded, most recently modified wins. Tapping a link resolves through
-     * this so it opens exactly the note the next save would write a `note_links` row to.
+     * Trimmed literal first, then DeriveTitle fallback; trashed excluded, archived included.
+     * Duplicate titles choose modifiedAt descending, then id ascending, matching live backlinks.
      */
     suspend fun noteIdByTitle(title: String): String?
 
     /**
      * Upsert by [Note.id], replacing the note's tags with [tagNames] and its `[[WikiLink]]` rows
-     * with whatever [linkTitles] resolves to.
+     * with the textual references in [linkTitles], including unresolved ones.
      *
      * **[linkTitles] is required, and deliberately not defaulted.** The write clears this note's link
      * rows before re-inserting, so a caller that omitted them would silently *delete* the note's
@@ -62,4 +63,20 @@ interface NoteRepository {
      * describe different things.
      */
     suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>)
+
+    /** Atomically save the note's derived rows and a new attachment row. */
+    suspend fun saveWithAttachment(
+        note: Note,
+        tagNames: List<String>,
+        linkTitles: List<String>,
+        attachment: Attachment,
+    )
+
+    /** Atomically save the note's derived rows and remove its attachment row. */
+    suspend fun saveWithoutAttachment(
+        note: Note,
+        tagNames: List<String>,
+        linkTitles: List<String>,
+        attachmentId: String,
+    )
 }

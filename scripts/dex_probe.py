@@ -24,6 +24,7 @@ Three properties the ad-hoc versions kept losing:
 from __future__ import annotations
 
 import re
+import struct
 import sys
 import zipfile
 from pathlib import Path
@@ -81,6 +82,13 @@ MUST_BE_PRESENT = [
     # `NoteStats.kt` filename embedded in the dex debug info as well as the class descriptor, so a
     # plant that renames the object must rename the FILE too or it reports present and fakes a green.
     "NoteStats",
+    # 9f. Descriptor rather than filename: the ordinary welcome content reached release.
+    "Lapp/duck/notes/startup/WelcomeNotes;",
+    # Independent prose controls for every body, not just the content holder's class.
+    "Make room for your first idea.",
+    "Give each idea a place.",
+    "Connect a thought to another note.",
+    "A quiet place for your notes.",
 ]
 
 # Debug-only code. src/debug must never reach a release build.
@@ -129,20 +137,75 @@ FRAMEWORK_BEAR = re.compile(rb"[Bb]earing", re.IGNORECASE)
 # Bytes of context printed either side of a hit. Display only — never used to decide.
 CONTEXT = 24
 
+# Whole seed strings are inspected separately, with no framework exemption.
+WELCOME_PREFIXES = (
+    b"# Get started\n",
+    b"# Organize with tags\n",
+    b"# Work faster\n",
+    b"# Welcome to Duck\n",
+)
 
-def load_dex(apk: Path) -> tuple[bytes, list[str]]:
+
+def dex_strings(dex: bytes) -> list[bytes]:
+    """Read complete MUTF-8 string values; ASCII checks need no Unicode decoding."""
+    if len(dex) < 112 or not dex.startswith(b"dex\n"):
+        raise ValueError("invalid dex header")
+    count, table = struct.unpack_from("<II", dex, 56)
+    if count == 0 or table < 112 or table + count * 4 > len(dex):
+        raise ValueError("invalid or empty dex string table")
+    values = []
+    for index in range(count):
+        (offset,) = struct.unpack_from("<I", dex, table + index * 4)
+        # Skip the ULEB128 UTF-16 length. It is metadata, not part of the string.
+        for _ in range(5):
+            if offset >= len(dex):
+                raise ValueError("truncated dex string length")
+            byte = dex[offset]
+            offset += 1
+            if byte < 0x80:
+                break
+        else:
+            raise ValueError("invalid dex string length")
+        end = dex.find(b"\x00", offset)
+        if end < 0:
+            raise ValueError("unterminated dex string")
+        values.append(dex[offset:end])
+    return values
+
+
+def welcome_failures(strings: list[bytes]) -> list[str]:
+    failures = []
+    for prefix in WELCOME_PREFIXES:
+        bodies = [value for value in strings if value.startswith(prefix)]
+        title = prefix.decode().strip("# \n")
+        if len(bodies) != 1:
+            failures.append(f"welcome body {title!r}: expected 1 complete dex string, found {len(bodies)}")
+        for body in bodies:
+            if FORBIDDEN_WORD.search(body):
+                failures.append(f"welcome body {title!r} contains forbidden branding (no exemptions)")
+            if b"\r" in body:
+                failures.append(f"welcome body {title!r} contains CR")
+    return failures
+
+
+def load_dex(apk: Path) -> tuple[bytes, list[str], list[bytes]]:
     with zipfile.ZipFile(apk) as z:
         names = sorted(n for n in z.namelist() if n.startswith("classes") and n.endswith(".dex"))
         if not names:
             sys.exit(f"FAIL  no classes*.dex inside {apk} — is this really an APK?")
-        return b"".join(z.read(n) for n in names), names
+        dexes = [z.read(n) for n in names]
+        strings = [value for dex in dexes for value in dex_strings(dex)]
+        return b"".join(dexes), names, strings
 
 
 def main() -> int:
     if not APK.exists():
         sys.exit(f"FAIL  {APK} not found. Run: gradle -p . assembleRelease")
 
-    blob, names = load_dex(APK)
+    try:
+        blob, names, strings = load_dex(APK)
+    except (ValueError, struct.error, zipfile.BadZipFile) as error:
+        sys.exit(f"FAIL  cannot inspect dex strings: {error}")
     print(f"{APK}  ({len(names)} dex: {', '.join(names)}, {len(blob):,} bytes)\n")
 
     failures: list[str] = []
@@ -175,6 +238,12 @@ def main() -> int:
         failures.append(f"{len(set(ours))} bear reference(s) shipped — see above")
     else:
         print("  ok       none outside android.location's bearingAccuracy")
+
+    print("\nwelcome bodies (complete strings, no framework exemption)")
+    seed_failures = welcome_failures(strings)
+    failures.extend(seed_failures)
+    if not seed_failures:
+        print("  ok       four LF-only bodies, no forbidden branding")
 
     print()
     if failures:

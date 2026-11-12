@@ -80,6 +80,17 @@ class MarkdownTextCache {
             // line. Back up one line and rescan it — cheap, and always correct.
             if (firstDirty >= previous.lineCarry.size) firstDirty = maxOf(0, previous.lineCarry.size - 1)
 
+            // Reuse only a fully unchanged suffix at the same absolute offsets.
+            var reusableFrom = lines.size
+            if (lines.size == previous.lines.size) {
+                while (reusableFrom > firstDirty &&
+                    lines[reusableFrom - 1] == previous.lines[reusableFrom - 1] &&
+                    starts[reusableFrom - 1] == previous.lineStarts[reusableFrom - 1]
+                ) {
+                    reusableFrom--
+                }
+            }
+
             val tokens = ArrayList<List<Token>>(lines.size)
             val carries = ArrayList<LineCarry>(lines.size)
             for (i in 0 until firstDirty) {
@@ -90,12 +101,9 @@ class MarkdownTextCache {
             var carry = if (firstDirty == 0) LineCarry() else previous.lineCarry[firstDirty]
             var i = firstDirty
             while (i < lines.size) {
-                // Past the edit, an unchanged line whose entry carry also matches cannot have
-                // changed — and neither can anything after it. Stop rippling.
+                // Matching carry makes the verified suffix safe to keep without rescanning.
                 if (i > firstDirty &&
-                    i < previous.lines.size &&
-                    lines[i] == previous.lines[i] &&
-                    starts[i] == previous.lineStarts[i] &&
+                    i >= reusableFrom &&
                     carry == previous.lineCarry[i]
                 ) {
                     while (i < lines.size) {

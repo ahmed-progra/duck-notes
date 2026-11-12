@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -31,11 +32,15 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import app.duck.notes.R
+import app.duck.notes.core.files.AttachmentFiles
+import app.duck.notes.core.files.AttachmentImageLimits
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.core.ui.DuckDivider
 import app.duck.notes.domain.model.Attachment
 import coil3.compose.AsyncImage
-import java.io.File
+import coil3.request.ImageRequest
+import coil3.request.allowHardware
+import coil3.size.Precision
 
 /**
  * The attachment strip — a horizontal row of thumbnails under the editor, with a leading add tile.
@@ -70,6 +75,7 @@ fun AttachmentStrip(
     onAddImage: () -> Unit,
     onDeleteAttachment: (Attachment) -> Unit,
     modifier: Modifier = Modifier,
+    editable: Boolean = true,
 ) {
     val colors = DuckTheme.colors
     var zoomed by remember { mutableStateOf<Attachment?>(null) }
@@ -83,12 +89,12 @@ fun AttachmentStrip(
             contentPadding = PaddingValues(DuckTheme.spacing.sm),
             horizontalArrangement = Arrangement.spacedBy(DuckTheme.spacing.sm),
         ) {
-            item(key = "add") { AddTile(onClick = onAddImage) }
+            if (editable) item(key = "add") { AddTile(onClick = onAddImage) }
             items(attachments, key = { it.id }) { attachment ->
                 Thumbnail(
                     attachment = attachment,
                     onClick = { zoomed = attachment },
-                    onLongClick = { onDeleteAttachment(attachment) },
+                    onLongClick = if (editable) ({ onDeleteAttachment(attachment) }) else null,
                 )
             }
         }
@@ -124,12 +130,12 @@ private fun AddTile(onClick: () -> Unit) {
 private fun Thumbnail(
     attachment: Attachment,
     onClick: () -> Unit,
-    onLongClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
 ) {
     val colors = DuckTheme.colors
     val shape = DuckTheme.shapes.small
     AsyncImage(
-        model = File(attachment.uri),
+        model = attachmentRequest(attachment.uri, AttachmentImageLimits.THUMBNAIL_SIDE),
         contentDescription = stringResource(R.string.attachment_image),
         contentScale = ContentScale.Crop,
         modifier = Modifier
@@ -137,7 +143,7 @@ private fun Thumbnail(
             .clip(shape)
             .background(colors.surfaceElevated)
             .border(1.dp, colors.divider, shape)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = stringResource(R.string.attachment_delete)),
     )
 }
 
@@ -146,7 +152,7 @@ private fun Thumbnail(
 private fun ZoomDialog(attachment: Attachment, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss) {
         AsyncImage(
-            model = File(attachment.uri),
+            model = attachmentRequest(attachment.uri, AttachmentImageLimits.DECODE_SIDE),
             contentDescription = stringResource(R.string.attachment_image),
             contentScale = ContentScale.Fit,
             modifier = Modifier
@@ -154,6 +160,21 @@ private fun ZoomDialog(attachment: Attachment, onDismiss: () -> Unit) {
                 .clip(DuckTheme.shapes.medium)
                 .clickable(onClick = onDismiss),
         )
+    }
+}
+
+/** Legacy absolute paths are rebound to this installation; Coil never receives an arbitrary file. */
+@Composable
+private fun attachmentRequest(location: String, side: Int): ImageRequest {
+    val context = LocalContext.current
+    return remember(context, location, side) {
+        val file = try { AttachmentFiles(context.filesDir).resolve(location) } catch (_: Exception) { null }
+        ImageRequest.Builder(context)
+            .data(file)
+            .size(side, side)
+            .precision(Precision.INEXACT)
+            .allowHardware(false)
+            .build()
     }
 }
 

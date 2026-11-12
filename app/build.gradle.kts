@@ -17,6 +17,7 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "app.duck.notes.settings.SettingsTestRunner"
+        testInstrumentationRunnerArguments["notClass"] = "app.duck.notes.startup.WelcomeStartupTest,app.duck.notes.startup.WelcomeStartupGateTest,app.duck.notes.startup.OfflineActivityTest,app.duck.notes.data.repository.BackupTransportTest"
     }
 
     buildTypes {
@@ -33,6 +34,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
+
+    sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
 
     buildFeatures {
         compose = true

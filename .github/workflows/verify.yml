@@ -1,0 +1,93 @@
+name: Verify offline candidate
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out full history without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned JDK 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21.0.12.1+1'
+
+      - name: Verify Gradle wrapper before execution
+        run: |
+          python -B scripts/security_checks.py wrapper
+          if ($LASTEXITCODE -ne 0) { throw 'Wrapper verification failed.' }
+
+      - name: Install required Android SDK packages
+        run: |
+          $sdkManager = Join-Path $env:ANDROID_HOME 'cmdline-tools/latest/bin/sdkmanager.bat'
+          & $sdkManager --install 'platforms;android-35' 'build-tools;35.0.0'
+          if ($LASTEXITCODE -ne 0) { throw 'SDK package installation failed.' }
+
+      - name: Provision checksum-verified Gitleaks
+        run: |
+          $zipPath = Join-Path $env:RUNNER_TEMP 'gitleaks_8.30.1_windows_x64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip' -OutFile $zipPath
+          $expectedHash = 'd29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e'
+          if ((Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedHash) {
+            throw 'Gitleaks archive checksum mismatch.'
+          }
+          $toolDirectory = Join-Path $env:RUNNER_TEMP 'gitleaks-8.30.1'
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $toolDirectory
+          "GITLEAKS_PATH=$(Join-Path $toolDirectory 'gitleaks.exe')" >> $env:GITHUB_ENV
+
+      - name: Scan source candidate and Git history for secrets
+        run: |
+          python -B scripts/security_checks.py secrets --gitleaks "$env:GITLEAKS_PATH" --reports "$env:RUNNER_TEMP/duck-security"
+          if ($LASTEXITCODE -ne 0) { throw 'Secret scan found a finding or tool error.' }
+
+      - name: Build, run JVM tests, lint, and export resolved dependencies
+        run: |
+          .\gradlew.bat -I scripts/export_dependencies.gradle :app:testDebugUnitTest :app:testReleaseUnitTest :app:lint :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest exportDependencyInventory --no-daemon --no-build-cache --no-configuration-cache --max-workers=1 --console=plain --dependency-verification=strict "-PdependencyInventoryOutput=$env:RUNNER_TEMP/duck-security/resolved-dependencies.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Build, tests, or lint failed.' }
+
+      - name: Verify release DEX and probe controls
+        run: |
+          python -B -m unittest discover -s scripts -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { throw 'Probe controls failed.' }
+          python -B scripts/dex_probe.py
+          if ($LASTEXITCODE -ne 0) { throw 'Release DEX checks failed.' }
+
+      - name: Check resolved Maven dependencies against current advisories
+        run: |
+          python -B scripts/security_checks.py advisories --inventory "$env:RUNNER_TEMP/duck-security/resolved-dependencies.json" --report "$env:RUNNER_TEMP/duck-security/advisories.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency advisory check found a finding or could not complete.' }
+
+      - name: Retain test and lint reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: jvm-and-lint-reports
+          path: |
+            app/build/test-results/**/*.xml
+            app/build/reports/tests/
+            app/build/reports/lint-results*
+          if-no-files-found: warn
+          retention-days: 7
+
+      # No APK publication, signing credentials, shared cache, or report containing
+      # secret findings is uploaded. Android device qualification is a separate gate.

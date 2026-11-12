@@ -19,15 +19,15 @@ import androidx.compose.ui.unit.IntOffset
  * ## Why so little of the app animates
  *
  * Animation frequency decides whether to animate at all, and most of what Duck does is
- * high-frequency: selecting a note, tapping a sidebar row, typing. **Four surfaces animate**: the
- * Compact pane swap, sidebar item insert/remove, note-list item insert/remove, and the active bar.
+ * high-frequency: selecting a note, tapping a sidebar row, typing. **Motion is reserved for** the
+ * Compact pane swap, sidebar item insert/remove, note-list item insert/remove, the active bar, and requested table-of-contents navigation.
  *
  * Press feedback does not — `selectable` already gives Material ripple, and a press-scale on top
  * would be two feedback mechanisms disagreeing about one tap. `DropdownMenu` and `AlertDialog` do
  * not either; Material 3 already animates them, origin-aware. The editor never animates on a
  * keystroke path.
  *
- * **The tag-tree chevron was planned as a fifth and dropped.** It cannot rotate: `DuckSidebar`
+ * **The tag-tree chevron was planned and dropped.** It cannot rotate: `DuckSidebar`
  * already carries the rule that expanded and collapsed must be *two distinct glyphs, not one
  * rotated*, so there is no rotation for a spec to animate. A planned surface lost to a decision that
  * was already recorded — worth naming here, because "five" outlived it in three places.

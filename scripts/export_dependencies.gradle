@@ -1,0 +1,155 @@
+import groovy.json.JsonOutput
+import org.gradle.api.GradleException
+import org.gradle.api.artifacts.DependencyResolutionListener
+import org.gradle.api.artifacts.ResolvableDependencies
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+
+// Apply this init script to the build/test/lint invocation; exportDependencyInventory runs last.
+def components = new TreeMap<String, Map>()
+def configurations = new TreeSet<String>()
+def observations = new IdentityHashMap<ResolvableDependencies, Map>()
+def failures = []
+def taskOutcomes = []
+def lock = new Object()
+def capture = { ResolvableDependencies incoming, String scope ->
+    def result = incoming.resolutionResult
+    // Resolve outside our lock: Gradle can notify listeners on another worker.
+    def unresolved = result.allDependencies.findAll { it instanceof UnresolvedDependencyResult }.collect {
+        [configuration: scope, requested: it.requested.displayName]
+    }
+    def resolved = result.allComponents.findAll { it.id instanceof ModuleComponentIdentifier }.collect { it.id }
+    synchronized (lock) {
+        failures.addAll(unresolved)
+        resolved.each { id ->
+            def coordinate = "${id.group}:${id.module}:${id.version}"
+            def entry = components.computeIfAbsent(coordinate) {
+                [group: id.group, name: id.module, version: id.version, configurations: new TreeSet<String>()]
+            }
+            entry.configurations.add(scope)
+        }
+        configurations.add(scope)
+    }
+}
+gradle.addListener(new DependencyResolutionListener() {
+    void beforeResolve(ResolvableDependencies incoming) {
+        synchronized (lock) {
+            observations.computeIfAbsent(incoming) {
+                [configuration: "observed:${incoming.path}#${observations.size() + 1}", completed: false]
+            }
+        }
+    }
+    void afterResolve(ResolvableDependencies incoming) {
+        def observation
+        synchronized (lock) { observation = observations[incoming] }
+        try {
+            capture(incoming, observation.configuration)
+            synchronized (lock) { observation.completed = true }
+        } catch (Exception failure) {
+            synchronized (lock) {
+                failures.add([configuration: observation.configuration, errorType: failure.class.name])
+            }
+        }
+    }
+})
+gradle.taskGraph.afterTask { task, state ->
+    synchronized (lock) {
+        taskOutcomes.add([path: task.path, successful: state.failure == null,
+                          skipped: state.skipped, upToDate: state.upToDate, noSource: state.noSource])
+    }
+}
+
+def exclusionFor = { String kind, String name, boolean observed ->
+    // A real resolution always wins over an unused-configuration exclusion.
+    if (observed) return null
+    if (kind == 'project' && name ==~ /[A-Za-z]+DependenciesMetadata/) {
+        return 'Raw Kotlin metadata declaration; Android variant classpaths are resolved instead.'
+    }
+    if (kind == 'project' && name in [
+        'kotlinKlibCommonizerClasspath', 'kotlinNativeBundleConfiguration',
+        'kotlinNativeCompilerPluginClasspath', 'kspPluginClasspathNonEmbeddable',
+    ]) {
+        return 'Kotlin Native-only tool; this application has no Kotlin Native target.'
+    }
+    return null
+}
+
+gradle.projectsEvaluated {
+    def root = gradle.rootProject
+    def exportTask = root.tasks.register('exportDependencyInventory') {
+        group = 'verification'
+        description = 'Export resolved Maven coordinates, observed task dependencies, and KAPT applicability evidence.'
+        doLast {
+            // Plants: INVENTORY_METADATA_SCOPE/NEIGHBOR/ABSENT, INVENTORY_NATIVE_SCOPE/NEIGHBOR/ABSENT,
+            // INVENTORY_UTP_EXCLUDED, INVENTORY_OBSERVED_IGNORED (minimal policy-expression edits).
+            assert exclusionFor('project', 'implementationDependenciesMetadata', false) != null : 'Raw metadata policy control'
+            assert exclusionFor('buildscript', 'implementationDependenciesMetadata', false) == null : 'Buildscript must remain covered'
+            assert exclusionFor('project', 'implementationDependenciesMetadataExtra', false) == null : 'Metadata match must be anchored'
+            assert exclusionFor('project', 'kotlinNativeBundleConfiguration', false) != null : 'Native policy control'
+            assert exclusionFor('buildscript', 'kotlinNativeBundleConfiguration', false) == null : 'Buildscript Native name must remain covered'
+            assert exclusionFor('project', 'kotlinNativeBundleConfigurationExtra', false) == null : 'Native match must be exact'
+            assert exclusionFor('project', '_internal-unified-test-platform-core', false) == null : 'UTP must remain covered'
+            assert exclusionFor('project', 'implementationDependenciesMetadata', true) == null : 'Observed metadata must remain covered'
+            assert exclusionFor('project', 'kotlinNativeBundleConfiguration', true) == null : 'Observed Native tool must remain covered'
+            def exclusions = []
+            def projectInventory = []
+            root.allprojects.sort { it.path }.each { project ->
+                def projectTasks = project.tasks.collect { [name: it.name, type: it.class.name] }.sort { it.name }
+                projectInventory.add([
+                    path: project.path,
+                    pluginClasses: project.plugins.collect { it.class.name }.sort(),
+                    pluginIds: ['com.google.devtools.ksp', 'org.jetbrains.kotlin.kapt', 'kotlin-kapt'].collectEntries {
+                        [(it): project.pluginManager.hasPlugin(it)]
+                    },
+                    configurations: project.configurations.collect { it.name }.sort(),
+                    tasks: projectTasks,
+                ])
+                [project: project.configurations, buildscript: project.buildscript.configurations].each { kind, container ->
+                    container.findAll { it.canBeResolved }.sort { it.name }.each { configuration ->
+                        def scope = "${project.path}:${kind}:${configuration.name}"
+                        def observed
+                        synchronized (lock) { observed = observations.containsKey(configuration.incoming) }
+                        def exclusion = exclusionFor(kind, configuration.name, observed)
+                        if (exclusion != null) {
+                            exclusions.add([configuration: scope, reason: exclusion])
+                        } else {
+                            try {
+                                capture(configuration.incoming, scope)
+                            } catch (Exception failure) {
+                                // Exception messages can expose private repository URLs.
+                                synchronized (lock) { failures.add([configuration: scope, errorType: failure.class.name]) }
+                            }
+                        }
+                    }
+                }
+            }
+            def target = root.file(root.findProperty('dependencyInventoryOutput') ?: 'build/reports/security/resolved-dependencies.json')
+            target.parentFile.mkdirs()
+            synchronized (lock) {
+                observations.values().findAll { !it.completed }.each {
+                    failures.add([configuration: it.configuration, errorType: 'ResolutionDidNotComplete'])
+                }
+                target.text = JsonOutput.prettyPrint(JsonOutput.toJson([
+                    format: 2,
+                    gradleVersion: gradle.gradleVersion,
+                    configurations: configurations,
+                    exclusions: exclusions,
+                    observedResolutions: observations.values().sort { it.configuration },
+                    projects: projectInventory,
+                    taskOutcomes: taskOutcomes.sort { it.path },
+                    components: components.values(),
+                    failures: failures.unique(),
+                ])) + '\n'
+            }
+            println "Exported ${components.size()} Maven components from ${configurations.size()} configurations; unresolved: ${failures.size()}"
+            if (components.isEmpty() || !failures.isEmpty()) {
+                throw new GradleException('Dependency inventory is incomplete; inspect the JSON report before advisory review.')
+            }
+        }
+    }
+    exportTask.configure {
+        root.allprojects.each { project ->
+            mustRunAfter(project.tasks.matching { it.name != 'exportDependencyInventory' })
+        }
+    }
+}

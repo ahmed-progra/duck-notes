@@ -111,6 +111,16 @@ class AddTagToNoteTest {
         assertEquals(AddTagResult.NotWritable, addTag("nope", "todo"))
     }
 
+    /** Plant ADD_TAG_TRASH_WRITABLE: omit the isTrashed rejection in AddTagToNote. */
+    @Test fun trashRejectsAddingATagAndArchiveRemainsWritable() = runTest {
+        notes.seed(Note(id="trash", title="", body="private", createdAt=0, modifiedAt=0, isTrashed=true))
+        assertEquals(AddTagResult.NotWritable, addTag("trash", "todo"))
+        assertEquals("private", bodyOf("trash"))
+        notes.seed(Note(id="archive", title="", body="archived", createdAt=0, modifiedAt=0, isArchived=true))
+        assertEquals(AddTagResult.Added, addTag("archive", "todo"))
+        assertEquals("archived\n#todo", bodyOf("archive"))
+    }
+
     /** The point of going through `SaveNote`: `note_tags` is re-derived, not appended to. */
     @Test
     fun `the tag reaches note_tags`() = runTest {

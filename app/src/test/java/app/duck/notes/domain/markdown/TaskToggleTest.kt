@@ -99,6 +99,36 @@ class TaskToggleTest {
         )
     }
 
+    @Test
+    fun taskOffsetsPreserveEveryLineSeparator() {
+        listOf(
+            "نص😀\n- [ ] أول\n- [ ] ثان" to "نص😀\n- [ ] أول\n- [x] ثان",
+            "نص😀\r\n- [ ] أول\r\n- [ ] ثان" to "نص😀\r\n- [ ] أول\r\n- [x] ثان",
+            "نص😀\r- [ ] أول\r- [ ] ثان" to "نص😀\r- [ ] أول\r- [x] ثان",
+            "نص😀\r\n- [ ] أول\r- [ ] ثان\nنهاية" to "نص😀\r\n- [ ] أول\r- [x] ثان\nنهاية",
+        ).forEach { (body, expected) ->
+            assertEquals(expected, MarkdownScanner.toggleTaskAt(body, body.lastIndexOf("[ ]") + 1))
+        }
+    }
+
+    @Test
+    fun crlfFenceCarrySkipsCodeAndReachesTheFollowingTask() {
+        val body = "تم😀\r\n```\r\n- [ ] code\r\n```\r\n- [ ] حقيقي"
+        assertNull(MarkdownScanner.toggleTaskAt(body, body.indexOf("[ ]") + 1))
+        assertEquals(
+            "تم😀\r\n```\r\n- [ ] code\r\n```\r\n- [x] حقيقي",
+            MarkdownScanner.toggleTaskAt(body, body.lastIndexOf("[ ]") + 1),
+        )
+    }
+
+    @Test
+    fun unmatchedFenceAndInlineCodeKeepTaskTextLiteral() {
+        val fenced = "نص😀\r\n~~~\n- [ ] code\rmore"
+        assertNull(MarkdownScanner.toggleTaskAt(fenced, fenced.indexOf("[ ]") + 1))
+        val inline = "نص😀\r\n`- [ ] code`"
+        assertNull(MarkdownScanner.toggleTaskAt(inline, inline.indexOf("[ ]") + 1))
+    }
+
     /**
      * **Round trip through the real parser**, not a string comparison — the shape
      * `MarkdownFormatTest.everyMarkerScansBackAsItsOwnKind` and `TagScanner.isValidName` both use.

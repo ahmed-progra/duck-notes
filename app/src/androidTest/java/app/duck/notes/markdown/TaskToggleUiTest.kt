@@ -83,6 +83,60 @@ class TaskToggleUiTest {
         assertEquals(NOTE.replaceFirst("- [x] feed them", "- [ ] feed them"), state.text.toString())
     }
 
+    /** CACHE_SINGLE_LINE_SUFFIX: reuse the old suffix after the unchanged middle line. */
+    @Test
+    fun replacingSeparatedLinesRefreshesTheSameEditorsCheckbox() {
+        val state = editor("a\nsame\n- [ ] old")
+        rule.onNodeWithContentDescription("old").assertIsOff()
+
+        rule.runOnUiThread {
+            state.edit {
+                replace(0, length, "b\nsame\n- [x] new")
+                selection = TextRange(0)
+            }
+        }
+        rule.waitForIdle()
+
+        assertEquals("b\nsame\n- [x] new", state.text.toString())
+        rule.onNodeWithContentDescription("new").assertIsOn()
+        rule.onNodeWithContentDescription("old").assertDoesNotExist()
+    }
+
+    /** SCANNER_TASK_PLUS_ONE: count a CRLF separator as one source character. */
+    @Test
+    fun tappingAfterCrLfAndArabicEmojiChangesOnlyTheTaskState() {
+        assertSeparatedTaskToggle(
+            before = "ملاحظات 🦆\r\n- [ ] اشترِ الحليب\r\n- [x] unchanged",
+            after = "ملاحظات 🦆\r\n- [x] اشترِ الحليب\r\n- [x] unchanged",
+            label = "اشترِ الحليب",
+        )
+    }
+
+    /** SCANNER_TASK_PLUS_ONE: lose source offsets across mixed CR, LF and CRLF separators. */
+    @Test
+    fun tappingAfterMixedSeparatorsChangesOnlyTheTaskState() {
+        assertSeparatedTaskToggle(
+            before = "ملاحظات 🦆\rkeep\nthird\r\n- [ ] only this\r- [x] unchanged",
+            after = "ملاحظات 🦆\rkeep\nthird\r\n- [x] only this\r- [x] unchanged",
+            label = "only this",
+        )
+    }
+
+    private fun assertSeparatedTaskToggle(before: String, after: String, label: String) {
+        val state = editor(before)
+        // The first line is clear of every task token, so conceal remains active throughout.
+        val caret = TextRange(1)
+        rule.runOnUiThread { state.edit { selection = caret } }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription(label).assertIsOff().performTouchInput { click() }
+        rule.waitForIdle()
+
+        assertEquals("only the intended state character may change", after, state.text.toString())
+        assertEquals("a checkbox touch must retain the caret", caret, state.selection)
+        rule.onNodeWithContentDescription(label).assertIsOn()
+        rule.onNodeWithContentDescription("unchanged").assertIsOn()
+    }
+
     // --- the drag (P6) -------------------------------------------------------
 
     /**

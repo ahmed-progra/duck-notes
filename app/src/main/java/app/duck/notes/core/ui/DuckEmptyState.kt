@@ -20,7 +20,7 @@ import app.duck.notes.core.theme.DuckTheme
 /**
  * The duck, and a line of text. Empty note lists, empty search, no-note-selected panes.
  *
- * The caption is **`proseMuted`, not `chromeMuted`**. `uiLabel` is 12sp, and WCAG 1.4.3's large-text
+ * The caption is **`proseMuted`, not `chromeMuted`**. `uiSecondary` is 14sp, and WCAG 1.4.3's large-text
  * exemption starts at 18pt (14pt bold) — so a caption is normal text owing 4.5, which `chromeMuted`
  * misses in all four light palettes at 3.26–3.36. `proseMuted` is 5.44 on `surface` and 5.04 on
  * `surfaceElevated`.
@@ -53,7 +53,7 @@ fun DuckEmptyState(
         )
         Text(
             text = caption,
-            style = DuckTheme.type.uiLabel,
+            style = DuckTheme.type.uiSecondary,
             color = colors.proseMuted,
             textAlign = TextAlign.Center,
         )

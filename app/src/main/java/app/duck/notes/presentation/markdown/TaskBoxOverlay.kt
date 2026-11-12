@@ -64,7 +64,7 @@ import kotlin.math.roundToInt
  * Upgrade path is intersecting `box.rendered` against the visible rect before emitting.
  */
 @Composable
-internal fun TaskBoxOverlay(box: TaskBox, layout: TextLayoutResult, onToggle: () -> Unit) {
+internal fun TaskBoxOverlay(box: TaskBox, layout: TextLayoutResult, enabled: Boolean = true, onToggle: () -> Unit) {
     val first = layout.getBoundingBox(box.rendered.first)
     val last = layout.getBoundingBox(box.rendered.last)
     // min/max rather than reading one rect: a box at a wrap point would otherwise get a negative
@@ -94,7 +94,7 @@ internal fun TaskBoxOverlay(box: TaskBox, layout: TextLayoutResult, onToggle: ()
             .size(with(density) { width.toDp() }, with(density) { height.toDp() })
             // No background: the box's glyphs are what the user sees, painted by MarkdownStyles as
             // TASK_BOX_OPEN / TASK_BOX_DONE. A tint here would be a fourth painted pair.
-            .toggleable(value = box.done, role = Role.Checkbox, onValueChange = { onToggle() })
+            .toggleable(value = box.done, enabled = enabled, role = Role.Checkbox, onValueChange = { onToggle() })
             .semantics { contentDescription = label },
     )
 }

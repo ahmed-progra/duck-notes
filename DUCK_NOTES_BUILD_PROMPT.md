@@ -115,7 +115,11 @@ notes_fts USING fts5(title, body, content='notes', content_rowid=...)
 - `unicode61` tokenizer, `remove_diacritics 2`.
 - Index: `modified_at DESC`, `is_trashed`, `note_tags.tag_id`.
 
-**Build:** Entities, DAOs, `DuckDatabase`, migration 1→2 stub, seed 3 sample notes in debug.
+**Build:** Entities, DAOs, `DuckDatabase`, migration 1→2 stub.
+
+**Historical sample data:** Phase 2 originally inserted debug samples from the database callback.
+Phase 9f supersedes that mechanism with ordinary welcome notes. Keep callbacks schema-only; do not
+restore a second sample seeder in debug or release.
 
 **Success:** Instrumented test — insert 5000 notes, FTS query under 50ms, tag filter under 30ms.
 
@@ -848,15 +852,15 @@ buffer is **rewritten, never discarded**, through the same `TagScanner` the tran
 | `onRenameTag` | `TagScanner.rename` on the live buffer |
 | `onDeleteTag` | `TagScanner.remove` on the live buffer |
 | `onAddTagToNote` | **flush only.** The append rule lives inside `AddTagToNote`; re-applying it here would be a second implementation of tag syntax. It survives by a *chain* — flush leaves the buffer clean, adoption picks the appended body up — not a mechanism. Pinned, `ponytail:` at the call site |
-| `onUndo` | **no flush**, then adopts unconditionally |
+| `onUndo` | **no flush**; reject changed affected buffers or stored bodies, then adopt only affected sessions |
 
-**`onUndo` is the one intent that must not flush**, and it did until review caught it. The other three
-flush so the transaction reads current text; undo's contract is the opposite — *discard what happened
-since the snapshot*. Flushing first wrote the user's typing to Room and then restored the snapshot
-straight over it, destroying the typing **on disk** rather than only in the buffer, and restamping
-`modifiedAt` on the way past for a write that lived two statements. The typing is still lost from the
-buffer, because adoption is unconditional and that is undo working; what changed is that Room is never
-polluted with a body the user asked to revert.
+**`onUndo` preserves edits made after the tag operation.** The pending snapshot records the expected
+post-operation bodies. Undo rejects any affected live buffer that differs, freezes affected inputs
+across the suspended transaction and adoption, and checks stored bodies inside the restore transaction.
+A conflict reports failure without restoring the snapshot. Successful undo adopts only sessions whose
+note IDs belong to the snapshot; an unrelated selected note keeps its buffer. The original read-only
+states are restored in `finally`. These are candidate semantics; runtime qualification is recorded
+separately and is not implied by this description.
 
 `lastWritten` gets the same transform, because Room's copy underwent exactly it: a clean buffer stays
 clean, a dirty one stays dirty by the user's own edits.
@@ -1854,6 +1858,10 @@ above. **Focus mode is the remaining piece of 8d.**
 
 **Known defect carried from Phase 4 — fix before writing `note_links` rows**
 
+*Historical prerequisite:* the description below records the original Phase 9 plan. The current
+implementation uses `WikiLinkScanner` for link syntax and code suppression. Phase 9f uses that
+existing production path; it does not repeat this extraction or claim unlinked mentions exist.
+
 `[[WikiLink]]` has **three** implementations that disagree, which is the exact failure `TagScanner`
 was extracted to prevent — in the other syntax.
 
@@ -1897,6 +1905,75 @@ AST node yet — Phase 9 is the first consumer, so build it here and have it del
 
 **Success:** Backlinks correct after rename. Unlinked-mention query under 100ms at 5000 notes.
 A `[[link]]` inside a code fence produces no `note_links` row.
+
+---
+
+## PHASE 9f — WELCOME NOTES
+
+**Goal:** Ordinary editable English welcome notes on a fresh installation, added once. This
+approved seed-only phase follows the separately reviewed and committed Settings phase. No commit
+is authorized by the checkpoint. Phase 14 must not add another automatic tour.
+
+**Build**
+- Keep prose in production Kotlin strings with explicit `\n` escapes. Titles are **Get started**,
+  **Organize with tags**, **Work faster**, and the hub **Welcome to Duck**. Each body has the live
+  `#duck/welcome` tag; only the hub links to the other guides. Example syntax remains in code.
+- Save targets before the hub through `SaveNote → NoteRepositoryImpl.save →
+  NoteDao.saveNoteWithTagsAndLinks`, preserving tag/link derivation and FTS triggers. No direct
+  inserts or callback note writes. Room's SQLiteConnection callbacks install schema only.
+- Capture database-file existence synchronously immediately after `super.onCreate` in `DuckApp`,
+  before resolving the lazy seeder or starting its application-owned IO job. The welcome and
+  Settings reads proceed concurrently; the UI combines their readiness without serializing reads.
+- Atomically persist fresh/existing origin and the attempted claim before saving. Existing empty
+  databases are skipped. Interruption may leave a partial tour; it must not retry or resurrect
+  deleted guides. Corrupt/unreadable state must not assume fresh defaults. Future sync can multiply
+  per-installation guides; cross-device deduplication is deferred.
+- Keep target-first creation but assign explicit timestamps to pin real `modified_at DESC` display:
+  **Welcome to Duck**, **Get started**, **Organize with tags**, **Work faster**. Normal SaveNote callers
+  retain their existing clock behavior.
+- Teach implemented formatting, toolbar, raw-source counts/dates, contents/backlinks, tags, Todo,
+  wiki links and tag icons. Omit search UI, Settings, typography, reading time, tables, underline,
+  images, external links, document attachments and sync. Make no bulk-deletion promise.
+- Bulk deletion, F5 usability work and cache repairs are separate phases. Do not change those
+  production paths or their guards in this seed-only phase.
+
+**Test graphs:** Ordinary discovery uses the existing SettingsTestRunner/HiltTestApplication and
+excludes WelcomeStartupTest, WelcomeStartupGateTest and OfflineActivityTest. Each gate method runs separately after an
+external app-data clear; the full verification script checks all discovered methods exactly once,
+apart from the intentional retained-install startup and offline Activity scenarios. Its disabled startup binding must
+not resolve the real seeder.
+Gallery runs in `:gallery` and skips welcome state. WelcomeStartupTestRunner uses the actual DuckApp,
+real repositories, disk Room and BundledSQLiteDriver. A separate fixture runner prepares an existing
+empty database before the production process is launched. See SETUP.md for direct adb commands.
+OfflineActivityTestRunner uses the production Application for `offlineScenario=create`, followed by
+`offlineScenario=restart` in a fresh process without clearing data or reinstalling between them.
+The qualification script checks exact method identities, native footers and fresh process evidence
+for both runs; source discovery and script self-checks alone do not qualify Activity behavior.
+
+**Guards:** Pin literal stored results and DAO title order before absence checks. Use production
+DeriveTitle, WikiLinkScanner and MarkdownScanner, independent expected edges and branch controls.
+Probe complete seed strings from classes*.dex with no branding exemption or CR normalization.
+Every named minimal production plant must land in this checkout, reach its own assertion RED,
+restore exact bytes and pass fresh GREEN. Old proof predating the content/order corrections is
+historical. Compilation errors, crashes, stale XML and UP-TO-DATE tasks do not certify a guard.
+
+**Open findings:** This seed-only phase does not close F3 cache suffix reuse, F4 CRLF offsets,
+F5 empty-list creation/deletion, F6 title normalization or F7 trash/restore backlink drift. Separate
+F3/F4 candidates are tracked in the reliability checkpoint below. LF-only bodies and exact target-first
+links avoid the initial seed triggers; they do not repair general editing/link behavior. Log delayed
+link-target creation and incoming-row drift after target rename for the link-consistency batch.
+
+**Future locales and explicit restoration:** Reserve locale-independent logical keys for each
+original, with localized title/body bundles whose hub links match exact derived target titles.
+A future restore action needs retained per-installation UUID identities so edited/renamed originals
+are not duplicated. That mapping and the action are not implemented here. Language changes must
+not rename user-edited notes or automatically create another tour.
+
+**Success:** Fresh debug/release installs show the intended ordinary guides in the pinned display
+order, with resolved hub links, derived tags and real FTS. Repeated seeding preserves edits; deletion
+and a real process restart do not resurrect guides. Existing installations remain unchanged.
+Disabled graphs consume no claim. Require fresh XML, complete direct instrumentation logs,
+restoration hashes and an actual app walkthrough; record tallies in the checkpoint report.
 
 ---
 
@@ -2043,7 +2120,7 @@ phase's notes" is where a defect goes to be forgotten.
 ## EXECUTION ORDER
 
 ```
-1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16
+1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 (through 9f) → 10 → 11 → 12 → 13 → 14 → 15 → 16
 ```
 Phases 4 and 8 carry the most risk. Budget the most time there.
 Phases 12 and 13 are the most dangerous to get wrong. Write the threat model first.
@@ -2193,6 +2270,40 @@ saved in `gate-script-review-20261010T141442Z/verification.json`. Runtime accept
 comes from result-file tallies, `OK (N tests)` and `INSTRUMENTATION_CODE`, rather
 than a successful build message.
 
-F3-F7 remain deferred in their own batches. Stable welcome identities and restore
+This historical Settings batch deferred F3-F7; later F3/F4 candidates are tracked below.
+Stable welcome identities and restore
 remain out of scope. Existing welcome scenarios may run as verification without
 editing their welcome-owned sources or clearing data in retained-install steps.
+
+## Reliability acceptance checkpoint (2026-10-18)
+
+The current candidate extends save recovery to failed pre-operation flushes for tag rename/delete/add
+and image add/delete. The dirty buffer survives; the existing warning offers persistence Retry,
+which does not replay the aborted mutation or an older failed navigation. Cancellation propagates.
+Failures after a successful flush remain separate operation-feedback and partial-state work.
+
+Separate F3/F4 candidates repair cache suffix validation and task/image offsets across LF, CRLF and
+lone CR. Acceptance requires their actual named production plants and restored GREEN runs, plus
+the final combined app gate. Existing test source or historical summaries alone do not close them.
+
+Evidence lives under `C:\dk\duck-reliability-20261018`. The `results.json` files in `recovery-plants`,
+`markdown-plants`, `device-warning-plant`, `native-editor-plants`, `dex-supplement-verified` and
+`rtl-plants`, `rtl-direction-plant`, `startup-ui-plants` and `final-gate-ready` must each accept their run. The first combined run in
+`final-gate` retains two RTL guard failures caused by comparing modal coordinates with the fixture's
+assumed origin. The corrected guards measure the actual panel in both directions and require
+production width plants for containment plus an absolute-left item alignment plant for actual RTL
+placement. The original DEX batch retains its final control-log encoding
+failure; the accepted supplement independently audits all three archived source-plant proofs and
+reruns the missing-class control with strict UTF-8 decoding. The checkpoint report
+records source/APK hashes, literal test tallies, direct instrumentation, lint, walkthrough evidence,
+exact plant restoration and the unchanged historical startup proofs. Missing or failed evidence
+leaves the affected candidate unaccepted. See SETUP.md for runner isolation and acceptance details.
+
+Both early combined runs retain three startup Settings-usability assertion failures. The corrected
+observer polls both real navigation alternatives and still requires Theme content and the original
+startup state. Compact/expanded controls and a production `openSettings` no-op plant must pass
+before `final-gate-ready` can accept the combined candidate. `final-gate-corrected` remains an earlier
+failed record.
+
+F5-F8, post-flush attachment/wiki-link failures, stable welcome identities and explicit tour
+restoration remain separate work. Present exact file/hunk groups for approval before committing.

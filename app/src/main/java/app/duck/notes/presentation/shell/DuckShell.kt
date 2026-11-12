@@ -14,10 +14,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -31,9 +34,16 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -46,6 +56,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -110,25 +123,36 @@ fun DuckShell(
 
     DuckShell(
         state = state,
-        buffer = viewModel.buffer,
+        buffer = state.editorSession?.buffer ?: viewModel.buffer,
         actions = ShellActions(
+            onNewNote = viewModel::onNewNote,
+            onSearchChanged = viewModel::onSearchChanged,
+            onRetrySearch = viewModel::onRetrySearch,
+            onArchiveNote = { viewModel.onArchiveNote(state.editorSession) },
+            onTrashNote = { viewModel.onTrashNote(state.editorSession) },
+            onRestoreNote = { viewModel.onRestoreNote(state.editorSession) },
+            onDismissOperationFailure = viewModel::onDismissOperationFailure,
+            onEditorAttached = viewModel::onEditorAttached,
+            onEditorDetached = viewModel::onEditorDetached,
+            onImagePickerOpened = { viewModel.onImagePickerOpened(state.editorSession) },
+            onImagePickerResult = viewModel::onImagePickerResult,
             onFilter = viewModel::onFilter,
             onSelectNote = viewModel::onSelectNote,
             onClearSelection = viewModel::onClearSelection,
+            onRetryNavigation = viewModel::onRetryNavigation,
             onToggleTag = viewModel::onToggleTag,
             onPinTag = viewModel::onPinTag,
             onRenameTag = viewModel::onRenameTag,
             onDeleteTag = viewModel::onDeleteTag,
             onSetTagIcon = viewModel::onSetTagIcon,
             onAddTagToNote = viewModel::onAddTagToNote,
-            onAttachImage = viewModel::onAttachImage,
-            onAttachImages = viewModel::onAttachImages,
-            onDeleteAttachment = viewModel::onDeleteAttachment,
+            onAttachImages = { viewModel.onAttachImages(state.editorSession, it) },
+            onDeleteAttachment = { viewModel.onDeleteAttachment(state.editorSession, it) },
             onUndo = viewModel::onUndo,
             onUndoShown = viewModel::onUndoShown,
-            onToggleSection = viewModel::onToggleSection,
+            onToggleSection = { viewModel.onToggleSection(state.editorSession, it) },
             onToggleInfo = viewModel::onToggleInfo,
-            onOpenWikiLink = viewModel::onOpenWikiLink,
+            onOpenWikiLink = { viewModel.onOpenWikiLink(state.editorSession, it) },
             tagsOfNote = viewModel::tagsOfNote,
         ),
         modifier = modifier,
@@ -157,6 +181,14 @@ fun DuckShell(
 
     BoxWithConstraints(modifier.fillMaxSize().background(colors.surface)) {
         val mode = paneModeFor(maxWidth)
+        val inlineInfo = mode == PaneMode.Expanded && maxWidth >= 1120.dp
+        val context = LocalContext.current
+        val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            val mime = uri?.let { source ->
+                app.duck.notes.presentation.markdown.resolveImageMime(source) { context.contentResolver.getType(it) }
+            } ?: "image/*"
+            actions.onImagePickerResult(uri?.toString(), mime)
+        }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
         val snackbars = remember { SnackbarHostState() }
@@ -232,6 +264,11 @@ fun DuckShell(
                     dialog = TagDialog.AddTag(noteId, actions.tagsOfNote(noteId))
                 },
                 modifier = m,
+                onNewNote = actions.onNewNote,
+                creatingNote = state.creatingNote,
+                search = state.search,
+                onSearchChanged = actions.onSearchChanged,
+                onRetrySearch = actions.onRetrySearch,
             )
         }
 
@@ -257,16 +294,32 @@ fun DuckShell(
                 // — the copy runs in the same session, moments after this callback, while the grant
                 // still holds. The mime is read here because the picker's uri is the only place it is
                 // authoritative; a null type (rare) falls back to a generic image type.
-                val context = LocalContext.current
-                val picker = rememberLauncherForActivityResult(
-                    ActivityResultContracts.PickVisualMedia(),
-                ) { uri ->
-                    if (uri != null) {
-                        val mime = context.contentResolver.getType(uri) ?: "image/*"
-                        actions.onAttachImage(uri.toString(), mime)
-                    }
+                val session = state.editorSession
+                DisposableEffect(session) {
+                    session?.let(actions.onEditorAttached)
+                    onDispose { session?.let(actions.onEditorDetached) }
                 }
+                key(session ?: buffer) {
                 Column(m) {
+                    if (actions.onArchiveNote != null) {
+                        var menu by remember { mutableStateOf(false) }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            androidx.compose.foundation.layout.Box {
+                                TextButton(onClick = { menu = true }, modifier = Modifier.heightIn(min = 48.dp)) {
+                                    Text(stringResource(R.string.note_actions), color = colors.accentText)
+                                }
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    if (state.selectedNoteTrashed) {
+                                        DropdownMenuItem(text = { Text(stringResource(R.string.note_restore)) }, onClick = { menu = false; actions.onRestoreNote?.invoke() })
+                                    } else {
+                                        DropdownMenuItem(text = { Text(stringResource(if (state.selectedNoteArchived) R.string.note_unarchive else R.string.note_archive)) }, onClick = { menu = false; actions.onArchiveNote.invoke() })
+                                        DropdownMenuItem(text = { Text(stringResource(R.string.note_trash)) }, onClick = { menu = false; actions.onTrashNote?.invoke() })
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (state.selectedNoteTrashed) Text(stringResource(R.string.note_trash_read_only), modifier = Modifier.padding(horizontal = DuckTheme.spacing.lg), color = colors.proseMuted)
                     if (state.selectedNoteTags.isNotEmpty() && !focusing) {
                         EditorTagRow(
                             tags = state.selectedNoteTags,
@@ -275,11 +328,12 @@ fun DuckShell(
                     }
                     MarkdownEditorScreen(
                         state = buffer,
+                        canEdit = { session?.canEdit ?: !state.selectedNoteTrashed },
                         collapsedSections = state.collapsedSections,
                         onToggleSection = actions.onToggleSection,
                         attachments = state.selectedNoteAttachments,
                         onAddImage = {
-                            picker.launch(
+                            if (actions.onImagePickerOpened()) picker.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
                             )
                         },
@@ -292,6 +346,7 @@ fun DuckShell(
                         onOpenWikiLink = actions.onOpenWikiLink,
                         scrollToOffset = headingScrolls,
                     )
+                }
                 }
             }
         }
@@ -349,7 +404,7 @@ fun DuckShell(
                 // a claim about Compose, and 8d-a established that such claims are measured here, not
                 // assumed. The Expanded pane is fixed-width for the same reason the sidebar and list
                 // are — `weight(1f)` belongs to the editor, which is the one that should absorb slack.
-                if (state.infoOpen) {
+                if (state.infoOpen && inlineInfo) {
                     VerticalDivider(color = colors.divider)
                     info(Modifier.width(INFO_PANE))
                 }
@@ -443,7 +498,7 @@ fun DuckShell(
         // Compose, which this project measures rather than assumes —
         // `RtlLayoutTest.theInfoSheetMirrorsWithLayoutDirection` does, and the plant that proves it
         // can fail is a hardcoded `LocalLayoutDirection provides Ltr` wrapped around the panel.
-        if (state.infoOpen && mode != PaneMode.Expanded) {
+        if (state.infoOpen && !inlineInfo) {
             ModalBottomSheet(
                 onDismissRequest = actions.onToggleInfo,
                 containerColor = colors.surfaceElevated,
@@ -454,10 +509,33 @@ fun DuckShell(
 
         // Hoisted above the pane branch on purpose: only Compact routes through a `Scaffold`, so a
         // `snackbarHost` slot would give undo to phones and silently withhold it from tablets.
-        SnackbarHost(
-            hostState = snackbars,
-            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
-        )
+        if (state.saveFailed) {
+            Snackbar(
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
+                    .semantics { liveRegion = LiveRegionMode.Polite },
+                containerColor = colors.surfaceElevated,
+                contentColor = colors.onSurface,
+                action = {
+                    TextButton(onClick = actions.onRetryNavigation, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text(stringResource(R.string.editor_save_retry), color = colors.accentText)
+                    }
+                },
+            ) {
+                Text(state.failedNoteTitle?.let { stringResource(R.string.editor_save_failed_note, it) } ?: stringResource(R.string.editor_save_failed))
+            }
+        } else if (state.operationFailure != null) {
+            Snackbar(
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().semantics { liveRegion = LiveRegionMode.Polite },
+                containerColor = colors.surfaceElevated,
+                contentColor = colors.onSurface,
+                action = { TextButton(onClick = actions.onDismissOperationFailure, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.action_dismiss), color = colors.accentText) } },
+            ) { Text(stringResource(if (state.operationFailure == OperationFailure.Create) R.string.note_create_failed else R.string.note_operation_failed)) }
+        } else {
+            SnackbarHost(
+                hostState = snackbars,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+            )
+        }
 
         // The only chrome present in focus mode: the way back out. Root overlay, same hoist as the
         // SnackbarHost, so it lands over the editor pane (the rightmost/only pane) in every mode.
@@ -487,14 +565,14 @@ fun DuckShell(
 /** The open note's tags, above the body. Tapping one filters the list by it. */
 @Composable
 private fun EditorTagRow(tags: List<String>, onTagClick: (String) -> Unit) {
-    FlowRow(
+    LazyRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = DuckTheme.spacing.lg, vertical = DuckTheme.spacing.sm),
         horizontalArrangement = Arrangement.spacedBy(DuckTheme.spacing.sm),
-        verticalArrangement = Arrangement.spacedBy(DuckTheme.spacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        tags.forEach { tag ->
+        items(tags, key = { it }) { tag ->
             DuckTagChip(label = tag, selected = false, onClick = { onTagClick(tag) })
         }
     }

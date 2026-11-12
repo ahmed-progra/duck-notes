@@ -58,6 +58,9 @@ interface TagRepository {
      */
     suspend fun removeTag(name: String): BodySnapshot
 
-    /** Writes [snapshot]'s bodies back, restores pin/icon, and sweeps any orphaned created row. */
-    suspend fun restore(snapshot: BodySnapshot)
+    /**
+     * Restores bodies and tag metadata. When [expectedBodies] is supplied, checks every affected
+     * body in the same write transaction before making any change; a conflict rejects the undo.
+     */
+    suspend fun restore(snapshot: BodySnapshot, expectedBodies: Map<String, String>? = null)
 }

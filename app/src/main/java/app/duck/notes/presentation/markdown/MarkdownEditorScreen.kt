@@ -21,8 +21,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.MotionDurationScale
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
@@ -40,6 +43,9 @@ import app.duck.notes.domain.markdown.SectionFolding
 import app.duck.notes.domain.markdown.SpanPlanner
 import app.duck.notes.domain.markdown.WikiLinkScanner
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.coroutineContext
 import kotlin.math.roundToInt
 
 /**
@@ -81,6 +87,7 @@ import kotlin.math.roundToInt
 @Composable
 fun MarkdownEditorScreen(
     state: TextFieldState,
+    canEdit: () -> Boolean = { true },
     modifier: Modifier = Modifier,
     collapsedSections: Set<String> = emptySet(),
     onToggleSection: (String) -> Unit = {},
@@ -154,6 +161,9 @@ fun MarkdownEditorScreen(
     val plan = remember(text, collapsedSections, selection) {
         SpanPlanner.plan(scan.tokens, selection.start, selection.end, folds)
     }
+    // The collector survives edits and theme changes, so read their latest values.
+    val currentPlan by rememberUpdatedState(plan)
+    val motion by rememberUpdatedState(DuckTheme.motion)
     val boxes = remember(plan) { SpanPlanner.taskBoxes(text.toString(), scan.tokens, plan) }
     // Keyed on the selection as well, like `plan`: a link's target appears and disappears as the
     // caret leaves and enters it, which is the routing rule — see SpanPlanner.wikiLinkTargets.
@@ -184,14 +194,24 @@ fun MarkdownEditorScreen(
     // this Row, so scrolling to exactly `top` lands the heading 12dp below the viewport edge — the
     // editor's own inset, which is where a heading should sit, not an off-by-padding error.
     LaunchedEffect(scrollToOffset) {
-        scrollToOffset?.collect { source ->
-            val measured = layout ?: return@collect
-            val rendered = SpanPlanner.renderedOffset(source, plan.conceal.sortedBy { it.first })
+        scrollToOffset?.collectLatest { source ->
+            val measured = layout ?: return@collectLatest
+            val rendered = SpanPlanner.renderedOffset(source, currentPlan.conceal.sortedBy { it.first })
             // The same one-frame-behind guard the two overlays carry: on the frame the text changes,
             // an offset computed from the new plan can point past the end of the old layout, and
             // getBoundingBox would throw.
-            if (rendered >= measured.layoutInput.text.length) return@collect
-            scroll.animateScrollTo(measured.getBoundingBox(rendered).top.roundToInt())
+            if (rendered >= measured.layoutInput.text.length) return@collectLatest
+            val target = measured.getBoundingBox(rendered).top.roundToInt()
+            if (motion.animates) {
+                val platformScale = coroutineContext[MotionDurationScale]
+                // Read the live preference each frame without replacing the platform's nonzero scale.
+                withContext(object : MotionDurationScale {
+                    override val scaleFactor: Float
+                        get() = if (motion.animates) platformScale?.scaleFactor ?: 1f else 0f
+                }) {
+                    scroll.animateScrollTo(target, animationSpec = motion.slowSpec())
+                }
+            } else scroll.scrollTo(target)
         }
     }
 
@@ -200,7 +220,7 @@ fun MarkdownEditorScreen(
     // content:// uri's MIME, exactly as the picker reads it. Text pastes fall through untouched.
     val context = LocalContext.current
     val pasteReceiver = remember(context, onAttachImages) {
-        imagePasteReceiver({ context.contentResolver.getType(it) }, onAttachImages)
+        imagePasteReceiver({ context.contentResolver.getType(it) }) { if (canEdit()) onAttachImages(it) }
     }
 
     Scaffold(
@@ -232,21 +252,23 @@ fun MarkdownEditorScreen(
                             null
                         }
                     }
-                    if (active != null) {
+                    if (active != null && canEdit()) {
                         val prefix = text.substring(active.first + 2, active.last + 1)
                         WikiLinkSuggestions(
                             titles = WikiLinkScanner.suggest(noteTitles, prefix),
-                            onSelect = { state.completeWikiLink(active, it) },
+                            onSelect = { if (canEdit()) state.completeWikiLink(active, it) },
                         )
                     }
                     AttachmentStrip(
                         attachments = attachments,
-                        onAddImage = onAddImage,
-                        onDeleteAttachment = onDeleteAttachment,
+                        onAddImage = { if (canEdit()) onAddImage() },
+                        editable = canEdit(),
+                        onDeleteAttachment = { if (canEdit()) onDeleteAttachment(it) },
                     )
                     FormatToolbar(
                         state = state,
-                        enabled = writable,
+                        enabled = writable && canEdit(),
+                        canEdit = canEdit,
                         onEnterFocus = onToggleFocus,
                         onToggleInfo = onToggleInfo,
                     )
@@ -261,6 +283,7 @@ fun MarkdownEditorScreen(
                 // start is 0 because [FOLD_GUTTER] supplies the left inset now: the text begins
                 // 48dp in, where it began 20dp in before the gutter existed.
                 .padding(start = 0.dp, end = 20.dp, top = 12.dp, bottom = 12.dp)
+                .testTag("noteEditorViewport")
                 .verticalScroll(scroll),
         ) {
             // Two columns, and the split is the fix for a defect 8c-c shipped.
@@ -329,7 +352,9 @@ fun MarkdownEditorScreen(
                 ) {
                     BasicTextField(
                         state = state,
-                        modifier = Modifier.fillMaxSize().contentReceiver(pasteReceiver),
+                        readOnly = !canEdit(),
+                        inputTransformation = { if (!canEdit()) revertAllChanges() },
+                        modifier = Modifier.fillMaxSize().testTag("noteEditor").contentReceiver(pasteReceiver),
                         outputTransformation = transformation,
                         // noteBody carries the serif reading font and the size the engine's `em`
                         // heading multiples resolve against.
@@ -357,7 +382,7 @@ fun MarkdownEditorScreen(
                             // Skipping it costs one frame of a missing overlay; not skipping it
                             // throws out of getBoundingBox.
                             if (box.rendered.last < measured.layoutInput.text.length) {
-                                TaskBoxOverlay(box, measured) { state.toggleTask(box) }
+                                TaskBoxOverlay(box, measured, enabled = canEdit()) { if (canEdit()) state.toggleTask(box) }
                             }
                         }
                     }

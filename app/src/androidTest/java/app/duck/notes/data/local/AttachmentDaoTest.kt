@@ -40,7 +40,7 @@ class AttachmentDaoTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .addCallback(DuckDatabaseCallback())
             .build()
         notes = db.noteDao()
         attachments = db.attachmentDao()

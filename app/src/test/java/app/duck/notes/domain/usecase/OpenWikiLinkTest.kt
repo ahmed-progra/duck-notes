@@ -3,179 +3,117 @@ package app.duck.notes.domain.usecase
 import app.duck.notes.domain.fake.FakeNoteRepository
 import app.duck.notes.domain.fake.FixedClock
 import app.duck.notes.domain.model.Note
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Following a tapped `[[WikiLink]]` — resolve, or create and relink — Phase 9d.
- *
- * The half of create-on-tap that has nothing to do with layout, and therefore nothing to do with an
- * emulator. Where the tap *lands* is `WikiLinkTargetTest` (the offsets) and `WikiLinkTapUiTest` (the
- * screen); what happens once it has landed is here.
- */
 class OpenWikiLinkTest {
-
     private val notes = FakeNoteRepository()
     private val clock = FixedClock(now = 1_000L)
     private val saveNote = SaveNote(notes, DeriveTitle(), ParseTags(), ResolveWikiLinks(), clock)
     private val openWikiLink = OpenWikiLink(notes, saveNote)
 
     private fun note(id: String, title: String, modifiedAt: Long = 1_000L) = Note(
-        id = id,
-        title = title,
-        body = title,
-        createdAt = 0L,
-        modifiedAt = modifiedAt,
+        id = id, title = title, body = title, createdAt = 0L, modifiedAt = modifiedAt,
     )
 
-    // --- resolve --------------------------------------------------------------
-
-    @Test
-    fun anExistingTitleResolvesToThatNote() = runTest {
+    @Test fun anExistingTitleResolvesWithoutWriting() = runTest {
         notes.seed(note("target", "Pond"))
-        notes.seed(note("source", "Journal"))
-
-        assertEquals("target", openWikiLink("Pond", sourceId = "source", sourceBody = "[[Pond]]"))
+        notes.writes.clear()
+        assertEquals("target", openWikiLink("Pond"))
+        assertTrue(notes.writes.isEmpty())
     }
 
-    /** Resolving writes nothing at all — following a link is a read. */
-    @Test
-    fun resolvingWritesNothing() = runTest {
-        notes.seed(note("target", "Pond"))
-        val before = notes.writes.size
-
-        openWikiLink("Pond", sourceId = "source", sourceBody = "[[Pond]]")
-
-        assertEquals(before, notes.writes.size)
+    @Test fun duplicateTitlesUseModificationThenStableId() = runTest {
+        notes.seed(note("old", "Pond", 1L))
+        notes.seed(note("z", "Pond", 9L))
+        notes.seed(note("a", "Pond", 9L))
+        assertEquals("a", openWikiLink("Pond"))
+        assertEquals(3, notes.all().size)
     }
 
-    /**
-     * Two notes sharing a title is the **navigate** case, not a second creation, and it resolves the
-     * way `NoteDao.noteIdByTitle` resolves: most recently modified.
-     *
-     * That agreement is the point of tapping through the same query the save path links by — the note
-     * a tap opens is the note the next save writes a `note_links` row to.
-     */
-    @Test
-    fun aDuplicateTitleResolvesToTheMostRecentlyModifiedNote() = runTest {
-        notes.seed(note("older", "Pond", modifiedAt = 1_000L))
-        notes.seed(note("newer", "Pond", modifiedAt = 9_000L))
-
-        assertEquals("newer", openWikiLink("Pond", sourceId = null, sourceBody = ""))
-    }
-
-    /** A trashed note does not satisfy a link, so tapping one creates a fresh note instead. */
-    @Test
-    fun aTrashedNoteDoesNotSatisfyTheLink() = runTest {
+    @Test fun aTrashedNoteDoesNotSatisfyTheLinkButAnArchivedOneDoes() = runTest {
         notes.seed(note("binned", "Pond").copy(isTrashed = true))
-
-        val opened = openWikiLink("Pond", sourceId = null, sourceBody = "")
-
-        assertNotEquals("binned", opened)
-        assertEquals("Pond", notes.current(opened)?.title)
+        val created = openWikiLink("Pond")
+        assertNotEquals("binned", created)
+        assertEquals("Pond", notes.current(created)?.title)
+        notes.seed(note("archive", "Archive").copy(isArchived = true))
+        assertEquals("archive", openWikiLink("Archive"))
     }
 
-    // --- create ---------------------------------------------------------------
-
-    /**
-     * An unresolved title creates a note whose derived title is exactly that title.
-     *
-     * The body is the bare title, so `DeriveTitle` yields it back unchanged and the source's link
-     * resolves on the very next save. Anything that made the derived title differ — a prefix, a
-     * suffix, a blank line — would leave the link permanently unresolved while looking created.
-     */
-    @Test
-    fun anUnresolvedTitleCreatesTheNote() = runTest {
-        val opened = openWikiLink("Pond", sourceId = null, sourceBody = "")
-
-        val created = requireNotNull(notes.current(opened))
+    /** Plant WIKI_CREATE_WRONG_BODY: save an empty body instead of literal. */
+    @Test fun creationKeepsTheLiteralBodyAndUsesTheSaveNoteTitle() = runTest {
+        clock.now = 9_000L
+        val created = requireNotNull(notes.current(openWikiLink("  **Pond**  ")))
+        assertEquals("**Pond**", created.body)
         assertEquals("Pond", created.title)
-        assertEquals("Pond", created.body)
+        assertEquals(9_000L, created.createdAt)
+        assertEquals(created.id, openWikiLink("**Pond**"))
+        assertEquals(1, notes.all().size)
     }
 
-    /**
-     * **Creating relinks the source, and this is the assertion that makes the feature whole.**
-     *
-     * `note_links` rows are written when the *source* note saves. Creating the target alone leaves
-     * the link painted, resolvable, and with no row — so the new note's backlinks panel, which 9b
-     * built, would be empty. The second save re-derives the source's links now that the target
-     * exists. Dropping that save is the plant, and nothing else in the suite notices it.
-     */
-    @Test
-    fun creatingRelinksTheSourceSoTheBacklinkExists() = runTest {
-        notes.seed(note("source", "Journal"))
-
-        openWikiLink("Pond", sourceId = "source", sourceBody = "see [[Pond]]")
-
-        assertEquals(
-            "the source's links must be re-derived once the target exists",
-            listOf("Pond"),
-            notes.savedLinks["source"],
-        )
+    @Test fun fallbackDoesNotMergeOrRewriteLiteralTitleMatches() = runTest {
+        notes.seed(note("normalized", "Pond", 9_000L))
+        notes.seed(note("literal", "**Pond**", 1L))
+        notes.writes.clear()
+        assertEquals("literal", openWikiLink(" **Pond** "))
+        assertEquals(2, notes.all().size)
+        assertTrue(notes.writes.isEmpty())
     }
 
-    /**
-     * The relinking save must **not** restamp the source.
-     *
-     * It carries no new keystrokes — the body is the one the caller just flushed — so restamping
-     * would move the source to the top of every list because the user followed a link out of it.
-     * `restamp = true` is the plant; the body is identical either way, so only `modifiedAt` catches it.
-     */
-    @Test
-    fun creatingDoesNotRestampTheSourceNote() = runTest {
-        notes.seed(note("source", "Journal", modifiedAt = 1_000L))
+    @Test fun whitespaceAndFormattingFallbackReuseTheDerivedTitle() = runTest {
+        val first = openWikiLink("# A   note")
+        assertEquals("A note", notes.current(first)?.title)
+        assertEquals(first, openWikiLink("# A   note"))
+        assertEquals(first, openWikiLink("A  note"))
+        assertEquals(1, notes.all().size)
+    }
+
+    @Test fun creationDoesNotRewriteTheSourceBodyOrTimestamp() = runTest {
+        val source = saveNote(null, "Journal\nsee [[Pond]]")
+        val before = notes.writes.count { it.id == source.id }
         clock.now = 9_000L
-
-        openWikiLink("Pond", sourceId = "source", sourceBody = "see [[Pond]]")
-
-        assertEquals(
-            "following a link out of a note is not an edit to it",
-            1_000L,
-            notes.current("source")?.modifiedAt,
-        )
+        openWikiLink("Pond")
+        assertEquals(before, notes.writes.count { it.id == source.id })
+        assertEquals(source, notes.current(source.id))
+        assertEquals(listOf("Pond"), notes.savedLinks[source.id])
     }
 
-    /** The created note *is* stamped — it is a genuinely new note. */
-    @Test
-    fun theCreatedNoteIsStampedWithTheClock() = runTest {
-        clock.now = 9_000L
-
-        val opened = openWikiLink("Pond", sourceId = null, sourceBody = "")
-
-        assertEquals(9_000L, notes.current(opened)?.createdAt)
-    }
-
-    /** Nothing to relink when no note is open, and that must not throw. */
-    @Test
-    fun creatingWithNoSourceOpenRelinksNothing() = runTest {
-        val opened = openWikiLink("Pond", sourceId = null, sourceBody = "")
-
-        assertEquals("Pond", notes.current(opened)?.title)
+    /** Plant WIKI_CREATE_NO_RECHECK: omit the resolution inside creationLock. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun overlappingTapsCreateOnlyOneNote() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        notes.beforeSave = { entered.complete(Unit); release.await() }
+        val first = async { openWikiLink("Pond") }
+        runCurrent()
+        assertTrue(entered.isCompleted)
+        val second = async { openWikiLink("Pond") }
+        runCurrent()
+        release.complete(Unit)
+        assertEquals(first.await(), second.await())
         assertEquals(1, notes.writes.size)
+        assertEquals(1, notes.all().size)
     }
 
-    /** Creating twice from the same title resolves the second time — no duplicate notes. */
-    @Test
-    fun tappingTheSameUnresolvedLinkTwiceCreatesOneNote() = runTest {
-        val first = openWikiLink("Pond", sourceId = null, sourceBody = "")
-        val second = openWikiLink("Pond", sourceId = null, sourceBody = "")
-
-        assertEquals(first, second)
-        assertEquals(1, notes.all().count { it.title == "Pond" })
-    }
-
-    /** A title with padding was trimmed by `WikiLinkScanner.titleAt` before it ever reached here. */
-    @Test
-    fun theCreatedTitleIsWhatTheScannerHandedOver() = runTest {
-        val title = app.duck.notes.domain.markdown.WikiLinkScanner
-            .titleAt("x [[  Padded  ]] y", 2 until 16)
-
-        val opened = openWikiLink(title, sourceId = null, sourceBody = "")
-
-        assertEquals("Padded", notes.current(opened)?.title)
-        assertTrue("no padding survived into the note", notes.current(opened)?.body == "Padded")
+    @Test fun creationFailureAndCancellationLeaveTheNextAttemptUsable() = runTest {
+        notes.beforeSave = { throw java.io.IOException("controlled creation failure") }
+        try {
+            openWikiLink("Pond")
+            throw AssertionError("creation failure was swallowed")
+        } catch (_: java.io.IOException) { }
+        assertTrue(notes.all().isEmpty())
+        notes.beforeSave = { throw kotlinx.coroutines.CancellationException("controlled cancellation") }
+        try {
+            openWikiLink("Pond")
+            throw AssertionError("cancellation was swallowed")
+        } catch (_: kotlinx.coroutines.CancellationException) { }
+        notes.beforeSave = null
+        assertEquals("Pond", notes.current(openWikiLink("Pond"))?.title)
     }
 }

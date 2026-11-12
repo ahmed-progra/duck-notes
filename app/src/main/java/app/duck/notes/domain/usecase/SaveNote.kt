@@ -2,6 +2,7 @@ package app.duck.notes.domain.usecase
 
 import app.duck.notes.domain.Clock
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.repository.NoteRepository
 import java.util.UUID
 import javax.inject.Inject
@@ -34,8 +35,11 @@ class SaveNote @Inject constructor(
         body: String,
         caret: Int? = null,
         restamp: Boolean = true,
+        timestampMillis: Long? = null,
+        attachment: Attachment? = null,
+        deletedAttachmentId: String? = null,
     ): Note {
-        val now = clock.nowMillis()
+        val now = timestampMillis ?: clock.nowMillis()
         val existing = id?.let { notes.getNote(it) }
         val note = existing?.copy(
             title = deriveTitle(body),
@@ -52,7 +56,14 @@ class SaveNote @Inject constructor(
         // `note_links` row can never describe a body that no longer contains the link. No caret
         // suppression here: an in-progress `[[Pon` is not a link at all until its closing brackets
         // exist, so there is nothing half-written for `WikiLinkScanner` to mint prematurely.
-        notes.save(note, parseTags(body, caret), resolveWikiLinks(body))
+        require(attachment == null || deletedAttachmentId == null)
+        val tags = parseTags(body, caret)
+        val links = resolveWikiLinks(body)
+        when {
+            attachment != null -> notes.saveWithAttachment(note, tags, links, attachment)
+            deletedAttachmentId != null -> notes.saveWithoutAttachment(note, tags, links, deletedAttachmentId)
+            else -> notes.save(note, tags, links)
+        }
         return note
     }
 }

@@ -10,9 +10,11 @@ import androidx.room.RoomRawQuery
 import androidx.room.Transaction
 import androidx.room.Update
 import app.duck.notes.data.local.entity.NoteEntity
+import app.duck.notes.data.local.entity.AttachmentEntity
 import app.duck.notes.data.local.entity.NoteLinkEntity
 import app.duck.notes.data.local.entity.NoteTagCrossRef
 import app.duck.notes.data.local.entity.TagEntity
+import app.duck.notes.domain.usecase.DeriveTitle
 import kotlinx.coroutines.flow.Flow
 import java.util.UUID
 
@@ -203,8 +205,8 @@ abstract class NoteDao {
 
     /**
      * Prefix full-text search over active notes, most-recent first. Each token is turned into an
-     * FTS5 prefix term (`duck note` -> `duck* note*`, implicit AND). Query hardening — operators,
-     * phrases, snippet highlighting — lands in Phase 10.
+     * quoted literal FTS5 prefix term, joined with AND. Operator characters are ordinary input;
+     * advanced operators, snippets and saved searches remain outside basic search.
      *
      * `notes_fts` is deliberately NOT aliased: MATCH's left side resolves to the hidden column
      * named after the table, which keeps the real table name even under an alias.
@@ -263,9 +265,8 @@ abstract class NoteDao {
      * A note that no longer links anywhere ends with no rows rather than stale ones. [clearLinksFrom]
      * is scoped to `note.id`, so one note's save can never touch another note's links.
      *
-     * **A title that resolves to nothing produces no row**, silently. `target_id` is non-null and
-     * create-on-tap is a later phase, so an unresolved link is simply not yet a link. It stays
-     * painted in the editor either way.
+     * Unresolved references are retained. Backlinks resolve against current titles at read time,
+     * so target creation, rename, trash and restore need no rewrite of other notes.
      *
      * Defaulted to empty so the many fixture callers that save a note without caring about links do
      * not each have to pass one; every real write goes through `NoteRepositoryImpl`, which does.
@@ -285,10 +286,42 @@ abstract class NoteDao {
         deleteOrphanTags()
         clearLinksFrom(note.id)
         for (title in linkTitles) {
-            val targetId = noteIdByTitle(title) ?: continue
-            insertLink(NoteLinkEntity(sourceId = note.id, targetId = targetId, linkText = title))
+            val literal = title.trim()
+            if (literal.isNotEmpty()) {
+                insertLink(NoteLinkEntity(note.id, literal, DeriveTitle()(literal)))
+            }
         }
     }
+
+    /** A failed attachment insert must also roll back the body and its derived rows. */
+    @Transaction
+    open suspend fun saveNoteWithAttachment(
+        note: NoteEntity,
+        tagNames: List<String>,
+        linkTitles: List<String>,
+        attachment: AttachmentEntity,
+    ) {
+        require(attachment.noteId == note.id)
+        saveNoteWithTagsAndLinks(note, tagNames, linkTitles)
+        insertAttachment(attachment)
+    }
+
+    @Insert
+    protected abstract suspend fun insertAttachment(attachment: AttachmentEntity)
+
+    @Transaction
+    open suspend fun saveNoteWithoutAttachment(
+        note: NoteEntity,
+        tagNames: List<String>,
+        linkTitles: List<String>,
+        attachmentId: String,
+    ) {
+        saveNoteWithTagsAndLinks(note, tagNames, linkTitles)
+        deleteAttachmentForNote(attachmentId, note.id)
+    }
+
+    @Query("DELETE FROM attachments WHERE id = :attachmentId AND note_id = :noteId")
+    protected abstract suspend fun deleteAttachmentForNote(attachmentId: String, noteId: String)
 
     // --- Transaction building blocks ---------------------------------------
 
@@ -326,48 +359,33 @@ abstract class NoteDao {
     protected abstract suspend fun clearLinksFrom(sourceId: String)
 
     /**
-     * IGNORE, matching [insertCrossRef]: the composite `(source_id, target_id)` primary key means a
+     * IGNORE, matching [insertCrossRef]: the composite `(source_id, link_text)` primary key means a
      * note linking the same target twice — `[[Pond]]` written in two paragraphs — is one row, not a
      * constraint failure.
      */
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     protected abstract suspend fun insertLink(link: NoteLinkEntity)
 
-    /**
-     * The note a `[[title]]` resolves to, or null.
-     *
-     * **Exact match, case included.** `ResolveWikiLinks` already commits to this in its KDoc —
-     * *"Titles come back exactly as typed because they are matched against note titles, which
-     * preserve casing"* — and this is the query that makes it true. `COLLATE NOCASE` is the one-word
-     * upgrade if case-insensitive linking is ever wanted.
-     *
-     * **`LIMIT 1` needs the ORDER BY to be a decision rather than an accident.** Titles are derived
-     * from the body and are not unique — two notes can both be called `Pond`, and there is no index
-     * on `notes.title` to impose an order. Without the sort, SQLite returns whichever row it reaches
-     * first, which can change after a `VACUUM` and would silently re-point an existing link. Most
-     * recently modified is the deliberate answer: the note the user last touched is the one they mean.
-     *
-     * Trashed notes are excluded — a link must not resolve to something in the bin.
-     *
-     * **Public since 9d, and deliberately not duplicated.** It has a second caller now: tapping a
-     * `[[WikiLink]]` resolves through this same query before deciding whether to create. That is the
-     * property worth having — a tap opens *exactly* the note the next save would write a `note_links`
-     * row to, including the most-recently-modified tie-break, because both ask one question of one
-     * query rather than two questions that happen to agree today. It sits among the transaction
-     * helpers because that is where its other caller lives.
-     */
+    /** Literal title first, then the title SaveNote would derive when creating from that text. */
+    @Transaction
+    open suspend fun noteIdByTitle(title: String): String? {
+        val literal = title.trim()
+        if (literal.isEmpty()) return null
+        return noteIdByExactTitle(literal) ?: noteIdByExactTitle(DeriveTitle()(literal))
+    }
+
     @Query(
         """
         SELECT id FROM notes
         WHERE title = :title AND is_trashed = 0
-        ORDER BY modified_at DESC
+        ORDER BY modified_at DESC, id ASC
         LIMIT 1
         """,
     )
-    abstract suspend fun noteIdByTitle(title: String): String?
+    protected abstract suspend fun noteIdByExactTitle(title: String): String?
 
     private fun ftsMatch(term: String): String =
         term.trim().split(Regex("\\s+"))
             .filter { it.isNotEmpty() }
-            .joinToString(" ") { "$it*" }
+            .joinToString(" AND ") { "\"${it.replace("\"", "\"\"")}\"*" }
 }

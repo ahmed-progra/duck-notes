@@ -23,6 +23,7 @@ import app.duck.notes.domain.model.SettingsNotice
 import app.duck.notes.domain.model.ThemePreference
 import dagger.Module
 import dagger.Provides
+import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dagger.hilt.testing.TestInstallIn
@@ -117,7 +118,18 @@ class SettingsTestResources(context: Context) {
     components = [SingletonComponent::class],
     replaces = [SettingsModule::class, DatabaseModule::class],
 )
-object SettingsTestModule {
+object SettingsTestModule {}
+
+@Module
+@InstallIn(SingletonComponent::class)
+object SettingsTestBindings {
+    @Provides @Singleton
+    fun provideWelcomeStartup(
+        seeder: javax.inject.Provider<app.duck.notes.startup.SeedWelcomeNotes>,
+        @app.duck.notes.di.WelcomeScope scope: CoroutineScope,
+    ): app.duck.notes.startup.WelcomeStartup =
+        app.duck.notes.startup.WelcomeStartup(seeder, scope).apply { start(false, true) }
+
     @Provides @Singleton
     fun provideResources(@ApplicationContext context: Context) = SettingsTestResources(context)
 
@@ -134,7 +146,7 @@ object SettingsTestModule {
     fun provideDatabase(@ApplicationContext context: Context): DuckDatabase =
         Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .addCallback(DuckDatabaseCallback())
             .build()
 
     @Provides fun provideNoteDao(database: DuckDatabase): NoteDao = database.noteDao()

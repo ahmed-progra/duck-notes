@@ -33,11 +33,15 @@ import app.duck.notes.domain.model.ThemePreference
 import app.duck.notes.domain.model.effectiveDark
 import app.duck.notes.presentation.settings.SettingsViewModel
 import app.duck.notes.presentation.settings.isAppearanceReady
+import app.duck.notes.startup.WelcomeStartup
+import app.duck.notes.startup.WelcomeStartupState
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
+    @Inject lateinit var welcomeStartup: WelcomeStartup
     private val settingsViewModel: SettingsViewModel by viewModels()
     private var appliedTheme: ThemePreference? = null
     private var appliedDark: Boolean? = null
@@ -64,7 +68,7 @@ class MainActivity : AppCompatActivity() {
                 fallbackProjected = true
                 applyAppearance(ThemePreference.System)
             }
-            keep
+            keep || welcomeStartup.state.value == WelcomeStartupState.Loading
         }
         projectWindow(isNight(resources.configuration))
         lifecycleScope.launch {
@@ -78,12 +82,14 @@ class MainActivity : AppCompatActivity() {
         }
         setContent {
             val ui by settingsViewModel.uiState.collectAsStateWithLifecycle()
+            val welcomeState by welcomeStartup.state.collectAsStateWithLifecycle()
             // Register configuration invalidation while sampling System outside the app override.
             val configuration = LocalConfiguration.current
             val systemDark = isNight(if (ui.snapshot.settings.theme == ThemePreference.System) systemResources.configuration else configuration)
             val dark = effectiveDark(ui.snapshot.settings.theme, systemDark)
             DuckTheme(dark = dark) {
-                if (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut) {
+                if (welcomeState != WelcomeStartupState.Loading &&
+                    (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut)) {
                     DuckScreen(settingsViewModel = settingsViewModel)
                 } else {
                     Box(Modifier.fillMaxSize().background(DuckTheme.colors.surface))

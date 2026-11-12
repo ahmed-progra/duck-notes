@@ -1,10 +1,16 @@
 package app.duck.notes.presentation.shell
 
+import app.duck.notes.domain.usecase.SearchNotes
+import app.duck.notes.domain.usecase.ArchiveNote
+import app.duck.notes.domain.usecase.DeleteNote
+import app.duck.notes.domain.usecase.RestoreNote
 import android.content.Context
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
+import androidx.room.useWriterConnection
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -37,7 +43,9 @@ import app.duck.notes.domain.usecase.SaveNote
 import app.duck.notes.domain.usecase.SetTagIcon
 import app.duck.notes.domain.usecase.UndoTagChange
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -51,6 +59,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Phase 8a's durability claims, against a real SQLite and the real transaction.
@@ -82,7 +93,7 @@ class AutosaveDurabilityTest {
         db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
             // Must match production: system SQLite may lack FTS5, which `notes_fts` requires.
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .addCallback(DuckDatabaseCallback())
             .build()
         handle = SavedStateHandle()
     }
@@ -94,7 +105,7 @@ class AutosaveDurabilityTest {
      * A ViewModel over the real database. [handle] is a field so a test can rebuild a *second*
      * ViewModel from the first one's surviving state — process death, as the framework does it.
      */
-    private fun shell(): DuckShellViewModel {
+    private fun shell(autosaveDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate): DuckShellViewModel {
         val notes = NoteRepositoryImpl(db.noteDao())
         val tags = TagRepositoryImpl(db, db.tagDao(), db.noteDao(), DeriveTitle(), parseTags, ResolveWikiLinks())
         val saveNote = SaveNote(notes, DeriveTitle(), parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() })
@@ -120,7 +131,11 @@ class AutosaveDurabilityTest {
             observeAttachments = ObserveAttachments(attachments),
             getBacklinks = GetBacklinks(LinkRepositoryImpl(db.noteLinkDao())),
             clock = Clock { System.currentTimeMillis() },
-            autosaveDispatcher = Dispatchers.Main.immediate,
+            searchNotes = SearchNotes(app.duck.notes.data.repository.SearchRepositoryImpl(db.noteDao())),
+        archiveNote = ArchiveNote(notes, parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() }),
+        deleteNote = DeleteNote(notes, parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() }),
+        restoreNote = RestoreNote(notes, parseTags, ResolveWikiLinks(), Clock { System.currentTimeMillis() }),
+        autosaveDispatcher = autosaveDispatcher,
         )
     }
 
@@ -162,16 +177,200 @@ class AutosaveDurabilityTest {
         Snapshot.sendApplyNotifications()
     }
 
-    private suspend fun waitUntil(timeoutMs: Long = 5_000, predicate: suspend () -> Boolean) {
+    private suspend fun waitUntil(
+        timeoutMs: Long = 5_000,
+        message: String = "condition not met within ${timeoutMs}ms",
+        predicate: suspend () -> Boolean,
+    ) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
             if (predicate()) return
             delay(20)
         }
-        assertTrue("condition not met within ${timeoutMs}ms", predicate())
+        assertTrue(message, predicate())
     }
 
     // --- durability ---------------------------------------------------------
+
+    @Test
+    fun filterDeparturePersistsThroughARealDatabaseReopen() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val databaseName = "filter-durability-${java.util.UUID.randomUUID()}.db"
+        fun open() = Room.databaseBuilder(context, DuckDatabase::class.java, databaseName)
+            .setDriver(BundledSQLiteDriver())
+            .addCallback(DuckDatabaseCallback())
+            .build()
+        db.close()
+        db = open()
+        val edited = "UniqueDuckR1 — ملاحظتي 🦆\nPending words #work"
+        var vm: DuckShellViewModel? = null
+        val scope = CoroutineScope(Dispatchers.Main)
+        try {
+            seed("r1-note", "original")
+            val subject = withContext(Dispatchers.Main) { shell() }
+            vm = subject
+            scope.launch { subject.state.collect {} }
+            withContext(Dispatchers.Main) { subject.onSelectNote("r1-note") }
+            waitUntil {
+                subject.buffer.text.toString() == "original" && subject.state.value.selectedNoteId == "r1-note"
+            }
+            withContext(Dispatchers.Main) {
+                subject.buffer.setTextAndPlaceCursorAtEnd(edited)
+                Snapshot.sendApplyNotifications()
+                subject.onFilter(ShellFilter.Archive)
+            }
+            waitUntil { subject.state.value.selectedNoteId == null }
+            assertEquals(edited, bodyOf("r1-note"))
+            assertEquals(listOf("work"), tagNames())
+            assertEquals(listOf("r1-note"), db.noteDao().search("UniqueDuckR1").map { it.id })
+            scope.cancel()
+            withContext(Dispatchers.Main) { subject.viewModelScope.cancel() }
+            db.close()
+            db = open()
+            assertEquals(edited, bodyOf("r1-note"))
+            assertEquals(listOf("work"), tagNames())
+        } finally {
+            scope.cancel()
+            withContext(Dispatchers.Main) { vm?.viewModelScope?.cancel() }
+            db.close()
+            context.deleteDatabase(databaseName)
+        }
+    }
+
+    @Test
+    fun failedRoomTransactionRetainsTheEditorAndRetriesTheLatestText() = runBlocking {
+        seed("r1-failure", "original")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        val autosaveDispatcher = executor.asCoroutineDispatcher()
+        executor.submit { entered.countDown(); release.await() }
+        var vm: DuckShellViewModel? = null
+        val scope = CoroutineScope(Dispatchers.Main)
+        try {
+            assertTrue("autosave executor did not reach its gate", entered.await(5, TimeUnit.SECONDS))
+            // Autosave must not publish the warning on behalf of a broken departure handler.
+            val subject = withContext(Dispatchers.Main) { shell(autosaveDispatcher) }
+            vm = subject
+            scope.launch { subject.state.collect {} }
+            withContext(Dispatchers.Main) { subject.onSelectNote("r1-failure") }
+            waitUntil {
+                subject.buffer.text.toString() == "original" && subject.state.value.selectedNoteId == "r1-failure"
+            }
+            db.useWriterConnection { connection ->
+                connection.usePrepared(
+                    "CREATE TRIGGER r1_block_updates BEFORE UPDATE ON notes " +
+                        "BEGIN SELECT RAISE(ABORT, 'controlled R1 transaction failure'); END",
+                ) { it.step() }
+            }
+            withContext(Dispatchers.Main) {
+                subject.buffer.setTextAndPlaceCursorAtEnd("unsaved — معلّق")
+                Snapshot.sendApplyNotifications()
+                subject.onFilter(ShellFilter.Archive)
+            }
+            waitUntil { subject.state.value.saveFailed }
+            assertEquals("original", bodyOf("r1-failure"))
+            assertEquals("r1-failure", subject.state.value.selectedNoteId)
+            assertEquals(ShellFilter.All, subject.state.value.filter)
+            assertEquals("unsaved — معلّق", subject.buffer.text.toString())
+            db.useWriterConnection { connection ->
+                connection.usePrepared("DROP TRIGGER r1_block_updates") { it.step() }
+            }
+            val latest = "latest retry — آخر محاولة #work"
+            withContext(Dispatchers.Main) {
+                subject.buffer.setTextAndPlaceCursorAtEnd(latest)
+                Snapshot.sendApplyNotifications()
+                subject.onRetryNavigation()
+            }
+            waitUntil { subject.state.value.selectedNoteId == null }
+            assertEquals(latest, bodyOf("r1-failure"))
+            assertEquals(listOf("work"), tagNames())
+            assertEquals(ShellFilter.Archive, subject.state.value.filter)
+            assertFalse(subject.state.value.saveFailed)
+        } finally {
+            scope.cancel()
+            withContext(Dispatchers.Main) { vm?.viewModelScope?.cancel() }
+            release.countDown()
+            autosaveDispatcher.close()
+        }
+    }
+
+    /**
+     * Plant MUTATION_FLUSH_WARNING: set the mutation flush helper's failure warning to false.
+     * With autosave parked, only the foreground rename handler can publish the required warning.
+     */
+    @Test
+    fun failedFlushBeforeTagRenameRetainsTheEditorAndRetryOnlyPersists() = runBlocking {
+        val noteId = "mutation-flush"
+        val original = "original #work"
+        seed(noteId, original)
+        assertEquals("precondition: the rename has a real tag to affect", listOf("work"), tagNames())
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        val autosaveDispatcher = executor.asCoroutineDispatcher()
+        executor.submit { entered.countDown(); release.await() }
+        var vm: DuckShellViewModel? = null
+        val scope = CoroutineScope(Dispatchers.Main)
+        try {
+            assertTrue("autosave executor did not reach its gate", entered.await(5, TimeUnit.SECONDS))
+            val subject = withContext(Dispatchers.Main) { shell(autosaveDispatcher) }
+            vm = subject
+            scope.launch { subject.state.collect {} }
+            withContext(Dispatchers.Main) { subject.onSelectNote(noteId) }
+            waitUntil {
+                subject.buffer.text.toString() == original && subject.state.value.selectedNoteId == noteId
+            }
+            db.useWriterConnection { connection ->
+                connection.usePrepared(
+                    "CREATE TRIGGER mutation_block_updates BEFORE UPDATE ON notes " +
+                        "BEGIN SELECT RAISE(ABORT, 'controlled mutation flush failure'); END",
+                ) { it.step() }
+            }
+            val pending = "unsaved — معلّق 🦆 #work"
+            withContext(Dispatchers.Main) {
+                subject.buffer.setTextAndPlaceCursorAtEnd(pending)
+                Snapshot.sendApplyNotifications()
+                subject.onRenameTag("work", "job")
+            }
+            waitUntil(message = "failed mutation flush must publish its save warning") {
+                subject.state.value.saveFailed
+            }
+            assertEquals(original, bodyOf(noteId))
+            assertEquals(listOf("work"), tagNames())
+            assertEquals(noteId, subject.state.value.selectedNoteId)
+            assertEquals(ShellFilter.All, subject.state.value.filter)
+            assertEquals(pending, subject.buffer.text.toString())
+            assertEquals(null, subject.state.value.undo)
+            db.useWriterConnection { connection ->
+                connection.usePrepared("DROP TRIGGER mutation_block_updates") { it.step() }
+            }
+            val latest = "latest retry — آخر محاولة 🦆 #work"
+            withContext(Dispatchers.Main) {
+                subject.buffer.setTextAndPlaceCursorAtEnd(latest)
+                Snapshot.sendApplyNotifications()
+                subject.onRetryNavigation()
+            }
+            waitUntil { bodyOf(noteId) == latest && !subject.state.value.saveFailed }
+            assertEquals(listOf("work"), tagNames())
+            assertEquals(noteId, subject.state.value.selectedNoteId)
+            assertEquals(ShellFilter.All, subject.state.value.filter)
+            assertEquals(latest, subject.buffer.text.toString())
+            assertEquals(null, subject.state.value.undo)
+
+            withContext(Dispatchers.Main) { subject.onRenameTag("work", "job") }
+            val renamed = latest.replace("#work", "#job")
+            waitUntil { bodyOf(noteId) == renamed && subject.buffer.text.toString() == renamed }
+            assertEquals("positive control: explicit rename must reach Room", listOf("job"), tagNames())
+            assertEquals(noteId, subject.state.value.selectedNoteId)
+            assertEquals(ShellFilter.All, subject.state.value.filter)
+        } finally {
+            scope.cancel()
+            withContext(Dispatchers.Main) { vm?.viewModelScope?.cancel() }
+            release.countDown()
+            autosaveDispatcher.close()
+        }
+    }
 
     /** Type, let the debounce land, then rebuild the ViewModel from the surviving handle. */
     @Test

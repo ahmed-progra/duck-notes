@@ -12,7 +12,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasText
@@ -147,7 +147,7 @@ class SettingsActivityTest {
             beforeSelection = original.buffer.selection
         }
         compose.waitForIdle()
-        val editor = compose.onNode(hasSetTextAction()).fetchSemanticsNode()
+        val editor = compose.onNodeWithTag("noteEditor").fetchSemanticsNode()
         var parent = editor.parent
         while (parent != null && parent.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) == null) {
             parent = parent.parent
@@ -168,7 +168,7 @@ class SettingsActivityTest {
             assertEquals(beforeSelection, current.buffer.selection)
             assertEquals("settings-fixture", current.state.value.selectedNoteId)
         }
-        var restoredParent = compose.onNode(hasSetTextAction()).fetchSemanticsNode().parent
+        var restoredParent = compose.onNodeWithTag("noteEditor").fetchSemanticsNode().parent
         while (restoredParent != null && restoredParent.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) == null) {
             restoredParent = restoredParent.parent
         }

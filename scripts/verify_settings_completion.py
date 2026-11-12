@@ -20,18 +20,31 @@ import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-GRADLE = Path(r"C:\Users\zconsumers\.gradle\wrapper\dists\gradle-8.13-bin\5xuhj0ry160q40clulazy9h7d\gradle-8.13\bin\gradle.bat")
-JAVA = Path(r"C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot")
-ADB = Path(os.environ.get("LOCALAPPDATA", r"C:\Users\zconsumers\AppData\Local")) / "Android/Sdk/platform-tools/adb.exe"
+GRADLE = ROOT / ("gradlew.bat" if os.name == "nt" else "gradlew")
+JAVA = Path(os.environ["JAVA_HOME"]) if os.environ.get("JAVA_HOME") else None
+LOCAL_APP_DATA = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+SDK_DIRECTORY = Path(os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or LOCAL_APP_DATA / "Android/Sdk")
+ADB = SDK_DIRECTORY / "platform-tools/adb.exe"
 PACKAGE = "app.duck.notes"
 SETTINGS_RUNNER = PACKAGE + ".test/app.duck.notes.settings.SettingsTestRunner"
 STARTUP = PACKAGE + ".startup.WelcomeStartupTest"
 STARTUP_ID = STARTUP + "#realApplicationSeedsOrdinaryNotesAndRetainsItsDecision"
+GATE = PACKAGE + ".startup.WelcomeStartupGateTest"
+GATE_IDS = tuple(GATE + "#" + method for method in (
+    "noStallReleasesBothGates", "blockedStorageReleasesSplash", "blockedStorageReleasesCompose"))
 STARTUP_RUNNER = PACKAGE + ".test/app.duck.notes.startup.WelcomeStartupTestRunner"
 EXISTING_RUNNER = PACKAGE + ".test/app.duck.notes.startup.WelcomeExistingInstallTestRunner"
+OFFLINE = PACKAGE + ".startup.OfflineActivityTest"
+OFFLINE_ID = OFFLINE + "#realActivityCreatesEditsSearchesArchivesTrashesAndRestoresPersistedNote"
+OFFLINE_RUNNER = PACKAGE + ".test/app.duck.notes.startup.OfflineActivityTestRunner"
+BACKUP = PACKAGE + ".data.repository.BackupTransportTest"
+BACKUP_ID = BACKUP + "#realApplicationTransportFixture"
+BACKUP_RUNNER = PACKAGE + ".test/app.duck.notes.data.repository.BackupTransportTestRunner"
+BACKUP_SCENARIOS = ("seed", "verify", "oversize", "verify_oversize", "cleanup")
 COUNTS = ("tests", "failures", "errors", "skipped")
 TEST_PATTERN = r"^\s*@(?:org\.junit\.)?Test\b"
-RETAINED = {"after_delete": "fresh", "existing": "prepare_existing", "existing_populated": "prepare_existing_populated"}
+RETAINED = {"after_delete": "fresh", "existing": "prepare_existing", "existing_populated": "prepare_existing_populated",
+            "offline_restart": "offline_create"}
 
 
 def require(condition, message):
@@ -100,7 +113,13 @@ def ordinary_selection(ids, candidate=False):
         return ids, [SETTINGS_RUNNER]
     require(STARTUP_ID in ids and sum(name.startswith(STARTUP + "#") for name in ids) == 1,
             "Full gate requires exactly the frozen production startup method")
-    return ids - {STARTUP_ID}, ["-e", "notClass", STARTUP, SETTINGS_RUNNER]
+    require({name for name in ids if name.startswith(GATE + "#")} == set(GATE_IDS),
+            "Full gate requires exactly the three isolated startup gate methods")
+    require({name for name in ids if name.startswith(OFFLINE + "#")} == {OFFLINE_ID},
+            "Full gate requires exactly the real offline Activity method")
+    require({name for name in ids if name.startswith(BACKUP + "#")} == {BACKUP_ID},
+            "Full gate requires exactly the dedicated backup fixture method")
+    return ids - {STARTUP_ID, *GATE_IDS, OFFLINE_ID, BACKUP_ID}, ["-e", "notClass", STARTUP + "," + GATE + "," + OFFLINE + "," + BACKUP, SETTINGS_RUNNER]
 
 
 def candidate_welcome_absent(directory):
@@ -234,6 +253,14 @@ def device_plan(candidate=False):
                 plan.append(dict(action="clear"))
             plan.append(dict(action="instrument", label=scenario,
                              runner=EXISTING_RUNNER if scenario.startswith("prepare_existing") else STARTUP_RUNNER))
+        for identity in GATE_IDS:
+            plan.append(dict(action="clear"))
+            plan.append(dict(action="instrument", label=identity.split("#")[1],
+                             runner=SETTINGS_RUNNER, method=identity))
+        plan.append(dict(action="clear"))
+        for scenario in ("create", "restart"):
+            plan.append(dict(action="instrument", label="offline_" + scenario,
+                             runner=OFFLINE_RUNNER, offline_scenario=scenario))
     validate_retention(plan)
     return plan
 
@@ -253,7 +280,9 @@ def validate_retention(plan):
 
 
 def environment():
-    require(GRADLE.is_file() and (JAVA / "bin/java.exe").is_file() and ADB.is_file(), "Missing absolute Gradle/JDK21/adb binary")
+    require(JAVA is not None, "Set JAVA_HOME to the verified JDK21 installation before running this gate")
+    require(GRADLE.is_file() and (JAVA / "bin" / ("java.exe" if os.name == "nt" else "java")).is_file() and ADB.is_file(),
+            "Missing repository Gradle wrapper, JAVA_HOME binary, or Android SDK adb")
     release = (JAVA / "release").read_text(encoding="utf-8")
     require(re.search(r'^JAVA_VERSION="21(?:\.|\")', release, re.M), "Selected Java is not JDK21")
     sockets = Path.home() / ".gradle/afunix-sockets"
@@ -265,12 +294,27 @@ def environment():
     return env
 
 
+def local_transport(raw):
+    selected = re.findall(r"^\s*\*\s+([^\s]+)\s*$", raw, re.M)
+    require(len(selected) == 1 and selected[0] in (
+        "android/com.android.internal.backup.LocalTransport", "com.android.localtransport/.LocalTransport",
+        "com.android.localtransport/com.android.localtransport.LocalTransport"),
+        "Backup fixture requires the disposable emulator's already-selected LocalTransport")
+    return selected[0]
+
+
 def native(command, label, output, env, timeout=1800):
     log = output / (label + ".log")
     result = dict(command=[str(part) for part in command], log=str(log), started_ns=time.time_ns())
     print("START " + label, flush=True)
     with log.open("wb") as stream:
-        process = subprocess.Popen(result["command"], cwd=ROOT, env=env, stdout=stream, stderr=subprocess.STDOUT)
+        try:
+            process = subprocess.Popen(result["command"], cwd=ROOT, env=env, stdout=stream, stderr=subprocess.STDOUT)
+        except OSError as error:
+            result.update(exit_code=None, spawn_error=repr(error),
+                          elapsed_seconds=round((time.time_ns() - result["started_ns"]) / 1e9, 3))
+            save(output / (label + "-native.json"), result)
+            raise
         try:
             result["exit_code"] = process.wait(timeout=timeout)
         except BaseException as error:
@@ -328,7 +372,7 @@ def build(variant, output, env):
     apk_before = {str(path): path.stat().st_mtime_ns if path.exists() else 0 for path in paths}
     args = [item for task in [unit, *packages] for item in (task, "--rerun")]
     args += [":app:assembleRelease"] if variant == "release" else [":app:assembleDebug", ":app:assembleDebugAndroidTest"]
-    command = ["cmd.exe", "/d", "/c", GRADLE, "-p", ROOT, *args, "--offline", "--daemon", "--max-workers=1",
+    command = (["cmd.exe", "/d", "/c"] if os.name == "nt" else []) + [GRADLE, "-p", ROOT, *args, "--offline", "--daemon", "--max-workers=1",
                "-Dorg.gradle.jvmargs=-Xmx2048m -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=256m -Dfile.encoding=UTF-8",
                "-Dorg.gradle.daemon.idletimeout=10000", "--no-build-cache", "--console=plain"]
     run, raw = native(command, "build", output, env)
@@ -364,6 +408,9 @@ def instrument(label, arguments, expected_ids, output, env, serial):
     parsed = parse_instrumentation(raw, len(expected_ids), expected_ids)
     if run["exit_code"] != 0 or "interrupted" in run:
         parsed["issues"].append("native instrumentation failure/interruption")
+    normalized(output, "instrument", dict(parsed, accepted=False,
+               issues=[*parsed["issues"], "logcat collection incomplete; no verified fresh target process"],
+               process=dict(previous_pids=previous, started_pids=[])))
     logcat = adb(["logcat", "-b", "all", "-d", "-v", "threadtime"], "logcat", output, env, serial)
     pids = set(re.findall(r"Start proc (\d+):app\.duck\.notes(?:/|\s)", logcat))
     pids.update(re.findall(r"am_proc_start:.*\[\d+,(\d+),\d+,app\.duck\.notes,", logcat))
@@ -371,9 +418,15 @@ def instrument(label, arguments, expected_ids, output, env, serial):
     if not pids or set(previous) & pids:
         parsed["issues"].append("no verified fresh target process")
     if label == "link_findings":
-        for marker in ("LINK_FINDING_LATE_TARGET: before source save=0; after source save=1", "LINK_FINDING_RENAME: after target rename=1; after source save=0"):
+        for marker in ("LINK_FINDING_LATE_TARGET: before source save=1; after source save=1", "LINK_FINDING_RENAME: after target rename=0; after source save=0"):
             if marker not in raw + logcat:
                 parsed["issues"].append("missing literal link finding: " + marker)
+    if label.startswith("backup_"):
+        scenario = label.removeprefix("backup_")
+        images = 4 if scenario in ("oversize", "verify_oversize") else 2
+        marker = "BACKUP_TRANSPORT_FIXTURE: " + scenario + "; notes=8; images=" + str(images)
+        if marker not in raw + logcat:
+            parsed["issues"].append("missing literal backup fixture result: " + marker)
     parsed["accepted"] = not parsed["issues"]
     normalized(output, "instrument", parsed)
     return parsed
@@ -447,8 +500,20 @@ def execute(args, output, report):
     require(adb(["get-state"], "device-state", output, env, args.serial).strip() == "device", "Emulator is not online")
     require(adb(["shell", "getprop", "sys.boot_completed"], "boot-completed", output, env, args.serial).strip() == "1", "Emulator is not booted")
     ids = discover_tests(ROOT / "app/src/androidTest", output)
+    if args.mode == "backup-scenario":
+        require(BACKUP_ID in ids, "Dedicated backup fixture is absent from source discovery")
+        transports = adb(["shell", "bmgr", "list", "transports"], "backup-transports", output, env, args.serial)
+        report["backup_transport"] = local_transport(transports)
+        report["installed_before"] = installed_snapshot("before", output, env, args.serial)
+        report["backup_fixture"] = instrument("backup_" + args.scenario,
+            ["-e", "backupScenario", args.scenario, BACKUP_RUNNER], {BACKUP_ID}, output / args.scenario, env, args.serial)
+        report.update(accepted=report["backup_fixture"]["accepted"], backup_transport_qualified=False,
+                      qualification_scope="Native fixture only; external bmgr backup/restore/quota evidence remains required")
+        return
     if args.mode == "flake":
         require(args.method in ids, "Flake method is absent from source discovery")
+        require(args.method not in {STARTUP_ID, OFFLINE_ID, BACKUP_ID},
+                "Production Application scenarios require their dedicated runner and retained device plan")
         report["installed_before"] = installed_snapshot("before", output, env, args.serial)
         manifest = json.loads(args.build_evidence.read_text(encoding="utf-8-sig"))
         validate_flake_build(manifest, report["sources_before"], report["installed_before"])
@@ -477,8 +542,10 @@ def execute(args, output, report):
     if candidate:
         candidate_welcome_absent(ROOT / "app/src")
     ordinary_ids, ordinary_args = ordinary_selection(ids, candidate)
+    qualified_ids = ids if candidate else ids - {BACKUP_ID}
     plan = device_plan(candidate)
-    report.update(source_methods=sorted(ids), source_method_count=len(ids), ordinary_expected=len(ordinary_ids), device_plan=plan)
+    report.update(source_methods=sorted(ids), source_method_count=len(ids), ordinary_expected=len(ordinary_ids), device_plan=plan,
+                  backup_transport_qualified=False, external_transport_methods_pending=[] if candidate else [BACKUP_ID])
     save(output / "results.json", report)
     report["debug"] = build("debug", output / "debug", env)
     require(sources() == report["sources_before"], "Sources changed during debug build")
@@ -494,19 +561,26 @@ def execute(args, output, report):
             adb(["shell", "pm", "clear", PACKAGE], "clear-" + str(index), output, env, args.serial, success=True)
             continue
         label = step["label"]
-        arguments = ordinary_args if label == "ordinary" else ["-e", "scenario", label, step["runner"]]
-        expected = ordinary_ids if label == "ordinary" else {STARTUP_ID}
+        if label == "ordinary":
+            arguments, expected = ordinary_args, ordinary_ids
+        elif "method" in step:
+            arguments, expected = ["-e", "class", step["method"], step["runner"]], {step["method"]}
+        elif "offline_scenario" in step:
+            arguments, expected = ["-e", "offlineScenario", step["offline_scenario"], step["runner"]], {OFFLINE_ID}
+        else:
+            arguments, expected = ["-e", "scenario", label, step["runner"]], {STARTUP_ID}
         report["instrumentation"][label] = instrument(label, arguments, expected, output / label, env, args.serial)
         save(output / "results.json", report)
     runs = report["instrumentation"].values()
     observed = {record["id"] for run in runs for record in run["records"]}
     executions = sum(run["tests"] for run in runs)
-    report["counts"] = dict(source_unique=len(ids), observed_unique=len(observed), expected_unique=len(ids),
+    report["counts"] = dict(source_unique=len(ids), observed_unique=len(observed), expected_unique=len(qualified_ids),
                             ordinary=len(report["instrumentation"]["ordinary"]["records"]),
-                            dedicated_scenarios=0 if candidate else 7, dedicated_unique=0 if candidate else 1,
-                            raw_executions=executions, expected_raw_executions=len(ids) if candidate else len(ids) + 6,
-                            repeated_startup_executions=0 if candidate else 6)
-    report["accepted"] = (all(run["accepted"] for run in runs) and observed == ids
+                            dedicated_scenarios=0 if candidate else 12, dedicated_unique=0 if candidate else 5,
+                            raw_executions=executions, expected_raw_executions=len(qualified_ids) if candidate else len(qualified_ids) + 7,
+                            repeated_startup_executions=0 if candidate else 6,
+                            repeated_offline_executions=0 if candidate else 1)
+    report["accepted"] = (all(run["accepted"] for run in runs) and observed == qualified_ids
                           and executions == report["counts"]["expected_raw_executions"])
 
 
@@ -569,16 +643,29 @@ def selfcheck():
     checked("nonpositive-expected", "expected count must be positive" in parse_instrumentation(green, 0)["issues"])
     checked("filtered-suite", "method identity mismatch" in parse_instrumentation(green, 2, {identity, "app.duck.notes.OtherTest#two"})["issues"])
     startup = "app.duck.notes.startup.WelcomeStartupTest#realApplicationSeedsOrdinaryNotesAndRetainsItsDecision"
-    ordinary, arguments = ordinary_selection({identity, startup})
-    checked("ordinary-filter", ordinary == {identity} and arguments == ["-e", "notClass", "app.duck.notes.startup.WelcomeStartupTest",
+    gate = "app.duck.notes.startup.WelcomeStartupGateTest"
+    gate_ids = {gate + "#noStallReleasesBothGates", gate + "#blockedStorageReleasesSplash", gate + "#blockedStorageReleasesCompose"}
+    offline = "app.duck.notes.startup.OfflineActivityTest#realActivityCreatesEditsSearchesArchivesTrashesAndRestoresPersistedNote"
+    backup = "app.duck.notes.data.repository.BackupTransportTest#realApplicationTransportFixture"
+    full_ids = {identity, startup, offline, backup} | gate_ids
+    ordinary, arguments = ordinary_selection(full_ids)
+    checked("ordinary-filter", ordinary == {identity} and arguments == ["-e", "notClass", "app.duck.notes.startup.WelcomeStartupTest,app.duck.notes.startup.WelcomeStartupGateTest,app.duck.notes.startup.OfflineActivityTest,app.duck.notes.data.repository.BackupTransportTest",
                                                                        "app.duck.notes.test/app.duck.notes.settings.SettingsTestRunner"])
     rejects("missing-startup", lambda: ordinary_selection({identity}), "exactly the frozen")
-    rejects("extra-startup", lambda: ordinary_selection({identity, startup, "app.duck.notes.startup.WelcomeStartupTest#extra"}), "exactly the frozen")
+    rejects("extra-startup", lambda: ordinary_selection(full_ids | {"app.duck.notes.startup.WelcomeStartupTest#extra"}), "exactly the frozen")
+    for method in gate_ids:
+        rejects("missing-gate/" + method, lambda: ordinary_selection(full_ids - {method}), "exactly the three isolated")
+    rejects("extra-gate", lambda: ordinary_selection(full_ids | {gate + "#extra"}), "exactly the three isolated")
+    rejects("missing-offline", lambda: ordinary_selection(full_ids - {offline}), "exactly the real offline")
+    rejects("extra-offline", lambda: ordinary_selection(full_ids | {"app.duck.notes.startup.OfflineActivityTest#extra"}), "exactly the real offline")
+    rejects("missing-backup", lambda: ordinary_selection(full_ids - {backup}), "exactly the dedicated backup")
+    rejects("extra-backup", lambda: ordinary_selection(full_ids | {"app.duck.notes.data.repository.BackupTransportTest#extra"}), "exactly the dedicated backup")
     rejects("candidate-startup-id", lambda: ordinary_selection({identity, startup}, True), "no welcome startup tests")
     checked("candidate-filter", ordinary_selection({identity}, True) == ({identity}, ["app.duck.notes.test/app.duck.notes.settings.SettingsTestRunner"]))
     settings_runner = "app.duck.notes.test/app.duck.notes.settings.SettingsTestRunner"
     startup_runner = "app.duck.notes.test/app.duck.notes.startup.WelcomeStartupTestRunner"
     existing_runner = "app.duck.notes.test/app.duck.notes.startup.WelcomeExistingInstallTestRunner"
+    offline_runner = "app.duck.notes.test/app.duck.notes.startup.OfflineActivityTestRunner"
     expected_plan = [
         dict(action="clear"), dict(action="instrument", label="ordinary", runner=settings_runner),
         dict(action="clear"), dict(action="instrument", label="fresh", runner=startup_runner),
@@ -588,11 +675,28 @@ def selfcheck():
         dict(action="clear"), dict(action="instrument", label="prepare_existing_populated", runner=existing_runner),
         dict(action="instrument", label="existing_populated", runner=startup_runner),
         dict(action="clear"), dict(action="instrument", label="link_findings", runner=startup_runner),
+        dict(action="clear"), dict(action="instrument", label="noStallReleasesBothGates", runner=settings_runner,
+                                  method=gate + "#noStallReleasesBothGates"),
+        dict(action="clear"), dict(action="instrument", label="blockedStorageReleasesSplash", runner=settings_runner,
+                                  method=gate + "#blockedStorageReleasesSplash"),
+        dict(action="clear"), dict(action="instrument", label="blockedStorageReleasesCompose", runner=settings_runner,
+                                  method=gate + "#blockedStorageReleasesCompose"),
+        dict(action="clear"), dict(action="instrument", label="offline_create", runner=offline_runner, offline_scenario="create"),
+        dict(action="instrument", label="offline_restart", runner=offline_runner, offline_scenario="restart"),
     ]
     checked("literal-scenario-plan", device_plan() == expected_plan)
     checked("literal-candidate-plan", device_plan(True) == expected_plan[:2])
-    literal_pairs = {"after_delete": "fresh", "existing": "prepare_existing", "existing_populated": "prepare_existing_populated"}
+    literal_pairs = {"after_delete": "fresh", "existing": "prepare_existing", "existing_populated": "prepare_existing_populated",
+                     "offline_restart": "offline_create"}
     checked("literal-retention-pairs", RETAINED == literal_pairs)
+    checked("backup-scenario-list", BACKUP_SCENARIOS == ("seed", "verify", "oversize", "verify_oversize", "cleanup"))
+    for transport in ("android/com.android.internal.backup.LocalTransport", "com.android.localtransport/.LocalTransport",
+                      "com.android.localtransport/com.android.localtransport.LocalTransport"):
+        checked("local-transport/" + transport, local_transport("  * " + transport + "\n") == transport)
+    for name, raw in (("missing", ""), ("unselected", "  android/com.android.internal.backup.LocalTransport\n"),
+                      ("cloud", " * com.google.android.gms/.backup.BackupTransportService\n"),
+                      ("duplicate", " * android/com.android.internal.backup.LocalTransport\n" * 2)):
+        rejects("local-transport/" + name, lambda: local_transport(raw), "already-selected LocalTransport")
     for action in ("clear", "install"):
         for retained in literal_pairs:
             plan = [dict(step) for step in expected_plan]
@@ -625,6 +729,8 @@ def selfcheck():
         test_source = source / "ExampleTest.kt"
         test_source.write_text("package app.duck.notes\nclass ExampleTest {\n    @Test fun one() {}\n    @org.junit.Test\n    @Other\n    fun two() {}\n    // @Test fun comment() {}\n}\n", encoding="utf-8")
         checked("anchored-discovery", discover_tests(source, output) == {identity, "app.duck.notes.ExampleTest#two"})
+        (source / "Helper.kt").write_text("package app.duck.notes\nclass Helper {}\n", encoding="utf-8")
+        checked("separate-helper-discovery", discover_tests(source, output) == {identity, "app.duck.notes.ExampleTest#two"})
         for name, body, reason in (
                 ("empty-discovery", "", "No source tests"),
                 ("duplicate-discovery", "@Test fun one() {}\n@Test fun one() {}", "duplicate source test"),
@@ -736,10 +842,13 @@ def main():
     check.add_argument("log", type=Path)
     check.add_argument("--expected", type=int, required=True)
     check.add_argument("--out", type=Path)
-    for mode in ("full", "settings-candidate", "flake"):
+    for mode in ("full", "settings-candidate", "flake", "backup-scenario"):
         command = commands.add_parser(mode)
         command.add_argument("--out", type=Path, required=True)
         command.add_argument("--serial", required=True)
+        if mode == "backup-scenario":
+            command.add_argument("--scenario", required=True, choices=BACKUP_SCENARIOS,
+                                 help="No build, install, data clear, backup or restore; external LocalTransport orchestration required")
         if mode == "flake":
             command.add_argument("--method", required=True, help="Exact class#method; already installed build")
             command.add_argument("--build-evidence", type=Path, required=True,

@@ -2,19 +2,23 @@ package app.duck.notes.data.local.entity
 
 import androidx.room.ColumnInfo
 import androidx.room.Entity
-import androidx.room.Index
+import androidx.room.ForeignKey
 
 /**
- * A resolved `[[WikiLink]]` from one note to another. Table only this phase — population and
- * backlink queries arrive in Phase 9. Composite PK: a source links a given target once.
+ * A textual reference, including unresolved targets. Resolution follows current note titles.
  */
 @Entity(
     tableName = "note_links",
-    primaryKeys = ["source_id", "target_id"],
-    indices = [Index(value = ["target_id"])],
+    primaryKeys = ["source_id", "link_text"],
+    foreignKeys = [ForeignKey(
+        entity = NoteEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["source_id"],
+        onDelete = ForeignKey.CASCADE,
+    )],
 )
 data class NoteLinkEntity(
     @ColumnInfo(name = "source_id") val sourceId: String,
-    @ColumnInfo(name = "target_id") val targetId: String,
     @ColumnInfo(name = "link_text") val linkText: String,
+    @ColumnInfo(name = "fallback_title") val fallbackTitle: String,
 )

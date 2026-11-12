@@ -1,5 +1,9 @@
 package app.duck.notes.presentation.shell
 
+import app.duck.notes.domain.usecase.SearchNotes
+import app.duck.notes.domain.usecase.ArchiveNote
+import app.duck.notes.domain.usecase.DeleteNote
+import app.duck.notes.domain.usecase.RestoreNote
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.lifecycle.SavedStateHandle
@@ -65,7 +69,7 @@ class ShellStateRestorationTest {
 
     private val dispatcher = UnconfinedTestDispatcher()
     private val notes = FakeNoteRepository()
-    private val attachments = FakeAttachmentRepository()
+    private val attachments = FakeAttachmentRepository().also { notes.attachments = it }
     private val attachStorage = FakeAttachmentStorage()
     private val tags = FakeTagRepository(
         listOf(
@@ -110,6 +114,10 @@ class ShellStateRestorationTest {
         observeAttachments = ObserveAttachments(attachments),
         getBacklinks = GetBacklinks(FakeLinkRepository()),
         clock = Clock { 0L },
+        searchNotes = SearchNotes(object : app.duck.notes.domain.repository.SearchRepository { override suspend fun search(query: app.duck.notes.domain.model.SearchQuery) = notes.all().filter { !it.isTrashed && it.body.contains(query.text, ignoreCase = true) } }),
+        archiveNote = ArchiveNote(notes, parseTags, ResolveWikiLinks(), Clock { 10_000L }),
+        deleteNote = DeleteNote(notes, parseTags, ResolveWikiLinks(), Clock { 10_000L }),
+        restoreNote = RestoreNote(notes, parseTags, ResolveWikiLinks(), Clock { 10_000L }),
         autosaveDispatcher = dispatcher,
     )
 

@@ -19,6 +19,7 @@ import app.duck.notes.data.local.SyncState
         Index(value = ["id"], unique = true),
         Index(value = ["modified_at"]),
         Index(value = ["is_trashed"]),
+        Index(value = ["title", "is_trashed", "modified_at", "id"]),
     ],
 )
 data class NoteEntity(

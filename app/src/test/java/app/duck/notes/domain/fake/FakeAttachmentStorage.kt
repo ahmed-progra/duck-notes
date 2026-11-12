@@ -18,12 +18,17 @@ class FakeAttachmentStorage(
     var storeSucceeds: Boolean = true,
 ) : AttachmentStorage {
 
+    var beforeStore: (suspend () -> Unit)? = null
+    var deleteSucceeds = true
+    private val deletions = mutableSetOf<String>()
+
     val files = mutableSetOf<String>()
 
     /** Every (sourceUri, id) [store] was called with, in order — proves the source was actually read. */
     val stored = mutableListOf<Pair<String, String>>()
 
     override suspend fun store(sourceUri: String, id: String): String? {
+        beforeStore?.invoke()
         stored += sourceUri to id
         if (!storeSucceeds) return null
         val durable = DURABLE + id
@@ -31,7 +36,15 @@ class FakeAttachmentStorage(
         return durable
     }
 
-    override suspend fun delete(uri: String): Boolean = files.remove(uri)
+    override suspend fun markForDeletion(uri: String) { deletions += uri }
+    override suspend fun pendingDeletions() = deletions.toList()
+
+    override suspend fun delete(uri: String): Boolean {
+        if (!deleteSucceeds) { deletions += uri; return false }
+        files.remove(uri)
+        deletions.remove(uri)
+        return true
+    }
 
     override suspend fun exists(uri: String): Boolean = uri in files
 

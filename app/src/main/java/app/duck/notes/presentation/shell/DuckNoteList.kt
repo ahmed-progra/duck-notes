@@ -8,6 +8,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.ui.unit.dp
+import app.duck.notes.core.ui.DuckIconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -20,18 +25,7 @@ import app.duck.notes.core.ui.DuckDivider
 import app.duck.notes.core.ui.DuckEmptyState
 import app.duck.notes.domain.model.Note
 
-/**
- * The middle pane: what the sidebar is filtering to, how many of them there are, and the cards.
- *
- * The header is where the reference layout puts a search field. **Phase 6 ships without one** — a
- * field that accepts text and does nothing is not a stub, it is a lie in the UI, and making it true
- * is Phase 10's entire Build list (debounce, operators, `snippet()` highlighting). Phase 5b already
- * deferred `DuckSearchField` on exactly that ground. The slot is here and empty on purpose.
- *
- * The count is `proseMuted`, not `chromeMuted`: `uiLabel` is 12sp, WCAG 1.4.3's large-text exemption
- * starts at 18pt, so it is normal text owing 4.5 and `chromeMuted` misses that on every light
- * palette.
- */
+/** Shared list header and basic search for every pane size. */
 @Composable
 fun DuckNoteList(
     filter: ShellFilter,
@@ -40,6 +34,11 @@ fun DuckNoteList(
     onSelectNote: (String) -> Unit,
     modifier: Modifier = Modifier,
     onAddTag: (noteId: String) -> Unit = {},
+    onNewNote: (() -> Unit)? = null,
+    creatingNote: Boolean = false,
+    search: SearchState = SearchState(),
+    onSearchChanged: ((String) -> Unit)? = null,
+    onRetrySearch: () -> Unit = {},
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -49,15 +48,15 @@ fun DuckNoteList(
             Modifier
                 .fillMaxWidth()
                 .padding(horizontal = spacing.lg, vertical = spacing.md),
-            verticalAlignment = Alignment.Bottom,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = filter.label(),
+                text = if (search.query.isBlank()) filter.label() else stringResource(R.string.search_results),
                 style = DuckTheme.type.uiTitle,
                 color = colors.onSurface,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
+                modifier = Modifier.weight(1f),
             )
             Text(
                 text = notes.size.toString(),
@@ -65,11 +64,35 @@ fun DuckNoteList(
                 color = colors.proseMuted,
                 modifier = Modifier.padding(start = spacing.sm),
             )
+            onNewNote?.let { create ->
+                DuckIconButton(R.drawable.duck_new_note, stringResource(R.string.note_new), create, enabled = !creatingNote)
+            }
+        }
+        onSearchChanged?.let { change ->
+            OutlinedTextField(
+                value = search.query,
+                onValueChange = change,
+                label = { Text(stringResource(R.string.search_notes)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = spacing.md, vertical = spacing.sm),
+                trailingIcon = {
+                    if (search.query.isNotEmpty()) DuckIconButton(R.drawable.duck_clear, stringResource(R.string.search_clear), { change("") })
+                },
+            )
         }
         DuckDivider()
+        when (search.phase) {
+            SearchPhase.Pending -> { DuckEmptyState(stringResource(R.string.search_pending)); return@Column }
+            SearchPhase.Failed -> {
+                Text(stringResource(R.string.search_failed), modifier = Modifier.padding(spacing.lg), color = colors.onSurface)
+                TextButton(onClick = onRetrySearch, modifier = Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.editor_save_retry)) }
+                return@Column
+            }
+            else -> Unit
+        }
 
         if (notes.isEmpty()) {
-            DuckEmptyState(stringResource(R.string.shell_empty_notes))
+            DuckEmptyState(stringResource(if (search.query.isBlank()) R.string.shell_empty_notes else R.string.search_empty))
         } else {
             val motion = DuckTheme.motion
             LazyColumn(Modifier.fillMaxSize()) {
@@ -96,7 +119,7 @@ fun DuckNoteList(
                             modifiedAt = note.modifiedAt,
                             selected = note.id == selectedNoteId,
                             onClick = { onSelectNote(note.id) },
-                            onAddTag = { onAddTag(note.id) },
+                            onAddTag = if (note.isTrashed) null else ({ onAddTag(note.id) }),
                         )
                         DuckDivider()
                     }

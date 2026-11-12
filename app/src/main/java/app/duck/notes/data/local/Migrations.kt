@@ -2,16 +2,42 @@ package app.duck.notes.data.local
 
 import androidx.room.migration.Migration
 import androidx.sqlite.SQLiteConnection
+import androidx.sqlite.execSQL
+import app.duck.notes.domain.markdown.WikiLinkScanner
+import app.duck.notes.domain.usecase.DeriveTitle
 
 /**
- * Migration registry. The DB ships at version 1, so [MIGRATION_1_2] never fires yet — it exists
- * to fix the pattern in place for the first real schema bump. When that happens, raise the
- * `@Database` version and write the `ALTER`/`CREATE` steps here. FTS objects are not touched by
- * migrations; [DuckDatabaseCallback] rebuilds them via `IF NOT EXISTS`.
+ * Rebuild derived references from unchanged bodies, recovering unresolved links absent from v1.
  */
 val MIGRATION_1_2 = object : Migration(1, 2) {
     override fun migrate(connection: SQLiteConnection) {
-        // Stub: no schema change between v1 and v2 yet.
+        connection.execSQL("DROP TABLE note_links")
+        connection.execSQL(
+            "CREATE TABLE note_links (source_id TEXT NOT NULL, link_text TEXT NOT NULL, " +
+                "fallback_title TEXT NOT NULL, PRIMARY KEY(source_id, link_text), " +
+                "FOREIGN KEY(source_id) REFERENCES notes(id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+        )
+        connection.execSQL(
+            "CREATE INDEX index_notes_title_is_trashed_modified_at_id " +
+                "ON notes(title, is_trashed, modified_at, id)",
+        )
+        val deriveTitle = DeriveTitle()
+        connection.prepare("SELECT id, body FROM notes").use { notes ->
+            connection.prepare(
+                "INSERT INTO note_links(source_id, link_text, fallback_title) VALUES (?, ?, ?)",
+            ).use { insert ->
+                while (notes.step()) {
+                    val id = notes.getText(0)
+                    for (title in WikiLinkScanner.titlesIn(notes.getText(1))) {
+                        insert.bindText(1, id)
+                        insert.bindText(2, title)
+                        insert.bindText(3, deriveTitle(title))
+                        insert.step()
+                        insert.reset()
+                    }
+                }
+            }
+        }
     }
 }
 

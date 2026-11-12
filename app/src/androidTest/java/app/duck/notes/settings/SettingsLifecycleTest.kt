@@ -8,6 +8,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -110,7 +111,7 @@ class SettingsLifecycleTest {
                 owner.buffer.text.toString() == ORIGINAL_BODY
         }
         compose.waitForIdle()
-        compose.onNode(hasSetTextAction()).assertIsDisplayed()
+        compose.onNodeWithTag("noteEditor").assertIsDisplayed()
         assertZero()
         assertEquals("Positive control: real Room seed differs", ORIGINAL_BODY, storedBody())
     }
@@ -157,7 +158,7 @@ class SettingsLifecycleTest {
         val activity = requireNotNull(scenario)
         activity.onActivity { owner.buffer.edit { selection = TextRange(length) } }
         val sentinel = "\nTyped active-autosave sentinel"
-        compose.onNode(hasSetTextAction()).performTextInput(sentinel)
+        compose.onNodeWithTag("noteEditor").performTextInput(sentinel)
         pumpCurrentMain()
         val expected = ORIGINAL_BODY + sentinel
         assertEquals("Real editor input did not reach the retained owner", expected, owner.buffer.text.toString())
@@ -193,7 +194,7 @@ class SettingsLifecycleTest {
             owner.buffer.edit { selection = TextRange(length) }
         }
         val sentinel = "\nTyped editor-stop sentinel"
-        compose.onNode(hasSetTextAction()).performTextInput(sentinel)
+        compose.onNodeWithTag("noteEditor").performTextInput(sentinel)
         pumpCurrentMain()
         val expected = ORIGINAL_BODY + sentinel
         assertEquals("Real editor input did not reach the retained owner", expected, owner.buffer.text.toString())
@@ -206,7 +207,7 @@ class SettingsLifecycleTest {
             owner.buffer.edit { selection = TextRange(length) }
         }
         val sentinel = "\nTyped Settings-open final sentinel"
-        compose.onNode(hasSetTextAction()).performTextInput(sentinel)
+        compose.onNodeWithTag("noteEditor").performTextInput(sentinel)
         pumpCurrentMain()
         val expected = ORIGINAL_BODY + sentinel
         assertEquals("Real editor input did not reach the retained owner", expected, owner.buffer.text.toString())

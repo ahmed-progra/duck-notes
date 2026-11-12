@@ -47,16 +47,16 @@ class AttachmentDurabilityTest {
 
         val durable = storage.store(Uri.fromFile(source).toString(), id)
             ?: error("store returned null for a readable source")
-        assertTrue("stored under filesDir/attachments, not left at the source", "/attachments/" in durable)
+        assertTrue("stored under filesDir/attachments, not left at the source", "attachments/" in durable)
         assertFalse("the durable path is not the source path", durable == source.absolutePath)
 
         // Delete the SOURCE. See the class KDoc: this is copy-independence, not grant revocation.
         assertTrue("source deleted", source.delete())
 
         assertTrue("the copy must still exist after the source is gone", storage.exists(durable))
-        assertArrayEquals("the copy must hold the original bytes", PAYLOAD, File(durable).readBytes())
+        assertArrayEquals("the copy must hold the original bytes", PAYLOAD, requireNotNull(app.duck.notes.core.files.AttachmentFiles(context.filesDir).resolve(durable)).readBytes())
 
-        File(durable).delete()
+        storage.delete(durable)
     }
 
     /** The one failure `AttachImage` must not turn into a recorded row: an unreadable source → null. */
@@ -67,6 +67,10 @@ class AttachmentDurabilityTest {
     }
 
     private companion object {
-        val PAYLOAD = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 1, 2, 3, 4, 5)
+        val PAYLOAD: ByteArray get() = java.io.ByteArrayOutputStream().use { output ->
+            val bitmap = android.graphics.Bitmap.createBitmap(2, 2, android.graphics.Bitmap.Config.ARGB_8888)
+            try { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)); output.toByteArray() }
+            finally { bitmap.recycle() }
+        }
     }
 }

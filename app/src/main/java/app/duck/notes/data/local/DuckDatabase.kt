@@ -27,7 +27,7 @@ import app.duck.notes.data.local.entity.TagEntity
         NoteLinkEntity::class,
         AttachmentEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)

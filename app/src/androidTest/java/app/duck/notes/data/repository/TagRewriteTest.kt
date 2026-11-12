@@ -20,6 +20,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -48,7 +49,7 @@ class TagRewriteTest {
         db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java)
             // Must match production: system SQLite may lack FTS5, which `notes_fts` requires.
             .setDriver(BundledSQLiteDriver())
-            .addCallback(DuckDatabaseCallback(seedSampleNotes = false))
+            .addCallback(DuckDatabaseCallback())
             .build()
         repo = TagRepositoryImpl(db, db.tagDao(), db.noteDao(), DeriveTitle(), ParseTags(), ResolveWikiLinks())
     }
@@ -76,8 +77,76 @@ class TagRewriteTest {
 
     private suspend fun tagNames() = db.tagDao().observeAll().first().map { it.name }.sorted()
 
+    private suspend fun tagRefs() = db.tagDao().observeNoteRefs().first().map { it.name to it.noteId }.toSet()
+
     private suspend fun tag(name: String) =
         checkNotNull(db.tagDao().getByName(name)) { "no tag row named $name" }
+
+    /**
+     * Plant UNDO_IGNORE_PERSISTED_CONFLICT: replace notes.getById(id)?.body == body with true
+     * in TagRepositoryImpl.restore. A conflict on the last affected note must restore nothing.
+     */
+    @Test
+    fun restore_rejectsChangedAffectedBodyBeforeAnyRowOrTagMutation() = runBlocking<Unit> {
+        seed("First #work")
+        seed("Second #work")
+        db.tagDao().upsert(tag("work").copy(isPinned = true, iconKey = "star"))
+        val snapshot = repo.rename("work", "job")
+        assertEquals(2, snapshot.bodies.size)
+        val expected = snapshot.bodies.keys.associateWith { requireNotNull(bodyOf(it)) }
+        val changedId = snapshot.bodies.keys.last()
+        val save = app.duck.notes.domain.usecase.SaveNote(
+            NoteRepositoryImpl(db.noteDao()), DeriveTitle(), ParseTags(), ResolveWikiLinks(),
+            app.duck.notes.domain.Clock { 99L },
+        )
+        val later = expected.getValue(changedId) + "\nNew saved text #later"
+        save(changedId, later)
+        val notesBefore = db.noteDao().observeNotes().first().sortedBy { it.id }
+        val tagsBefore = db.tagDao().observeAll().first().sortedBy { it.id }
+        val refsBefore = db.tagDao().observeNoteRefs().first().toSet()
+        assertTrue("positive changed-body control", bodyOf(changedId) != expected[changedId])
+        try {
+            repo.restore(snapshot, expected)
+            fail("a changed affected body must reject Undo")
+        } catch (failure: IllegalStateException) {
+            assertEquals("Note changed after the tag operation", failure.message)
+        }
+        assertEquals("no earlier note may be partially restored", notesBefore, db.noteDao().observeNotes().first().sortedBy { it.id })
+        assertEquals("no customization may be partially restored", tagsBefore, db.tagDao().observeAll().first().sortedBy { it.id })
+        assertEquals(refsBefore, db.tagDao().observeNoteRefs().first().toSet())
+        assertEquals(later, bodyOf(changedId))
+
+        // Positive restore control: the identical transaction succeeds when all bodies match.
+        save(changedId, expected.getValue(changedId))
+        repo.restore(snapshot, expected)
+        snapshot.bodies.forEach { (id, body) -> assertEquals(body, bodyOf(id)) }
+        assertEquals(listOf("work"), tagNames())
+        assertTrue(tag("work").isPinned)
+        assertEquals("star", tag("work").iconKey)
+        assertEquals(snapshot.bodies.keys, db.tagDao().observeNoteRefs().first().map { it.noteId }.toSet())
+    }
+
+    /** A removed affected note is also a conflict; Undo must never partly restore or recreate it. */
+    @Test
+    fun restore_rejectsMissingAffectedNoteWithoutRestoringOtherNotes() = runBlocking<Unit> {
+        seed("First #work")
+        seed("Second #work")
+        val snapshot = repo.removeTag("work")
+        assertEquals(2, snapshot.bodies.size)
+        val expected = snapshot.bodies.keys.associateWith { requireNotNull(bodyOf(it)) }
+        val deletedId = snapshot.bodies.keys.last()
+        db.noteDao().delete(requireNotNull(db.noteDao().getById(deletedId)))
+        val before = db.noteDao().observeNotes().first()
+        try {
+            repo.restore(snapshot, expected)
+            fail("a missing affected note must reject Undo")
+        } catch (failure: IllegalStateException) {
+            assertEquals("Note changed after the tag operation", failure.message)
+        }
+        assertEquals(before, db.noteDao().observeNotes().first())
+        assertNull(db.noteDao().getById(deletedId))
+        assertTrue(tagNames().isEmpty())
+    }
 
     /**
      * Rename cascades down the path, and **only** down the path.
@@ -97,6 +166,213 @@ class TagRewriteTest {
         assertEquals("#work/duck note", bodyOf(child))
         assertEquals("#projects2 note", bodyOf(neighbour))
         assertEquals(listOf("projects2", "work", "work/duck"), tagNames())
+    }
+
+    /** Plant TAG_RENAME_DELETE_AFTER_REWRITE: move source deletion after carryCustomization. */
+    @Test
+    fun rename_descendingOverlapPreservesMembershipCustomizationAndUndo() = runBlocking {
+        val parent = seed("#work note")
+        val child = seed("#work/sub child")
+        db.tagDao().upsert(tag("work").copy(isPinned = true, iconKey = "star"))
+        db.tagDao().upsert(tag("work/sub").copy(iconKey = "folder"))
+
+        val snapshot = repo.rename("work", "work/sub")
+
+        assertEquals("#work/sub note", bodyOf(parent))
+        assertEquals("#work/sub/sub child", bodyOf(child))
+        assertEquals(listOf("work/sub", "work/sub/sub"), tagNames())
+        assertEquals(setOf("work/sub" to parent, "work/sub/sub" to child), tagRefs())
+        assertTrue(tag("work/sub").isPinned)
+        assertEquals("star", tag("work/sub").iconKey)
+        assertEquals("folder", tag("work/sub/sub").iconKey)
+        assertEquals(listOf("work/sub/sub"), snapshot.createdNames)
+
+        repo.restore(snapshot, mapOf(parent to "#work/sub note", child to "#work/sub/sub child"))
+
+        assertEquals("#work note", bodyOf(parent))
+        assertEquals("#work/sub child", bodyOf(child))
+        assertEquals(listOf("work", "work/sub"), tagNames())
+        assertEquals(setOf("work" to parent, "work/sub" to child), tagRefs())
+        assertTrue(tag("work").isPinned)
+        assertEquals("star", tag("work").iconKey)
+        assertEquals("folder", tag("work/sub").iconKey)
+    }
+
+    /** Opposite-direction control for TAG_RENAME_DELETE_AFTER_REWRITE. */
+    @Test
+    fun rename_ascendingOverlapPreservesMembershipCustomizationAndUndo() = runBlocking {
+        val parent = seed("#work/sub note")
+        val child = seed("#work/sub/sub child")
+        db.tagDao().upsert(tag("work/sub").copy(isPinned = true, iconKey = "star"))
+        db.tagDao().upsert(tag("work/sub/sub").copy(iconKey = "folder"))
+
+        val snapshot = repo.rename("work/sub", "work")
+
+        assertEquals("#work note", bodyOf(parent))
+        assertEquals("#work/sub child", bodyOf(child))
+        assertEquals(listOf("work", "work/sub"), tagNames())
+        assertEquals(setOf("work" to parent, "work/sub" to child), tagRefs())
+        assertTrue(tag("work").isPinned)
+        assertEquals("star", tag("work").iconKey)
+        assertEquals("folder", tag("work/sub").iconKey)
+        assertEquals(listOf("work"), snapshot.createdNames)
+
+        repo.restore(snapshot, mapOf(parent to "#work note", child to "#work/sub child"))
+
+        assertEquals("#work/sub note", bodyOf(parent))
+        assertEquals("#work/sub/sub child", bodyOf(child))
+        assertEquals(listOf("work/sub", "work/sub/sub"), tagNames())
+        assertEquals(setOf("work/sub" to parent, "work/sub/sub" to child), tagRefs())
+        assertTrue(tag("work/sub").isPinned)
+        assertEquals("star", tag("work/sub").iconKey)
+        assertEquals("folder", tag("work/sub/sub").iconKey)
+    }
+
+    /** Plant TAG_UNDO_KEEP_SOURCE_ORPHANS: sweep only snapshot.createdNames before metadata. */
+    @Test
+    fun rename_descendingPinnedOrphansKeepSeparateMetadataAndUndo() = runBlocking {
+        val untouched = seed("#keep note")
+        val parent = TagEntity(UUID.randomUUID().toString(), "work", iconKey = "star", isPinned = true)
+        val child = TagEntity(UUID.randomUUID().toString(), "work/sub", iconKey = "folder", isPinned = true)
+        db.tagDao().upsert(parent)
+        db.tagDao().upsert(child)
+
+        val snapshot = repo.rename("work", "work/sub")
+
+        assertTrue(snapshot.bodies.isEmpty())
+        assertEquals(listOf("work/sub/sub"), snapshot.createdNames)
+        assertEquals(parent.copy(name = "work/sub"), tag("work/sub"))
+        assertEquals(child.copy(name = "work/sub/sub"), tag("work/sub/sub"))
+        assertEquals(listOf("keep", "work/sub", "work/sub/sub"), tagNames())
+        assertEquals(setOf("keep" to untouched), tagRefs())
+
+        repo.restore(snapshot, emptyMap())
+
+        assertEquals(parent, tag("work"))
+        assertEquals(child, tag("work/sub"))
+        assertEquals(listOf("keep", "work", "work/sub"), tagNames())
+        assertEquals("#keep note", bodyOf(untouched))
+        assertEquals(setOf("keep" to untouched), tagRefs())
+    }
+
+    /** Opposite-direction control for TAG_UNDO_KEEP_SOURCE_ORPHANS. */
+    @Test
+    fun rename_ascendingPinnedOrphansKeepSeparateMetadataAndUndo() = runBlocking {
+        val untouched = seed("#keep note")
+        val parent = TagEntity(UUID.randomUUID().toString(), "work/sub", iconKey = "star", isPinned = true)
+        val child = TagEntity(UUID.randomUUID().toString(), "work/sub/sub", iconKey = "folder", isPinned = true)
+        db.tagDao().upsert(parent)
+        db.tagDao().upsert(child)
+
+        val snapshot = repo.rename("work/sub", "work")
+
+        assertTrue(snapshot.bodies.isEmpty())
+        assertEquals(listOf("work"), snapshot.createdNames)
+        assertEquals(parent.copy(name = "work"), tag("work"))
+        assertEquals(child.copy(name = "work/sub"), tag("work/sub"))
+        assertEquals(listOf("keep", "work", "work/sub"), tagNames())
+        assertEquals(setOf("keep" to untouched), tagRefs())
+
+        repo.restore(snapshot, emptyMap())
+
+        assertEquals(parent, tag("work/sub"))
+        assertEquals(child, tag("work/sub/sub"))
+        assertEquals(listOf("keep", "work/sub", "work/sub/sub"), tagNames())
+        assertEquals("#keep note", bodyOf(untouched))
+        assertEquals(setOf("keep" to untouched), tagRefs())
+    }
+
+    /** Plant TAG_UNDO_REUSE_OCCUPIED_ID: set restoredId to old.id unconditionally. */
+    @Test
+    fun rename_descendingMixedOverlapUndoDoesNotRelocateReferencedSourceId() = runBlocking {
+        val child = seed("#work/sub child")
+        db.tagDao().upsert(tag("work/sub").copy(iconKey = "folder"))
+        db.tagDao().upsert(TagEntity(UUID.randomUUID().toString(), "work", iconKey = "star", isPinned = true))
+
+        val snapshot = repo.rename("work", "work/sub")
+
+        assertEquals("#work/sub/sub child", bodyOf(child))
+        assertEquals(setOf("work/sub/sub" to child), tagRefs())
+        assertTrue(tag("work/sub").isPinned)
+        assertEquals("star", tag("work/sub").iconKey)
+        assertEquals("folder", tag("work/sub/sub").iconKey)
+
+        repo.restore(snapshot, mapOf(child to "#work/sub/sub child"))
+
+        assertEquals("#work/sub child", bodyOf(child))
+        assertEquals(listOf("work", "work/sub"), tagNames())
+        assertEquals(setOf("work/sub" to child), tagRefs())
+        assertTrue(tag("work").isPinned)
+        assertEquals("star", tag("work").iconKey)
+        assertEquals("folder", tag("work/sub").iconKey)
+    }
+
+    /** Opposite-direction control for TAG_UNDO_REUSE_OCCUPIED_ID. */
+    @Test
+    fun rename_ascendingMixedOverlapUndoDoesNotRelocateReferencedSourceId() = runBlocking {
+        val parent = seed("#work/sub note")
+        db.tagDao().upsert(tag("work/sub").copy(iconKey = "star"))
+        db.tagDao().upsert(TagEntity(UUID.randomUUID().toString(), "work/sub/sub", iconKey = "folder", isPinned = true))
+
+        val snapshot = repo.rename("work/sub", "work")
+
+        assertEquals("#work note", bodyOf(parent))
+        assertEquals(setOf("work" to parent), tagRefs())
+        assertEquals("star", tag("work").iconKey)
+        assertTrue(tag("work/sub").isPinned)
+        assertEquals("folder", tag("work/sub").iconKey)
+
+        repo.restore(snapshot, mapOf(parent to "#work note"))
+
+        assertEquals("#work/sub note", bodyOf(parent))
+        assertEquals(listOf("work/sub", "work/sub/sub"), tagNames())
+        assertEquals(setOf("work/sub" to parent), tagRefs())
+        assertEquals("star", tag("work/sub").iconKey)
+        assertTrue(tag("work/sub/sub").isPinned)
+        assertEquals("folder", tag("work/sub/sub").iconKey)
+    }
+
+    /** Plant TAG_UNDO_ALL_TARGETS_CREATED: replace the newNames absence filter with newNames. */
+    @Test
+    fun rename_existingPinnedOrphanTargetKeepsItsRowAndMetadataAfterUndo() = runBlocking {
+        val source = seed("#from note")
+        db.tagDao().upsert(tag("from").copy(iconKey = "star", isPinned = true))
+        val target = TagEntity(UUID.randomUUID().toString(), "into", iconKey = "heart", isPinned = true)
+        db.tagDao().upsert(target)
+
+        val snapshot = repo.rename("from", "into")
+
+        assertEquals("#into note", bodyOf(source))
+        assertEquals(setOf("into" to source), tagRefs())
+        assertEquals(target, tag("into"))
+        assertTrue("an existing target was not created by rename", snapshot.createdNames.isEmpty())
+
+        repo.restore(snapshot, mapOf(source to "#into note"))
+
+        assertEquals("#from note", bodyOf(source))
+        assertEquals(setOf("from" to source), tagRefs())
+        assertEquals(listOf("from", "into"), tagNames())
+        assertEquals(target, tag("into"))
+        assertTrue(tag("from").isPinned)
+        assertEquals("star", tag("from").iconKey)
+    }
+
+    /** Plant TAG_RENAME_IDENTICAL_DELETES: remove rename's from == to early return. */
+    @Test
+    fun rename_identicalPathLeavesBodiesRowsAndMembershipUntouched() = runBlocking {
+        val note = seed("#work note")
+        db.tagDao().upsert(tag("work").copy(iconKey = "star", isPinned = true))
+        val beforeNote = db.noteDao().getById(note)
+        val beforeTag = tag("work")
+
+        val snapshot = repo.rename("work", "work")
+
+        assertEquals(beforeNote, db.noteDao().getById(note))
+        assertEquals(beforeTag, tag("work"))
+        assertEquals(setOf("work" to note), tagRefs())
+        assertTrue(snapshot.bodies.isEmpty())
+        assertTrue(snapshot.tags.isEmpty())
+        assertTrue(snapshot.createdNames.isEmpty())
     }
 
     /** Delete is the exact name only — the descendant a user never named survives. */
@@ -178,7 +454,7 @@ class TagRewriteTest {
     /**
      * **The other half of a merge undo, pinned rather than hidden. This test asserts a DEFECT.**
      *
-     * Undoing a merge does not roll back the pin the target *inherited*. `carryCustomization:220`
+     * Undoing a merge does not roll back the pin the target *inherited*. `carryCustomization`
      * writes `isPinned = current.isPinned || old.isPinned` onto the destination row, and `restore`
      * only walks `snapshot.tags` — which holds the **source** rows. `BodySnapshot` carries no record
      * of the target's prior state, so there is nothing to put back and the target stays pinned.
@@ -213,37 +489,39 @@ class TagRewriteTest {
     }
 
     /**
-     * A failure **inside** the operation, after N bodies have already been written.
-     *
-     * `deleteByName` runs last in both `rename` and `removeTag` — after `rewriteAll` has saved every
-     * affected note — so a DAO that throws there lands the failure exactly where it matters: past
-     * the point of no return if the writes were not transactional. Delegation rather than a seam in
-     * production code, which `TagDao` being an `interface` makes free.
-     *
-     * **Checking the exception message is not ceremony.** The first run of this suite passed this
-     * test for the wrong reason: `inTransaction` was `withTransaction`, which throws immediately on
-     * a driver-backed database, so the operation died before writing anything and "nothing changed"
-     * was trivially true. A rollback test that cannot tell *which* exception it caught is a test
-     * that passes when the feature is entirely broken — so the message below is checked too.
+     * Plant TAG_RENAME_NO_TRANSACTION: replace inTransaction's connection transaction with block().
+     * The failing carry first proves that actual body and membership writes already occurred.
      */
     @Test
     fun rename_rollsBackOnFailureMidOperation() = runBlocking {
         val parent = seed("#projects note")
         val child = seed("#projects/duck other")
+        db.tagDao().upsert(tag("projects").copy(isPinned = true, iconKey = "star"))
+        val beforeNotes = listOf(db.noteDao().getById(parent), db.noteDao().getById(child))
+        val beforeTags = db.tagDao().observeAll().first()
+        val beforeRefs = tagRefs()
+        var observedWrites = false
+        val failingTags = object : TagDao by db.tagDao() {
+            override suspend fun upsert(tag: TagEntity) {
+                assertEquals("#work note", bodyOf(parent))
+                assertEquals("#work/duck other", bodyOf(child))
+                assertEquals(setOf(parent), db.noteDao().notesByTagNameOnce("work").map { it.id }.toSet())
+                assertEquals(setOf(child), db.noteDao().notesByTagNameOnce("work/duck").map { it.id }.toSet())
+                observedWrites = true
+                error("forced failure after real rename writes")
+            }
+        }
         val failing = TagRepositoryImpl(
-            db, ThrowingTagDao(db.tagDao()), db.noteDao(), DeriveTitle(), ParseTags(), ResolveWikiLinks(),
+            db, failingTags, db.noteDao(), DeriveTitle(), ParseTags(), ResolveWikiLinks(),
         )
 
         val thrown = runCatching { failing.rename("projects", "work") }.exceptionOrNull()
 
-        assertEquals(
-            "must fail on the forced error, not on a broken transaction API",
-            "forced failure mid-operation",
-            thrown?.message,
-        )
-        assertEquals("#projects note", bodyOf(parent))
-        assertEquals("#projects/duck other", bodyOf(child))
-        assertEquals(listOf("projects", "projects/duck"), tagNames())
+        assertEquals("forced failure after real rename writes", thrown?.message)
+        assertTrue("the failure must follow actual body and membership writes", observedWrites)
+        assertEquals(beforeNotes, listOf(db.noteDao().getById(parent), db.noteDao().getById(child)))
+        assertEquals(beforeTags, db.tagDao().observeAll().first())
+        assertEquals(beforeRefs, tagRefs())
     }
 
     /** Delete's half of the same claim — it destroys text, so rollback matters more here. */
@@ -307,8 +585,8 @@ class TagRewriteTest {
      *
      * Bodies are still the source of truth; this is the one case where they cannot be. With no note
      * carrying `#unused`, `saveNoteWithTagsAndLinks` never mints a `renamed` row, so there is nothing for
-     * `carryCustomization` to graft the pin onto. It now moves the old row instead — same id, new
-     * name — which `deleteByName` then no longer matches. Such a row can only exist because
+     * `carryCustomization` to graft the pin onto. It recreates the deleted source row under the new
+     * name, keeping its ID and customization. Such a row can only exist because
      * `deleteOrphanTags` spares pinned ones, and that exemption is what makes moving it the correct
      * answer rather than a special case: the row was deliberately kept alive without notes, so a
      * rename should carry it, not collect it.
@@ -332,10 +610,7 @@ class TagRewriteTest {
     /**
      * **Undo actually puts the pinned row back** — the claim the old KDoc made and never asserted.
      *
-     * The row goes back by the same mechanism it moved: `restore` finds nothing named `unused`, so
-     * it upserts the snapshot's row whole, and since `upsert` is keyed on `id` that relocates the
-     * moved row rather than adding a second one. The `createdNames` sweep that follows then finds no
-     * `renamed` and is correctly a no-op — which is why the tags loop has to run before it.
+     * Undo removes the orphan destination before restoring the saved source row and its ID.
      */
     @Test
     fun rename_ofAPinnedTagNoNoteCarriesIsUndoable() = runBlocking {
@@ -416,7 +691,7 @@ class TagRewriteTest {
 }
 
 /**
- * A real [TagDao] that fails on the one call both write paths make **last**.
+ * Delete's [TagDao] fails on its final call, after actual body writes.
  *
  * Everything else delegates, so the rewrites ahead of it are genuine writes against genuine SQLite —
  * which is the whole point: the rollback has to undo work that actually happened.
