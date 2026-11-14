@@ -10,6 +10,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.unit.dp
 import app.duck.notes.core.ui.DuckIconButton
@@ -39,6 +46,14 @@ fun DuckNoteList(
     search: SearchState = SearchState(),
     onSearchChanged: ((String) -> Unit)? = null,
     onRetrySearch: () -> Unit = {},
+    order: app.duck.notes.domain.model.NoteSort = app.duck.notes.domain.model.NoteSort.Modified,
+    onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
+    onPinNote: ((String, Boolean) -> Unit)? = null,
+    onSearchFilters: ((app.duck.notes.domain.model.SearchFilters) -> Unit)? = null,
+    tagPaths: List<String> = emptyList(),
+    sortPending: Boolean = false,
+    onImport: (() -> Unit)? = null,
+    onExport: ((String?, Boolean) -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -51,7 +66,7 @@ fun DuckNoteList(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (search.query.isBlank()) filter.label() else stringResource(R.string.search_results),
+                text = if (!search.active) filter.label() else stringResource(R.string.search_results),
                 style = DuckTheme.type.uiTitle,
                 color = colors.onSurface,
                 maxLines = 1,
@@ -67,6 +82,17 @@ fun DuckNoteList(
             onNewNote?.let { create ->
                 DuckIconButton(R.drawable.duck_new_note, stringResource(R.string.note_new), create, enabled = !creatingNote)
             }
+            if (onImport != null || onExport != null) Box {
+                var filesOpen by remember { mutableStateOf(false) }
+                TextButton(onClick = { filesOpen = true }) { Text(stringResource(R.string.transfer_files)) }
+                DropdownMenu(filesOpen, onDismissRequest = { filesOpen = false }) {
+                    onImport?.let { import -> DropdownMenuItem(text = { Text(stringResource(R.string.transfer_import)) }, onClick = { filesOpen = false; import() }) }
+                    onExport?.let { export ->
+                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_export_collection)) }, onClick = { filesOpen = false; export(null, false) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_share_collection)) }, onClick = { filesOpen = false; export(null, true) })
+                    }
+                }
+            }
         }
         onSearchChanged?.let { change ->
             OutlinedTextField(
@@ -80,6 +106,7 @@ fun DuckNoteList(
                 },
             )
         }
+        NoteListControls(order, search.filters, tagPaths, onNoteSort, onSearchFilters, sortPending)
         DuckDivider()
         when (search.phase) {
             SearchPhase.Pending -> { DuckEmptyState(stringResource(R.string.search_pending)); return@Column }
@@ -92,7 +119,7 @@ fun DuckNoteList(
         }
 
         if (notes.isEmpty()) {
-            DuckEmptyState(stringResource(if (search.query.isBlank()) R.string.shell_empty_notes else R.string.search_empty))
+            DuckEmptyState(stringResource(if (!search.active) R.string.shell_empty_notes else R.string.search_empty))
         } else {
             val motion = DuckTheme.motion
             LazyColumn(Modifier.fillMaxSize()) {
@@ -120,6 +147,8 @@ fun DuckNoteList(
                             selected = note.id == selectedNoteId,
                             onClick = { onSelectNote(note.id) },
                             onAddTag = if (note.isTrashed) null else ({ onAddTag(note.id) }),
+                            pinned = note.isPinned,
+                            onTogglePin = if (note.isTrashed || onPinNote == null) null else ({ onPinNote(note.id, !note.isPinned) }),
                         )
                         DuckDivider()
                     }
@@ -136,13 +165,31 @@ fun DuckNoteList(
  * every note's title twice. Blank lines are dropped rather than collapsed into the two visible
  * lines, since a markdown body is mostly blank lines between blocks.
  */
-private fun Note.previewLine(): String =
-    body.lineSequence()
-        .map(String::trim)
-        .filter(String::isNotEmpty)
-        .drop(1)
-        .joinToString(" ")
-        .take(PREVIEW_CHARS)
+internal fun Note.previewLine(): String {
+    // Bound work before splitting: list previews must not join an entire large note.
+    val prefix = body.take(4096)
+    var carry = app.duck.notes.domain.markdown.LineCarry()
+    var titleSeen = false
+    val result = StringBuilder()
+    for (line in prefix.lineSequence()) {
+        val (tokens, next) = app.duck.notes.domain.markdown.MarkdownScanner.scanLine(line, 0, carry)
+        carry = next
+        if (line.isBlank()) continue
+        if (!titleSeen) { titleSeen = true; continue }
+        val hidden = BooleanArray(line.length)
+        tokens.flatMap { it.markers }.forEach { range ->
+            range.forEach { if (it in hidden.indices) hidden[it] = true }
+        }
+        val plain = buildString { line.forEachIndexed { i, c -> if (!hidden[i]) append(c) } }.trim()
+        if (plain.isNotEmpty()) {
+            if (result.isNotEmpty()) result.append(' ')
+            result.append(plain)
+        }
+        if (result.length >= PREVIEW_CHARS) break
+    }
+    val preview = result.toString().take(PREVIEW_CHARS).trim()
+    return if (preview.lastOrNull()?.isHighSurrogate() == true) preview.dropLast(1) else preview
+}
 
 /** Two lines at `uiSecondary` never reach this; it caps the string a `maxLines` would clip anyway. */
 private const val PREVIEW_CHARS = 200

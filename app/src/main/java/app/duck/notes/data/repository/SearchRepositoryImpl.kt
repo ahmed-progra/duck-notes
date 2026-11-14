@@ -18,9 +18,27 @@ class SearchRepositoryImpl @Inject constructor(
      * be used. Result counts are small — the FTS side has already filtered.
      */
     override suspend fun search(query: SearchQuery): List<Note> {
-        val matches = notes.search(query.text)
-        val tagId = query.tagId ?: return matches.map { it.toDomain() }
-        val tagged = notes.notesByTag(tagId).first().mapTo(mutableSetOf()) { it.id }
-        return matches.filter { it.id in tagged }.map { it.toDomain() }
+        var matches = if (query.text.isBlank()) notes.observeNotes().first() else notes.search(query.text)
+        query.tagId?.let { id ->
+            val tagged = notes.notesByTag(id).first().mapTo(mutableSetOf()) { it.id }
+            matches = matches.filter { it.id in tagged }
+        }
+        query.filters.tagPath?.let { path ->
+            val tagged = notes.notesByTagPathOnce(path).mapTo(mutableSetOf()) { it.id }
+            matches = matches.filter { it.id in tagged }
+        }
+        val filters = query.filters
+        if (filters.pinnedOnly) matches = matches.filter { it.isPinned }
+        if (filters.openTasksOnly) matches = matches.filter { app.duck.notes.domain.markdown.MarkdownScanner.hasOpenTask(it.body) }
+        if (filters.imagesOnly) {
+            val images = notes.noteIdsWithImages().toSet()
+            matches = matches.filter { it.id in images }
+        }
+        matches = when (filters.scope) {
+            app.duck.notes.domain.model.SearchScope.Both -> matches
+            app.duck.notes.domain.model.SearchScope.Active -> matches.filterNot { it.isArchived }
+            app.duck.notes.domain.model.SearchScope.Archive -> matches.filter { it.isArchived }
+        }
+        return matches.map { it.toDomain() }
     }
 }

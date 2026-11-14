@@ -25,6 +25,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.core.app.ActivityScenario
@@ -71,6 +72,7 @@ class SettingsActivityTest {
     private val body = "## Palette target\n" + (1..80).joinToString("\n") { "Plain editor line $it with enough text to scroll." }
 
     @Before fun setUp() {
+        resetApplicationLanguage()
         SettingsTestOptions.initialTheme = ThemePreference.Light
         hilt.inject()
         pumpUntil { repository.state.value.readStatus == SettingsReadStatus.Ready }
@@ -95,12 +97,113 @@ class SettingsActivityTest {
                         .setApplicationNightMode(UiModeManager.MODE_NIGHT_AUTO)
                 }
                 AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+                resetApplicationLanguage()
                 SettingsDrawProbe.reset()
             }
             if (::resources.isInitialized) runBlocking { resources.close() }
             if (::database.isInitialized) database.close()
             SettingsTestOptions.reset()
         }
+    }
+
+    private fun resetApplicationLanguage() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            // AppCompat cannot find LocaleManager once the last Activity delegate has closed.
+            InstrumentationRegistry.getInstrumentation().targetContext
+                .getSystemService(android.app.LocaleManager::class.java).applicationLocales = android.os.LocaleList.getEmptyLocaleList()
+        } else {
+            AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.getEmptyLocaleList())
+        }
+    }
+
+    /** Plant: disconnect pin/filter actions; the actual Room-backed collection cannot follow the menu. */
+    @Test fun notePinSortAndFilterMenusUseTheRealRepository() {
+        selectFixture()
+        fun fixture() = runBlocking { database.noteDao().getById("settings-fixture") }
+        val modified = fixture()?.modifiedAt
+        compose.onNodeWithText("Note actions").performClick()
+        compose.onNodeWithText("Pin note").performClick()
+        pumpUntil { fixture()?.isPinned == true }
+        assertEquals(modified, fixture()?.modifiedAt)
+        compose.onNodeWithText("Sort notes").performClick()
+        compose.onNodeWithText("Title").performClick()
+        pumpUntil { repository.state.value.settings.noteSort == app.duck.notes.domain.model.NoteSort.Title }
+        compose.onNodeWithText("Filters (0)").performClick()
+        compose.onNodeWithText("Pinned notes").performClick()
+        compose.onNodeWithText("Close").performClick()
+        pumpUntil {
+            var correct = false
+            scenario?.onActivity { activity ->
+                val state = ViewModelProvider(activity)[DuckShellViewModel::class.java].state.value
+                correct = state.search.phase == app.duck.notes.presentation.shell.SearchPhase.Results && state.search.filters.pinnedOnly && state.notes.map { it.id } == listOf("settings-fixture")
+            }
+            correct
+        }
+        compose.onNodeWithText("Note actions").performClick()
+        compose.onNodeWithText("Unpin note").performClick()
+        pumpUntil { fixture()?.isPinned == false }
+        assertEquals(modified, fixture()?.modifiedAt)
+        compose.onNodeWithText("Filters (1)").performClick()
+        compose.onNodeWithText("Clear filters").performClick()
+        compose.onNodeWithText("Close").performClick()
+        scenario?.recreate()
+        compose.waitForIdle()
+        assertEquals(app.duck.notes.domain.model.NoteSort.Title, repository.state.value.settings.noteSort)
+    }
+
+    /** Plant: suppress autosave after undo; the real Room body retains the appended probe. */
+    @Test fun toolbarUndoAndRedoPersistThroughTheRealActivityAndRoom() {
+        selectFixture()
+        compose.onNodeWithTag("noteEditor").performTextInput(" Undo probe")
+        fun savedBody() = runBlocking { database.noteDao().getById("settings-fixture")?.body }
+        pumpUntil { savedBody() == body + " Undo probe" }
+        compose.onNodeWithContentDescription("Undo edit").performScrollTo().performClick()
+        pumpUntil { savedBody() == body }
+        compose.onNodeWithContentDescription("Redo edit").performScrollTo().performClick()
+        pumpUntil { savedBody() == body + " Undo probe" }
+        scenario?.recreate()
+        compose.waitForIdle()
+        scenario?.onActivity { activity ->
+            assertEquals(body + " Undo probe", ViewModelProvider(activity)[DuckShellViewModel::class.java].buffer.text.toString())
+        }
+    }
+
+    /** Plant: omit the editor typography projection; the real text layout remains 17sp serif. */
+    @Test fun writingPreferencesChangeTheRealEditorAndSurviveRecreation() {
+        selectFixture()
+        openSettings()
+        compose.onNodeWithText("Monospace").performScrollTo().performClick()
+        pumpUntil { repository.state.value.settings.editorFont == app.duck.notes.domain.model.EditorFont.Mono }
+        compose.onNodeWithContentDescription("Text size: 17").performScrollTo()
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(22f) }
+        pumpUntil { repository.state.value.settings.editorSizeSp == 22 }
+        compose.onNodeWithContentDescription("Back to notes").performClick()
+        fun assertEditorStyle() {
+            val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+            compose.onNodeWithTag("noteEditor").performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            assertEquals(22f, layouts.single().layoutInput.style.fontSize.value, 0.01f)
+            assertEquals(androidx.compose.ui.text.font.FontFamily.Monospace, layouts.single().layoutInput.style.fontFamily)
+        }
+        assertEditorStyle()
+        scenario?.recreate()
+        compose.waitForIdle()
+        assertEditorStyle()
+    }
+
+    /** Plant: skip setApplicationLocales; the repository changes but actual resources remain English. */
+    @Test fun languagePickerChangesActualResourcesAndKeepsTheOpenNote() {
+        selectFixture()
+        openSettings()
+        compose.onNodeWithText("العربية").performScrollTo().performClick()
+        pumpUntil { repository.state.value.settings.language == app.duck.notes.domain.model.LanguagePreference.Arabic }
+        compose.onNodeWithContentDescription("العودة إلى الملاحظات").assertIsDisplayed().performClick()
+        scenario?.onActivity { activity ->
+            assertEquals("ar", activity.resources.configuration.locales[0].language)
+            assertEquals("settings-fixture", ViewModelProvider(activity)[DuckShellViewModel::class.java].state.value.selectedNoteId)
+        }
+        scenario?.recreate()
+        compose.waitForIdle()
+        scenario?.onActivity { activity -> assertEquals("ar", activity.resources.configuration.locales[0].language) }
     }
 
     @Test fun themeRowPersistsDarkAndRecreationRendersTheLiteralDarkSurface() {

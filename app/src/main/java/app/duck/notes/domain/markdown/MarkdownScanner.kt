@@ -150,6 +150,23 @@ object MarkdownScanner {
         return ids
     }
 
+    fun imageDestinationsIn(body: String): Set<String> = buildSet {
+        forEachImage(body) { destination, _, _ -> add(destination) }
+    }
+
+    /** Portable import/export changes destinations, never labels, links or code examples. */
+    fun rewriteImageDestinations(body: String, destinations: Map<String, String>): String {
+        val edits = mutableListOf<Triple<Int, Int, String>>()
+        forEachImage(body) { destination, token, _ ->
+            val replacement = destinations[destination]
+            val tail = token.markers.getOrNull(1)
+            if (replacement != null && tail != null) edits += Triple(tail.first + 2, tail.last, replacement)
+        }
+        return StringBuilder(body).apply {
+            edits.asReversed().forEach { (start, end, value) -> replace(start, end, value) }
+        }.toString()
+    }
+
     /**
      * [body] without the reference to attachment [id] — the mirror of the append, used by
      * `DeleteAttachment` and the editor buffer alike.
@@ -371,8 +388,15 @@ object MarkdownScanner {
         TagScanner.scanLine(line, 0, tagSpans)
         tagSpans.forEach { if (it.start >= from) out += Token(TokenKind.TAG, base + it.start, base + it.end) }
 
+        var closeBracket = line.indexOf(']', from)
+        var closeDestination = line.indexOf(')', from)
         var i = from
         while (i < line.length) {
+            // Closing indices only advance; malformed links must not rescan every suffix.
+            if (closeBracket >= 0 && i > closeBracket) closeBracket = line.indexOf(']', i)
+            if (closeBracket >= 0 && closeDestination >= 0 && closeDestination < closeBracket + 2) {
+                closeDestination = line.indexOf(')', closeBracket + 2)
+            }
             if (masked[i]) { i++; continue }
 
             val wiki = WikiLinkScanner.matchAt(line, i)
@@ -385,7 +409,7 @@ object MarkdownScanner {
                 continue
             }
 
-            val link = linkAt(line, i)
+            val link = linkAt(line, i, closeBracket, closeDestination)
             if (link != null) {
                 val (end, textStart, textEnd) = link
                 out += Token(
@@ -438,14 +462,11 @@ object MarkdownScanner {
     }
 
     /** `[text](dest)` or `![alt](dest)` at [i] → (end, textStart, textEnd-at-`]`). */
-    private fun linkAt(line: String, i: Int): Triple<Int, Int, Int>? {
+    private fun linkAt(line: String, i: Int, close: Int, dest: Int): Triple<Int, Int, Int>? {
         val open = if (line[i] == '!') i + 1 else i
         if (line.getOrNull(open) != '[') return null
         if (line.startsWith("[[", open)) return null
-        val close = line.indexOf(']', open + 1)
-        if (close < 0 || line.getOrNull(close + 1) != '(') return null
-        val dest = line.indexOf(')', close + 2)
-        if (dest < 0) return null
+        if (close <= open || line.getOrNull(close + 1) != '(' || dest < 0) return null
         return Triple(dest + 1, open + 1, close)
     }
 

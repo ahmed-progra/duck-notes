@@ -36,13 +36,34 @@ internal class AttachmentFiles(filesDir: File) {
     }
 
     fun temporary(): File {
+        val pending = pendingDirectory()
+        // createTempFile creates exclusively; two imports must never share/truncate a temporary name.
+        return File.createTempFile("image-", ".part", pending)
+    }
+
+    /** A transfer's marker names this pending file, so startup can recover a death during copying. */
+    fun transferTemporary(id: String): File {
+        pendingDirectory()
+        val pending = transferPending(id) ?: throw IOException("Invalid pending transfer identity")
+        if (!pending.createNewFile()) throw FileAlreadyExistsException(pending.path)
+        return pending
+    }
+
+    fun transferPending(id: String): File? {
+        target(id) ?: return null
+        val parent = directory() ?: return null
+        val pending = File(parent, PENDING)
+        if (pending.canonicalFile != pending.absoluteFile || pending.isFile) return null
+        return File(pending, "$id.part").takeIf { it.canonicalFile == it.absoluteFile && !it.isDirectory }
+    }
+
+    private fun pendingDirectory(): File {
         val directory = directory() ?: throw IOException("Attachment directory is unavailable")
         if (!directory.isDirectory && !directory.mkdirs() && !directory.isDirectory) throw IOException("Attachment directory is unavailable")
         val pending = File(directory, PENDING)
         if (pending.canonicalFile != pending.absoluteFile ||
             (!pending.isDirectory && !pending.mkdirs() && !pending.isDirectory)) throw IOException("Attachment temporary directory is unavailable")
-        // createTempFile creates exclusively; two imports must never share/truncate a temporary name.
-        return File.createTempFile("image-", ".part", pending)
+        return pending
     }
 
     fun publish(temporary: File, destination: File) = synchronized(publicationLock) {

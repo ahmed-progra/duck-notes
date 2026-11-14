@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
@@ -46,6 +51,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,6 +77,8 @@ import app.duck.notes.core.ui.DuckTagChip
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The three-pane shell: sidebar, note list, editor.
@@ -118,14 +126,61 @@ fun DuckShell(
     modifier: Modifier = Modifier,
     viewModel: DuckShellViewModel = hiltViewModel(),
     onSettings: (() -> Unit)? = null,
+    noteSort: app.duck.notes.domain.model.NoteSort = app.duck.notes.domain.model.NoteSort.Modified,
+    onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
+    noteSortPending: Boolean = false,
+    onImport: (() -> Unit)? = null,
+    onExport: ((String?, Boolean) -> Unit)? = null,
+    canUseImages: () -> Boolean = { true },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val imageSelection by viewModel.imagePickerSelection.collectAsStateWithLifecycle()
+    val lifecycle by owner.lifecycle.currentStateFlow.collectAsState()
+    LaunchedEffect(imageSelection, lifecycle) {
+        val selected = imageSelection ?: return@LaunchedEffect
+        if (lifecycle != androidx.lifecycle.Lifecycle.State.RESUMED || !canUseImages()) return@LaunchedEffect
+        val mime = withContext(Dispatchers.IO) {
+            selected.uri?.let { value ->
+                app.duck.notes.presentation.markdown.resolveImageMime(android.net.Uri.parse(value)) { context.contentResolver.getType(it) }
+            } ?: "image/*"
+        }
+        if (owner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.RESUMED && canUseImages()) {
+            viewModel.consumeImagePickerSelection(selected, mime)
+        }
+    }
+    val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales.get(0) ?: java.util.Locale.getDefault()
+    LaunchedEffect(viewModel, noteSort, locale) { viewModel.onNoteSortChanged(noteSort, locale) }
+    LaunchedEffect(viewModel) { while (true) { kotlinx.coroutines.delay(60_000L); viewModel.onTimeChanged() } }
+    DisposableEffect(context, owner, viewModel) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) { viewModel.onTimeChanged() }
+        }
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.onTimeChanged()
+        }
+        val events = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_DATE_CHANGED)
+            addAction(android.content.Intent.ACTION_TIME_CHANGED)
+            addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        androidx.core.content.ContextCompat.registerReceiver(context, receiver, events, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        owner.lifecycle.addObserver(observer)
+        viewModel.onTimeChanged()
+        onDispose { owner.lifecycle.removeObserver(observer); context.unregisterReceiver(receiver) }
+    }
 
     DuckShell(
-        state = state,
+        state = state.copy(noteSortPending = noteSortPending),
         buffer = state.editorSession?.buffer ?: viewModel.buffer,
         actions = ShellActions(
+            onImport = onImport,
+            onExport = onExport,
             onNewNote = viewModel::onNewNote,
+            onPinNote = viewModel::onPinNote,
+            onNoteSort = onNoteSort,
+            onSearchFilters = viewModel::onSearchFiltersChanged,
             onSearchChanged = viewModel::onSearchChanged,
             onRetrySearch = viewModel::onRetrySearch,
             onArchiveNote = { viewModel.onArchiveNote(state.editorSession) },
@@ -135,7 +190,7 @@ fun DuckShell(
             onEditorAttached = viewModel::onEditorAttached,
             onEditorDetached = viewModel::onEditorDetached,
             onImagePickerOpened = { viewModel.onImagePickerOpened(state.editorSession) },
-            onImagePickerResult = viewModel::onImagePickerResult,
+            onImagePickerResult = { uri, _ -> viewModel.queueImagePickerSelection(uri) },
             onFilter = viewModel::onFilter,
             onSelectNote = viewModel::onSelectNote,
             onClearSelection = viewModel::onClearSelection,
@@ -181,13 +236,9 @@ fun DuckShell(
 
     BoxWithConstraints(modifier.fillMaxSize().background(colors.surface)) {
         val mode = paneModeFor(maxWidth)
-        val inlineInfo = mode == PaneMode.Expanded && maxWidth >= 1120.dp
-        val context = LocalContext.current
+        val inlineInfo = mode == PaneMode.Expanded && maxWidth >= 1243.dp
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            val mime = uri?.let { source ->
-                app.duck.notes.presentation.markdown.resolveImageMime(source) { context.contentResolver.getType(it) }
-            } ?: "image/*"
-            actions.onImagePickerResult(uri?.toString(), mime)
+            actions.onImagePickerResult(uri?.toString(), "image/*")
         }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
@@ -207,6 +258,7 @@ fun DuckShell(
         var focusMode by remember { mutableStateOf(false) }
         LaunchedEffect(state.selectedNoteId) { focusMode = false }
         val focusing = focusMode && state.selectedNoteId != null
+        val editorScroll = key(state.selectedNoteId) { rememberScrollState() }
 
         // Table-of-contents scroll requests, panel -> editor. Phase 9e.
         //
@@ -269,6 +321,14 @@ fun DuckShell(
                 search = state.search,
                 onSearchChanged = actions.onSearchChanged,
                 onRetrySearch = actions.onRetrySearch,
+                order = state.noteSort,
+                onNoteSort = actions.onNoteSort,
+                onPinNote = actions.onPinNote,
+                onSearchFilters = actions.onSearchFilters,
+                tagPaths = state.allTagPaths,
+                sortPending = state.noteSortPending,
+                onImport = actions.onImport,
+                onExport = actions.onExport,
             )
         }
 
@@ -301,7 +361,7 @@ fun DuckShell(
                 }
                 key(session ?: buffer) {
                 Column(m) {
-                    if (actions.onArchiveNote != null) {
+                    if (actions.onArchiveNote != null && !focusing) {
                         var menu by remember { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             androidx.compose.foundation.layout.Box {
@@ -312,8 +372,16 @@ fun DuckShell(
                                     if (state.selectedNoteTrashed) {
                                         DropdownMenuItem(text = { Text(stringResource(R.string.note_restore)) }, onClick = { menu = false; actions.onRestoreNote?.invoke() })
                                     } else {
+                                        actions.onPinNote?.let { pin ->
+                                            DropdownMenuItem(text = { Text(stringResource(if (state.selectedNotePinned) R.string.note_unpin else R.string.note_pin)) },
+                                                onClick = { menu = false; state.selectedNoteId?.let { pin(it, !state.selectedNotePinned) } })
+                                        }
                                         DropdownMenuItem(text = { Text(stringResource(if (state.selectedNoteArchived) R.string.note_unarchive else R.string.note_archive)) }, onClick = { menu = false; actions.onArchiveNote.invoke() })
                                         DropdownMenuItem(text = { Text(stringResource(R.string.note_trash)) }, onClick = { menu = false; actions.onTrashNote?.invoke() })
+                                    }
+                                    actions.onExport?.let { export ->
+                                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_export_note)) }, onClick = { menu = false; export(state.selectedNoteId, false) })
+                                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_share_note)) }, onClick = { menu = false; export(state.selectedNoteId, true) })
                                     }
                                 }
                             }
@@ -345,6 +413,7 @@ fun DuckShell(
                         noteTitles = state.allNoteTitles,
                         onOpenWikiLink = actions.onOpenWikiLink,
                         scrollToOffset = headingScrolls,
+                        scroll = editorScroll,
                     )
                 }
                 }
@@ -389,7 +458,10 @@ fun DuckShell(
         // what keeps `divider` exempt from a 1.4.11 floor at all. So "do not delete" is a Duck design
         // rule, not a WCAG one, and is negotiable with eyes open. The numbers and the full argument
         // live in ContrastTest.dividerAndElevationAreRecorded.
-        when (mode) {
+        if (focusing) {
+            BackHandler { focusMode = false }
+            editor(Modifier.fillMaxSize().statusBarsPadding())
+        } else when (mode) {
             PaneMode.Expanded -> Row(Modifier.fillMaxSize().statusBarsPadding()) {
                 androidx.compose.foundation.layout.Box(Modifier.width(SIDEBAR)) { sidebar() }
                 VerticalDivider(color = colors.divider)
@@ -410,11 +482,18 @@ fun DuckShell(
                 }
             }
 
-            // Medium keeps the sidebar in the drawer and shows list + editor together: at 600-839dp
+            // Medium keeps the sidebar in the drawer and shows list + editor together: at 681-961dp
             // three panes leave the editor too narrow to read a serif body in.
             PaneMode.Medium -> DrawerHost(drawer, sidebar) {
                 Row(Modifier.fillMaxSize().statusBarsPadding()) {
-                    list(Modifier.width(NOTE_LIST))
+                    Column(Modifier.width(NOTE_LIST)) {
+                        DuckIconButton(
+                            icon = DuckIcon.Tag,
+                            contentDescription = stringResource(R.string.shell_open_sidebar),
+                            onClick = { scope.launch { drawer.open() } },
+                        )
+                        list(Modifier.weight(1f))
+                    }
                     VerticalDivider(color = colors.divider)
                     editor(Modifier.weight(1f))
                 }
@@ -436,12 +515,18 @@ fun DuckShell(
                         // insets to arbitrary content — only its own `TopAppBar` does. Without it
                         // the button draws over the clock under `enableEdgeToEdge`.
                         if (!focusing) {
-                            DuckIconButton(
-                                icon = DuckIcon.Tag,
-                                contentDescription = stringResource(R.string.shell_open_sidebar),
-                                onClick = { scope.launch { drawer.open() } },
-                                modifier = Modifier.statusBarsPadding(),
-                            )
+                            Row(Modifier.fillMaxWidth().statusBarsPadding()) {
+                                if (state.selectedNoteId != null) {
+                                    IconButton(onClick = actions.onClearSelection) {
+                                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.settings_back), tint = colors.onSurface)
+                                    }
+                                }
+                                DuckIconButton(
+                                    icon = DuckIcon.Tag,
+                                    contentDescription = stringResource(R.string.shell_open_sidebar),
+                                    onClick = { scope.launch { drawer.open() } },
+                                )
+                            }
                         }
                     },
                 ) { padding ->
@@ -498,7 +583,7 @@ fun DuckShell(
         // Compose, which this project measures rather than assumes —
         // `RtlLayoutTest.theInfoSheetMirrorsWithLayoutDirection` does, and the plant that proves it
         // can fail is a hardcoded `LocalLayoutDirection provides Ltr` wrapped around the panel.
-        if (state.infoOpen && !inlineInfo) {
+        if (state.infoOpen && !inlineInfo && !focusing) {
             ModalBottomSheet(
                 onDismissRequest = actions.onToggleInfo,
                 containerColor = colors.surfaceElevated,
@@ -510,19 +595,9 @@ fun DuckShell(
         // Hoisted above the pane branch on purpose: only Compact routes through a `Scaffold`, so a
         // `snackbarHost` slot would give undo to phones and silently withhold it from tablets.
         if (state.saveFailed) {
-            Snackbar(
+            SaveFailureBanner(state.failedNoteTitle, actions.onRetryNavigation,
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
-                    .semantics { liveRegion = LiveRegionMode.Polite },
-                containerColor = colors.surfaceElevated,
-                contentColor = colors.onSurface,
-                action = {
-                    TextButton(onClick = actions.onRetryNavigation, modifier = Modifier.heightIn(min = 48.dp)) {
-                        Text(stringResource(R.string.editor_save_retry), color = colors.accentText)
-                    }
-                },
-            ) {
-                Text(state.failedNoteTitle?.let { stringResource(R.string.editor_save_failed_note, it) } ?: stringResource(R.string.editor_save_failed))
-            }
+            )
         } else if (state.operationFailure != null) {
             Snackbar(
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().semantics { liveRegion = LiveRegionMode.Polite },
@@ -700,10 +775,5 @@ private fun DrawerHost(
 private val SIDEBAR = 280.dp
 private val NOTE_LIST = 320.dp
 
-/**
- * The Expanded info pane. Narrower than [NOTE_LIST] because its rows are single lines — a count, a
- * timestamp, a heading, a backlink title — not a title plus a two-line preview plus a timestamp. And
- * because Expanded starts at 840dp, where 280 + 320 + 280 already leaves the editor only 40dp of
- * slack at the breakpoint itself.
- */
+/** The information pane appears inline only when the editor retains at least 360dp. */
 private val INFO_PANE = 280.dp

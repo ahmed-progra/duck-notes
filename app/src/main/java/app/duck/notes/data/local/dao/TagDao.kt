@@ -24,6 +24,9 @@ interface TagDao {
     @Query("SELECT * FROM tags ORDER BY sort_order, name")
     fun observeAll(): Flow<List<TagEntity>>
 
+    @Query("SELECT * FROM tags ORDER BY sort_order, name")
+    suspend fun all(): List<TagEntity>
+
     @Query("SELECT * FROM tags WHERE id = :id")
     suspend fun getById(id: String): TagEntity?
 

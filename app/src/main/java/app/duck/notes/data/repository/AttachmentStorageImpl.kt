@@ -1,9 +1,8 @@
 package app.duck.notes.data.repository
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.core.net.toUri
+import app.duck.notes.core.files.attachmentImageInfo
 import app.duck.notes.core.files.AttachmentFiles
 import app.duck.notes.core.files.AttachmentImageLimits
 import app.duck.notes.domain.repository.AttachmentStorage
@@ -75,7 +74,7 @@ class AttachmentStorageImpl @Inject constructor(
                         }
                     }
                     job.ensureActive()
-                    if (!validImage(pending)) return@withContext null
+                    if (attachmentImageInfo(pending) == null) return@withContext null
                     job.ensureActive()
                     owned.publish(pending, target)
                     published = target
@@ -106,7 +105,9 @@ class AttachmentStorageImpl @Inject constructor(
         currentCoroutineContext().ensureActive()
         try {
             val target = files.resolve(uri) ?: return@withContext false
-            val deleted = !target.exists() || target.delete()
+            val pending = files.transferPending(target.name) ?: return@withContext false
+            val pendingDeleted = !pending.exists() || pending.delete()
+            val deleted = (!target.exists() || target.delete()) && pendingDeleted
             if (deleted) files.deletionMarker(target.name, createDirectory = false)?.delete()
             else markForDeletion(uri)
             deleted
@@ -128,21 +129,4 @@ class AttachmentStorageImpl @Inject constructor(
         try { files.resolve(uri)?.isFile == true } catch (_: IOException) { false } catch (_: SecurityException) { false }
     }
 
-    private fun validImage(file: File): Boolean {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.path, bounds)
-        if (bounds.outMimeType !in setOf("image/png", "image/jpeg", "image/webp", "image/gif") ||
-            !AttachmentImageLimits.acceptsDimensions(bounds.outWidth, bounds.outHeight)) return false
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = AttachmentImageLimits.sampleSize(bounds.outWidth, bounds.outHeight)
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-            inScaled = false
-        }
-        val bitmap = BitmapFactory.decodeFile(file.path, options) ?: return false
-        return try {
-            bitmap.width <= AttachmentImageLimits.DECODE_SIDE && bitmap.height <= AttachmentImageLimits.DECODE_SIDE
-        } finally {
-            bitmap.recycle()
-        }
-    }
 }

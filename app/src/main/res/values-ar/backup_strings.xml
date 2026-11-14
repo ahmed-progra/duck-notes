@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="backup_title">النسخ الاحتياطية</string>
+    <string name="backup_create">إنشاء نسخة احتياطية مشفرة</string>
+    <string name="backup_restore">استعادة نسخة احتياطية</string>
+    <string name="backup_explanation">احفظ نسخة محمولة ومحمية بعبارة مرور من ملاحظاتك وصورك وتخصيص الوسوم. تضيف الاستعادة الملاحظات المفقودة وتبقي الملاحظات الموجودة دون تغيير.</string>
+    <string name="backup_password_help">استخدم عبارة مرور من 12 إلى 1,024 محرفًا واحتفظ بها في مكان آمن. لا يمكن استعادة عبارة مرور منسية. لا تُحفظ عبارة المرور.</string>
+    <string name="backup_restore_help">أدخل عبارة المرور الأصلية للنسخة. تُتخطى معرّفات الملاحظات الموجودة ويُحتفظ بتخصيص الوسوم الحالي. لا تُستعاد إعدادات أمان الجهاز.</string>
+    <string name="backup_passphrase">عبارة المرور</string>
+    <string name="backup_confirmation">تأكيد عبارة المرور</string>
+    <string name="backup_submit">إنشاء النسخة</string>
+    <string name="backup_restore_submit">فتح النسخة واستعادتها</string>
+    <string name="backup_password_short">استخدم 12 محرفًا على الأقل.</string>
+    <string name="backup_password_empty">أدخل عبارة مرور النسخة الاحتياطية.</string>
+    <string name="backup_password_long">استخدم 1,024 محرفًا كحد أقصى.</string>
+    <string name="backup_password_mismatch">عبارتا المرور غير متطابقتين.</string>
+    <string name="backup_unlock_failed">تعذر فتح النسخة. تحقق من عبارة المرور والملف، أو ألغِ العملية واختر الملف مجددًا. لم تتغير الملاحظات الموجودة.</string>
+    <string name="backup_unlocking">جارٍ التحقق من سلامة النسخة بالكامل…</string>
+    <string name="backup_restoring">جارٍ استعادة الملاحظات المفقودة مع إبقاء الملاحظات الموجودة دون تغيير.</string>
+    <string name="backup_written">حُفظت النسخة الاحتياطية المشفرة.</string>
+    <string name="backup_restored">الملاحظات المستعادة: %1$d. المعرّفات الموجودة التي تُخطيت: %2$d. بقيت الملاحظات الموجودة دون تغيير.</string>
+    <string name="backup_failed">تعذرت استعادة النسخة. قد تكون غير مدعومة أو تالفة أو كبيرة جدًا أو تحتوي على معرّفات صور متعارضة. تحقق من المساحة المتاحة واختر الملف مجددًا. بقيت الملاحظات الموجودة دون تغيير.</string>
+</resources>

@@ -5,6 +5,8 @@ import app.duck.notes.domain.repository.AttachmentRepository
 import app.duck.notes.domain.repository.AttachmentStorage
 import app.duck.notes.domain.repository.NoteRepository
 import javax.inject.Inject
+import app.duck.notes.domain.repository.AttachmentWorkLock
+import kotlinx.coroutines.sync.withLock
 
 /** Commit row/reference removal before deleting bytes, so a database failure cannot break an image. */
 class DeleteAttachment @Inject constructor(
@@ -19,9 +21,11 @@ class DeleteAttachment @Inject constructor(
         val note = notes.getNote(row.noteId) ?: return
         if (note.isTrashed) return
         kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            AttachmentWorkLock.mutex.withLock {
             storage.markForDeletion(row.uri)
             saveNote(row.noteId, MarkdownScanner.removeImageRef(note.body, id), deletedAttachmentId = id)
             storage.delete(row.uri)
+            }
         }
     }
 }

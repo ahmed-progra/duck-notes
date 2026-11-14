@@ -17,6 +17,11 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
@@ -57,30 +62,30 @@ fun DuckNoteCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onAddTag: (() -> Unit)? = null,
+    pinned: Boolean = false,
+    onTogglePin: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
     val addTagLabel = stringResource(R.string.tag_add_to_note)
+    val actionsLabel = stringResource(R.string.note_actions)
+    var menuOpen by remember { mutableStateOf(false) }
 
+    Box {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .height(IntrinsicSize.Min)
             .then(
-                if (onAddTag == null) {
+                if (onAddTag == null && onTogglePin == null) {
                     Modifier.selectable(selected = selected, role = Role.Tab, onClick = onClick)
                 } else {
-                    // Long-press adds a tag. This is where "drag note onto tag" landed: on Compact
-                    // the sidebar lives inside a ModalNavigationDrawer, so the drop target is not
-                    // on screen while the drag source is — a real drag would be a tablet-only
-                    // gesture that still needs this menu as its phone fallback, i.e. this plus a
-                    // second implementation. Same append-to-body outcome, through the same SaveNote
-                    // write path. onLongClickLabel is what puts it in TalkBack's action list.
+                    // Context actions remain available on phones and through accessibility.
                     Modifier
                         .combinedClickable(
                             onClick = onClick,
-                            onLongClick = onAddTag,
-                            onLongClickLabel = addTagLabel,
+                            onLongClick = { menuOpen = true },
+                            onLongClickLabel = actionsLabel,
                             role = Role.Tab,
                         )
                         .semantics { this.selected = selected }
@@ -110,6 +115,7 @@ fun DuckNoteCard(
                 .weight(1f)
                 .padding(horizontal = spacing.lg, vertical = spacing.md),
         ) {
+            if (pinned) Text(stringResource(R.string.note_pinned), style = DuckTheme.type.uiLabel, color = colors.proseMuted)
             Text(
                 text = title,
                 style = DuckTheme.type.uiBody,
@@ -140,6 +146,14 @@ fun DuckNoteCard(
                 modifier = Modifier.padding(top = spacing.xs),
             )
         }
+    }
+    DropdownMenu(menuOpen, onDismissRequest = { menuOpen = false }) {
+        onTogglePin?.let { toggle ->
+            DropdownMenuItem(text = { Text(stringResource(if (pinned) R.string.note_unpin else R.string.note_pin)) },
+                onClick = { menuOpen = false; toggle() })
+        }
+        onAddTag?.let { add -> DropdownMenuItem(text = { Text(addTagLabel) }, onClick = { menuOpen = false; add() }) }
+    }
     }
 }
 

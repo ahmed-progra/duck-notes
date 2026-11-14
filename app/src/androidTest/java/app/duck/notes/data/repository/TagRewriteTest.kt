@@ -451,41 +451,24 @@ class TagRewriteTest {
         assertTrue("pin restored", tag("from").isPinned)
     }
 
-    /**
-     * **The other half of a merge undo, pinned rather than hidden. This test asserts a DEFECT.**
-     *
-     * Undoing a merge does not roll back the pin the target *inherited*. `carryCustomization`
-     * writes `isPinned = current.isPinned || old.isPinned` onto the destination row, and `restore`
-     * only walks `snapshot.tags` — which holds the **source** rows. `BodySnapshot` carries no record
-     * of the target's prior state, so there is nothing to put back and the target stays pinned.
-     *
-     * Closing it needs a new snapshot field (the destination rows as they were before the merge), not
-     * a change to either loop, which is why it is recorded rather than fixed here.
-     *
-     * **Cosmetic, not data-losing** — an extra row in the pinned section that the user can unpin. That
-     * is the whole reason it is pinned instead of scheduled; it is a carried Phase 7 defect, not one
-     * this pass introduced. Measured before it was written down: a temporary assertion for the
-     * *correct* behaviour failed on device.
-     *
-     * **It goes red when the defect is fixed, and that is when to delete it.** Same shape as
-     * `TagAgreementTest.aWikiLinkInsideCodeIsResolvedButNotPainted`. Do not "fix" a red here by
-     * loosening the assertion.
-     */
+    /** Plant TAG_UNDO_TARGET_METADATA: omit preexisting destination rows from rename's snapshot. */
     @Test
-    fun restore_ofAMergeLeavesTheTargetPinned() = runBlocking {
+    fun restore_ofAMergeRestoresTheTargetsOriginalPinAndIcon() = runBlocking {
         seed("#from note")
         seed("#into other")
-        db.tagDao().upsert(tag("from").copy(isPinned = true))
-        assertTrue("precondition: the target is not pinned to begin with", !tag("into").isPinned)
+        db.tagDao().upsert(tag("from").copy(isPinned = true, iconKey = "star"))
+        assertTrue("precondition: target originally unpinned", !tag("into").isPinned)
+        assertNull(tag("into").iconKey)
 
-        repo.restore(repo.rename("from", "into"))
+        val snapshot = repo.rename("from", "into")
+        assertTrue("positive control: source pin was inherited", tag("into").isPinned)
+        assertEquals("star", tag("into").iconKey)
+        repo.restore(snapshot)
 
-        assertTrue("the source's own pin does come back", tag("from").isPinned)
-        assertTrue(
-            "the target kept the pin it inherited — if this is now false the defect is FIXED, so " +
-                "delete this test",
-            tag("into").isPinned,
-        )
+        assertTrue("source pin restored", tag("from").isPinned)
+        assertEquals("star", tag("from").iconKey)
+        assertTrue("destination pin restored", !tag("into").isPinned)
+        assertNull("destination icon restored", tag("into").iconKey)
     }
 
     /**

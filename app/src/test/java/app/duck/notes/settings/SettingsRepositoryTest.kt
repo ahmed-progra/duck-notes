@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.stringPreferencesKey
+import app.duck.notes.presentation.settings.mayShowNotes
 import app.duck.notes.data.settings.SettingsRepository
 import app.duck.notes.data.settings.createSettingsDataStore
 import app.duck.notes.domain.model.SettingsNotice
@@ -46,6 +47,49 @@ import org.junit.rules.TemporaryFolder
  */
 class SettingsRepositoryTest {
     @get:Rule val temporary = TemporaryFolder()
+
+    /** Plant: omit editor/language parsing; reopened values revert to defaults. */
+    @Test fun writingPreferencesSurviveReopeningTheRealStore() = runBlocking {
+        val file = newSettingsFile()
+        val first = open(file)
+        try {
+            first.repository.setLanguage(app.duck.notes.domain.model.LanguagePreference.Arabic)
+            first.repository.setEditorFont(app.duck.notes.domain.model.EditorFont.Mono)
+            first.repository.setEditorSize(22)
+            first.repository.setNoteSort(app.duck.notes.domain.model.NoteSort.Created)
+        } finally { first.close() }
+        val reopened = open(file)
+        try {
+            val settings = ready(reopened).settings
+            assertEquals(app.duck.notes.domain.model.LanguagePreference.Arabic, settings.language)
+            assertEquals(app.duck.notes.domain.model.EditorFont.Mono, settings.editorFont)
+            assertEquals(22, settings.editorSizeSp)
+            assertEquals(app.duck.notes.domain.model.NoteSort.Created, settings.noteSort)
+        } finally { reopened.close() }
+    }
+
+    @Test fun invalidWritingPreferencesUseDefaultsAndSetterRejectsOutOfRangeSizes() = runBlocking {
+        val file = newSettingsFile()
+        val first = open(file)
+        try {
+            for (size in listOf(13, 25)) {
+                try { first.repository.setEditorSize(size); fail("invalid size accepted") }
+                catch (_: IllegalArgumentException) { }
+            }
+            first.store.edit {
+                it[stringPreferencesKey("language")] = "unsupported"
+                it[stringPreferencesKey("editor_font")] = "unsupported"
+                it[intPreferencesKey("editor_size_sp")] = 999
+            }
+        } finally { first.close() }
+        val reopened = open(file)
+        try {
+            val settings = ready(reopened).settings
+            assertEquals(app.duck.notes.domain.model.LanguagePreference.System, settings.language)
+            assertEquals(app.duck.notes.domain.model.EditorFont.Serif, settings.editorFont)
+            assertEquals(17, settings.editorSizeSp)
+        } finally { reopened.close() }
+    }
 
     @Test fun missingKeysUseLiteralDefaults() = runBlocking {
         val opened = open(newSettingsFile())
@@ -122,10 +166,14 @@ class SettingsRepositoryTest {
         try {
             val snapshot = ready(opened)
             assertEquals(ThemePreference.System, snapshot.settings.theme)
-            assertFalse(snapshot.settings.lockEnabled)
+            assertTrue("a present malformed lock setting must fail closed", snapshot.settings.lockEnabled)
+            assertFalse(mayShowNotes(snapshot, false))
             assertEquals(60_000L, snapshot.settings.lockTimeoutMs)
             assertTrue(snapshot.settings.hideRecents)
             assertNull(snapshot.notice)
+            opened.repository.setLockEnabled(false)
+            val disabled = ready(opened) { !it.settings.lockEnabled }
+            assertTrue("positive control: a valid stored false still opens the app", mayShowNotes(disabled, false))
         } finally {
             opened.close()
         }
@@ -146,14 +194,14 @@ class SettingsRepositoryTest {
         }
     }
 
-    @Test fun corruptProtobufResetsToDefaultsAndReportsAnActualReset() = runBlocking {
+    @Test fun corruptProtobufResetsAppearanceAndEnablesLockForSafety() = runBlocking {
         val file = newSettingsFile()
         file.writeBytes(byteArrayOf(0xFF.toByte()))
         val opened = open(file)
         try {
             val snapshot = ready(opened)
             assertEquals(ThemePreference.System, snapshot.settings.theme)
-            assertFalse(snapshot.settings.lockEnabled)
+            assertTrue(snapshot.settings.lockEnabled)
             assertEquals(60_000L, snapshot.settings.lockTimeoutMs)
             assertTrue(snapshot.settings.hideRecents)
             assertEquals(SettingsNotice.ResetAfterCorruption, opened.notices.value)
@@ -161,9 +209,63 @@ class SettingsRepositoryTest {
                 SettingsNotice.ResetAfterCorruption,
                 ready(opened) { it.notice == SettingsNotice.ResetAfterCorruption }.notice,
             )
-            assertTrue(opened.store.data.first().asMap().isEmpty())
+            assertEquals(mapOf("lock_enabled" to true), opened.store.data.first().asMap().entries.associate { it.key.name to it.value })
         } finally {
             opened.close()
+        }
+    }
+
+    /** Plant STORE_CORRUPTION_UNLOCK: reset a corrupted security setting to emptyPreferences(). */
+    @Test fun corruptedSettingsCannotDisableLockAfterRestart() = runBlocking {
+        val file = newSettingsFile()
+        file.writeBytes(byteArrayOf(0xFF.toByte()))
+        val first = open(file)
+        try {
+            assertTrue("corruption recovery must enable lock", ready(first).settings.lockEnabled)
+        } finally {
+            first.close()
+        }
+        val reopened = open(file)
+        try {
+            assertTrue("restarting must not bypass the recovered lock", ready(reopened).settings.lockEnabled)
+            assertNull("positive control: this is a fresh read, not a second corruption", reopened.notices.value)
+        } finally {
+            reopened.close()
+        }
+    }
+
+    /** Plant DATASTORE_NESTING: restore DataStore 1.1.1 in the version catalog. */
+    @Test fun deeplyNestedUnknownFieldsRecoverThroughTheRealStore() = runBlocking {
+        val file = newSettingsFile()
+        file.writeBytes(ByteArray(20_000) { if (it < 10_000) 11 else 12 })
+        val notices = MutableStateFlow<SettingsNotice?>(null)
+        val job = SupervisorJob()
+        val store = createSettingsDataStore(file, CoroutineScope(job + Dispatchers.IO), notices)
+        try {
+            assertEquals(mapOf("lock_enabled" to true), withTimeout(10_000) { store.data.first() }.asMap().entries.associate { it.key.name to it.value })
+            assertEquals(SettingsNotice.ResetAfterCorruption, notices.value)
+            store.edit { it[stringPreferencesKey("theme")] = "dark" }
+            assertEquals("dark", store.data.first()[stringPreferencesKey("theme")])
+        } finally {
+            job.cancelAndJoin()
+        }
+    }
+
+    @Test fun shallowUnknownGroupsRemainReadableWithoutResettingSettings() = runBlocking {
+        val file = newSettingsFile()
+        val initial = open(file)
+        try {
+            initial.repository.setTheme(ThemePreference.Dark)
+        } finally {
+            initial.close()
+        }
+        file.appendBytes(byteArrayOf(19, 20))
+        val reopened = open(file)
+        try {
+            assertEquals(ThemePreference.Dark, ready(reopened).settings.theme)
+            assertNull(reopened.notices.value)
+        } finally {
+            reopened.close()
         }
     }
 

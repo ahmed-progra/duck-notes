@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -37,6 +39,15 @@ import androidx.compose.ui.unit.dp
 import app.duck.notes.BuildConfig
 import app.duck.notes.R
 import app.duck.notes.core.theme.DuckTheme
+import app.duck.notes.domain.model.LanguagePreference
+import app.duck.notes.domain.model.EditorFont
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.material3.Slider
+import kotlin.math.roundToInt
 import app.duck.notes.domain.model.AppSettings
 import app.duck.notes.domain.model.ThemePreference
 
@@ -48,7 +59,14 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onTheme: (ThemePreference) -> Unit,
     onRetry: () -> Unit,
+    canAuthenticate: Boolean,
+    onLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onLanguage: (LanguagePreference) -> Unit = {},
+    onEditorFont: (EditorFont) -> Unit = {},
+    onEditorSize: (Int) -> Unit = {},
+    onBackup: (() -> Unit)? = null,
+    onRestore: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -66,7 +84,33 @@ fun SettingsScreen(
                 TextButton(onClick = onRetry, enabled = !pendingWrite) { Text(stringResource(R.string.settings_retry)) }
             }
             SettingsHeading(stringResource(R.string.settings_language))
-            Text(stringResource(R.string.settings_language_pending), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            Column(Modifier.selectableGroup()) {
+                LanguagePreference.entries.forEach { language ->
+                    val label = when (language) {
+                        LanguagePreference.System -> stringResource(R.string.settings_language_system)
+                        LanguagePreference.English -> stringResource(R.string.settings_language_english)
+                        LanguagePreference.Arabic -> stringResource(R.string.settings_language_arabic)
+                    }
+                    SettingsRadio(label, settings.language == language, !pendingWrite) { onLanguage(language) }
+                }
+            }
+            SettingsHeading(stringResource(R.string.settings_writing))
+            Column(Modifier.selectableGroup()) {
+                EditorFont.entries.forEach { font ->
+                    val label = when (font) {
+                        EditorFont.Serif -> R.string.settings_font_serif
+                        EditorFont.Sans -> R.string.settings_font_sans
+                        EditorFont.Mono -> R.string.settings_font_mono
+                    }
+                    SettingsRadio(stringResource(label), settings.editorFont == font, !pendingWrite) { onEditorFont(font) }
+                }
+            }
+            var draftSize by remember(settings.editorSizeSp) { mutableFloatStateOf(settings.editorSizeSp.toFloat()) }
+            val sizeLabel = stringResource(R.string.settings_text_size, draftSize.roundToInt())
+            Text(sizeLabel, style = DuckTheme.type.uiBody, color = colors.onSurface)
+            Slider(value = draftSize, onValueChange = { draftSize = it }, valueRange = 14f..24f, steps = 9,
+                modifier = Modifier.semantics { contentDescription = sizeLabel },
+                enabled = !pendingWrite, onValueChangeFinished = { onEditorSize(draftSize.roundToInt()) })
             SettingsHeading(stringResource(R.string.settings_theme))
             Column(Modifier.selectableGroup()) {
                 SettingsRadio(stringResource(R.string.settings_system), settings.theme == ThemePreference.System, !pendingWrite) { onTheme(ThemePreference.System) }
@@ -74,7 +118,22 @@ fun SettingsScreen(
                 SettingsRadio(stringResource(R.string.settings_dark), settings.theme == ThemePreference.Dark, !pendingWrite) { onTheme(ThemePreference.Dark) }
             }
             SettingsHeading(stringResource(R.string.settings_app_lock))
-            Text(stringResource(R.string.settings_lock_pending), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            val lockLabel = stringResource(R.string.lock_setting)
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .toggleable(settings.lockEnabled, enabled = !pendingWrite, role = Role.Switch, onValueChange = onLockChange),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(lockLabel, style = DuckTheme.type.uiBody, color = colors.onSurface, modifier = Modifier.weight(1f))
+                Switch(checked = settings.lockEnabled, onCheckedChange = null, enabled = !pendingWrite)
+            }
+            Text(stringResource(if (canAuthenticate) R.string.lock_explanation else R.string.lock_setup_required),
+                style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            Text(stringResource(R.string.privacy_storage), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            if (onBackup != null && onRestore != null) {
+                SettingsHeading(stringResource(R.string.backup_title))
+                Text(stringResource(R.string.backup_explanation), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+                TextButton(onClick = onBackup) { Text(stringResource(R.string.backup_create)) }
+                TextButton(onClick = onRestore) { Text(stringResource(R.string.backup_restore)) }
+            }
             SettingsHeading(stringResource(R.string.settings_about))
             Image(painterResource(R.drawable.duck_mascot), contentDescription = null,
                 modifier = Modifier.size(64.dp), colorFilter = ColorFilter.tint(colors.chromeMuted))

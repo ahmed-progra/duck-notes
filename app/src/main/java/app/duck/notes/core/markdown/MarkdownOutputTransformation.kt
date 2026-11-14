@@ -28,6 +28,7 @@ class MarkdownOutputTransformation(
     private val styles: MarkdownStyles,
     private val foldedSections: Set<String> = emptySet(),
     private val focusMode: Boolean = false,
+    private val findSelection: IntRange? = null,
 ) : OutputTransformation {
 
     override fun TextFieldBuffer.transformOutput() {
@@ -56,6 +57,12 @@ class MarkdownOutputTransformation(
         // applied the buffer is already in its final shape.
         SpanPlanner.renderedStyles(plan).forEach {
             addStyle(styles.spanStyle(it.style, it.level), it.start, it.end)
+        }
+        findSelection?.takeIf { it.first >= 0 && it.last < originalText.length }?.let { match ->
+            val cuts = plan.conceal.sortedBy { it.first }
+            val start = SpanPlanner.renderedOffset(match.first, cuts)
+            val end = SpanPlanner.renderedOffset(match.last + 1, cuts)
+            if (end > start) addStyle(styles.spanStyle(app.duck.notes.domain.markdown.StyleKey.HIGHLIGHT, 0), start, end)
         }
     }
 }

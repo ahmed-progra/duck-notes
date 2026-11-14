@@ -21,6 +21,9 @@ class SaveNote @Inject constructor(
     private val resolveWikiLinks: ResolveWikiLinks,
     private val clock: Clock,
 ) {
+    /** Metadata changes must not rewrite a body or influence duplicate-title link resolution. */
+    suspend fun setPinned(id: String, pinned: Boolean) = notes.setPinned(id, pinned)
+
     /**
      * @param caret suppresses the tag being typed at that offset — see [ParseTags]. Null parses the
      *   whole body, which is what every caller outside the editor's autosave wants.

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="transfer_title">Files</string>
+    <string name="transfer_files">Files</string>
+    <string name="transfer_import">Import notes</string>
+    <string name="transfer_export_note">Export note</string>
+    <string name="transfer_share_note">Share note</string>
+    <string name="transfer_export_collection">Export this collection</string>
+    <string name="transfer_share_collection">Share this collection</string>
+    <string name="transfer_share">Share exported notes</string>
+    <string name="transfer_preparing">Saving changes and preparing the export…</string>
+    <string name="transfer_reading">Reading and validating notes…</string>
+    <string name="transfer_importing">Importing notes. Existing notes are kept unchanged.</string>
+    <string name="transfer_writing">Writing the export…</string>
+    <string name="transfer_cancel">Cancel</string>
+    <string name="transfer_cancelled">Transfer cancelled.</string>
+    <string name="transfer_written">Export written successfully.</string>
+    <string name="transfer_imported">Imported notes: %1$d. Existing notes were kept.</string>
+    <string name="transfer_duplicates">Duplicate titles: %1$d. Wiki links resolve by title; review links after importing.</string>
+    <string name="transfer_prepare_failed">Could not prepare the export. Resolve any save error and check available storage, then retry.</string>
+    <string name="transfer_import_failed">Could not import this document. Use UTF-8 Markdown or plain text, or a Duck Markdown ZIP. Check the file, access permission, and available storage.</string>
+    <string name="transfer_write_failed">Export failed. The destination may contain a partial or empty file. Check it before retrying.</string>
+    <string name="transfer_unavailable">Could not open the document picker or sharing sheet. Try again.</string>
+    <string name="transfer_interrupted">Transfer interrupted. Check your notes and destination before trying again.</string>
+    <string name="transfer_cleanup_failed">Temporary files could not be removed. Check storage and restart Duck Notes to retry cleanup.</string>
+</resources>

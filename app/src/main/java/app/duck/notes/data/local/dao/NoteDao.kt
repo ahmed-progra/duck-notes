@@ -43,6 +43,15 @@ abstract class NoteDao {
     @Query("SELECT COUNT(*) FROM notes")
     abstract suspend fun count(): Int
 
+    @Query("SELECT id FROM notes ORDER BY id")
+    abstract suspend fun allIds(): List<String>
+
+    @Query("SELECT COALESCE(SUM(length(CAST(body AS BLOB))), 0) FROM notes")
+    abstract suspend fun totalBodyBytes(): Long
+
+    @Query("SELECT COUNT(*) FROM notes WHERE title = :title")
+    abstract suspend fun countWithTitle(title: String): Int
+
     /**
      * Notes carrying **exactly** this tag row, by id. The search path's tag narrowing.
      *
@@ -240,6 +249,12 @@ abstract class NoteDao {
     @Update
     abstract suspend fun update(note: NoteEntity)
 
+    @Query("UPDATE notes SET is_pinned = :pinned, sync_state = 'PENDING' WHERE id = :id AND is_trashed = 0")
+    abstract suspend fun setPinned(id: String, pinned: Boolean)
+
+    @Query("SELECT DISTINCT note_id FROM attachments")
+    abstract suspend fun noteIdsWithImages(): List<String>
+
     @Delete
     abstract suspend fun delete(note: NoteEntity)
 
@@ -276,6 +291,7 @@ abstract class NoteDao {
         note: NoteEntity,
         tagNames: List<String>,
         linkTitles: List<String> = emptyList(),
+        pruneOrphans: Boolean = true,
     ) {
         val existingRowid = rowidFor(note.id)
         if (existingRowid == null) insert(note) else update(note.copy(rowid = existingRowid))
@@ -283,7 +299,7 @@ abstract class NoteDao {
         for (name in tagNames) {
             insertCrossRef(NoteTagCrossRef(noteId = note.id, tagId = ensureTag(name)))
         }
-        deleteOrphanTags()
+        if (pruneOrphans) deleteOrphanTags()
         clearLinksFrom(note.id)
         for (title in linkTitles) {
             val literal = title.trim()
@@ -349,7 +365,7 @@ abstract class NoteDao {
         """
         DELETE FROM tags
         WHERE id NOT IN (SELECT tag_id FROM note_tags)
-          AND is_pinned = 0 AND icon_key IS NULL
+            AND is_pinned = 0 AND icon_key IS NULL AND sort_order = 0
         """,
     )
     protected abstract suspend fun deleteOrphanTags()

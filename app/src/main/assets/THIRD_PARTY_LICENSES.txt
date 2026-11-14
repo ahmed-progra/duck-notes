@@ -66,16 +66,18 @@ androidx.core:core:1.15.0 | Apache-2.0
 androidx.cursoradapter:cursoradapter:1.0.0 | Apache-2.0
 androidx.customview:customview-poolingcontainer:1.0.0 | Apache-2.0
 androidx.customview:customview:1.0.0 | Apache-2.0
-androidx.datastore:datastore-android:1.1.1 | Apache-2.0
-androidx.datastore:datastore-core-android:1.1.1 | Apache-2.0
-androidx.datastore:datastore-core-okio-jvm:1.1.1 | Apache-2.0
-androidx.datastore:datastore-core-okio:1.1.1 | Apache-2.0
-androidx.datastore:datastore-core:1.1.1 | Apache-2.0
-androidx.datastore:datastore-preferences-android:1.1.1 | Apache-2.0
-androidx.datastore:datastore-preferences-core-jvm:1.1.1 | Apache-2.0
-androidx.datastore:datastore-preferences-core:1.1.1 | Apache-2.0
-androidx.datastore:datastore-preferences:1.1.1 | Apache-2.0
-androidx.datastore:datastore:1.1.1 | Apache-2.0
+androidx.datastore:datastore-android:1.1.2 | Apache-2.0
+androidx.datastore:datastore-core-android:1.1.2 | Apache-2.0
+androidx.datastore:datastore-core-okio-jvm:1.1.2 | Apache-2.0
+androidx.datastore:datastore-core-okio:1.1.2 | Apache-2.0
+androidx.datastore:datastore-core:1.1.2 | Apache-2.0
+androidx.datastore:datastore-preferences-android:1.1.2 | Apache-2.0
+androidx.datastore:datastore-preferences-core-jvm:1.1.2 | Apache-2.0
+androidx.datastore:datastore-preferences-core:1.1.2 | Apache-2.0
+androidx.datastore:datastore-preferences-external-protobuf:1.1.2 | BSD-3-Clause
+androidx.datastore:datastore-preferences-proto:1.1.2 | Apache-2.0
+androidx.datastore:datastore-preferences:1.1.2 | Apache-2.0
+androidx.datastore:datastore:1.1.2 | Apache-2.0
 androidx.drawerlayout:drawerlayout:1.0.0 | Apache-2.0
 androidx.emoji2:emoji2-views-helper:1.4.0 | Apache-2.0
 androidx.emoji2:emoji2:1.4.0 | Apache-2.0
@@ -137,10 +139,13 @@ androidx.versionedparcelable:versionedparcelable:1.1.1 | Apache-2.0
 androidx.viewpager:viewpager:1.0.0 | Apache-2.0
 com.google.accompanist:accompanist-drawablepainter:0.37.3 | Apache-2.0
 com.google.code.findbugs:jsr305:3.0.2 | Apache-2.0
+com.google.code.gson:gson:2.13.2 | Apache-2.0
+com.google.crypto.tink:tink-android:1.24.0 | Apache-2.0
 com.google.dagger:dagger-lint-aar:2.52 | Apache-2.0
 com.google.dagger:dagger:2.52 | Apache-2.0
 com.google.dagger:hilt-android:2.52 | Apache-2.0
 com.google.dagger:hilt-core:2.52 | Apache-2.0
+com.google.errorprone:error_prone_annotations:2.41.0 | Apache-2.0
 com.google.guava:listenablefuture:1.0 | Apache-2.0
 com.squareup.okio:okio-jvm:3.11.0 | Apache-2.0
 com.squareup.okio:okio:3.11.0 | Apache-2.0
@@ -535,7 +540,7 @@ None
 
 
 ========================================================================
-Protocol Buffers - shaded Java lite runtime within AndroidX DataStore
+Protocol Buffers - shaded Java lite runtimes within AndroidX DataStore and Google Tink
 ========================================================================
 
 Copyright 2008 Google Inc.  All rights reserved.

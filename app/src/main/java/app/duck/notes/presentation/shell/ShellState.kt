@@ -9,22 +9,7 @@ import app.duck.notes.domain.model.NoteLink
 import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
 
-/**
- * What the sidebar is filtering the note list by — the seven fixed rows, plus a tag.
- *
- * [key] is what survives into `SavedStateHandle`: a single string rather than a parcelable, so there
- * is no `@Parcelize` annotation to keep in sync and nothing that can fail to restore. [fromKey] is
- * **total** — an unrecognised key falls back to [All] rather than throwing, because the only way to
- * see one is an older build reading a newer bundle.
- *
- * All seven filter for real. Five are fields [Note] already carries, so they cost nothing;
- * [Untagged] and [Trash] each needed one `NoteDao` query, since `observeNotes` deliberately hides
- * trashed rows and knows nothing about tag membership.
- *
- * [Locked] will be empty until Phase 12 encrypts anything, and that is the honest result rather than
- * a stub: the row filters `isLocked` correctly and finds nothing, which is what "no locked notes"
- * means today.
- */
+/** Sidebar selection, persisted by key. Unknown and retired keys fall back to All. */
 sealed interface ShellFilter {
 
     val key: String
@@ -68,8 +53,8 @@ sealed interface ShellFilter {
     companion object {
         private const val TAG_PREFIX = "tag:"
 
-        /** The six fixed rows above the tag tree, in sidebar order. [Trash] is rendered below it. */
-        val navRows: List<ShellFilter> = listOf(All, Untagged, Todo, Today, Locked, Archive)
+        /** Available fixed rows above the tag tree; Trash is rendered below it. */
+        val navRows: List<ShellFilter> = listOf(All, Untagged, Todo, Today, Archive)
 
         fun fromKey(key: String?): ShellFilter = when {
             key == null -> All
@@ -89,10 +74,10 @@ sealed interface ShellFilter {
  */
 enum class PaneMode { Compact, Medium, Expanded }
 
-/** Material's own breakpoints: 600dp and 840dp. */
+/** Reserve 360dp for prose after the list, sidebar and their 1dp dividers. */
 fun paneModeFor(width: Dp): PaneMode = when {
-    width < 600.dp -> PaneMode.Compact
-    width < 840.dp -> PaneMode.Medium
+    width < 681.dp -> PaneMode.Compact
+    width < 962.dp -> PaneMode.Medium
     else -> PaneMode.Expanded
 }
 
@@ -316,6 +301,9 @@ data class ShellUiState(
     val allNoteTitles: List<String> = emptyList(),
     val undo: TagPrompt? = null,
     val saveFailed: Boolean = false,
+    val selectedNotePinned: Boolean = false,
+    val noteSort: app.duck.notes.domain.model.NoteSort = app.duck.notes.domain.model.NoteSort.Modified,
+    val noteSortPending: Boolean = false,
 )
 
 /** Everything a tap in the shell can do. Hoisted so the gallery can drive it from a fixture. */
@@ -366,8 +354,20 @@ data class ShellActions(
      * carries — both come from one scanner.
      */
     val tagsOfNote: (noteId: String) -> List<String> = { emptyList() },
+    val onPinNote: ((id: String, pinned: Boolean) -> Unit)? = null,
+    val onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
+    val onSearchFilters: ((app.duck.notes.domain.model.SearchFilters) -> Unit)? = null,
+    val onImport: (() -> Unit)? = null,
+    val onExport: ((noteId: String?, share: Boolean) -> Unit)? = null,
 )
 
 enum class OperationFailure { Create, Open, Change }
 enum class SearchPhase { Idle, Pending, Results, Failed }
-data class SearchState(val query: String = "", val phase: SearchPhase = SearchPhase.Idle, val notes: List<Note> = emptyList())
+data class SearchState(
+    val query: String = "",
+    val phase: SearchPhase = SearchPhase.Idle,
+    val notes: List<Note> = emptyList(),
+    val filters: app.duck.notes.domain.model.SearchFilters = app.duck.notes.domain.model.SearchFilters(),
+) {
+    val active: Boolean get() = query.isNotBlank() || filters != app.duck.notes.domain.model.SearchFilters()
+}

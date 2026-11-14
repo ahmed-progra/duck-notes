@@ -14,6 +14,10 @@ import app.duck.notes.domain.markdown.TagScanner
 import app.duck.notes.domain.model.Attachment
 import app.duck.notes.domain.model.BodySnapshot
 import app.duck.notes.domain.model.Note
+import app.duck.notes.domain.model.NoteSort
+import app.duck.notes.domain.model.SearchFilters
+import app.duck.notes.domain.model.SearchScope
+import java.util.Locale
 import app.duck.notes.domain.model.NoteLink
 import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
@@ -56,6 +60,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
 import java.time.ZoneId
@@ -70,6 +75,9 @@ import app.duck.notes.domain.usecase.RestoreNote
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.asStateFlow
+
+internal data class ImagePickerSelection(val uri: String?)
 
 /** Owns per-note editor sessions; text never changes identity during a suspended operation. */
 @HiltViewModel
@@ -117,13 +125,21 @@ class DuckShellViewModel @Inject constructor(
     private var pendingCreatedId: String? = null
     private var pendingUndo: PendingUndo? = null
     private var pickerSession: EditorSession? = null
+    private val pendingImageSelection = MutableStateFlow<ImagePickerSelection?>(null)
+    internal val imagePickerSelection = pendingImageSelection.asStateFlow()
     private val undo = MutableStateFlow<TagPrompt?>(null)
-    private val search = MutableStateFlow(SearchState())
+    private val search = MutableStateFlow(SearchState(query = handle.get<String>(KEY_SEARCH_TEXT).orEmpty(), filters = restoredSearchFilters()))
+    private val noteOrder = MutableStateFlow(NoteOrder(NoteSort.Modified, Locale.getDefault()))
+    private val dateRevision = MutableStateFlow(0L)
     private var searchJob: Job? = null
     private var searchRevision = 0L
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val notes = filter.flatMapLatest(::notesFor)
+    private val notes = filter.flatMapLatest { selected ->
+        combine(notesFor(selected), noteOrder) { values, ordering ->
+            withContext(autosaveDispatcher) { orderedNotes(values, ordering.order, selected == ShellFilter.Trash, ordering.locale) }
+        }
+    }
     @OptIn(ExperimentalCoroutinesApi::class)
     private val collapsedSections = selectedId.flatMapLatest { id ->
         if (id == null) flowOf(emptySet())
@@ -155,7 +171,9 @@ class DuckShellViewModel @Inject constructor(
         val note = editor.selection.note
         ShellUiState(
             filter = editor.filter,
-            notes = if (ops.search.query.isBlank()) editor.notes else ops.search.notes,
+            notes = if (!ops.search.active) editor.notes else ops.search.notes,
+            noteSort = noteOrder.value.order,
+            selectedNotePinned = note?.isPinned == true,
             selectedNoteId = session?.noteId,
             selectedNoteBody = note?.body.orEmpty(),
             editorSession = session,
@@ -182,6 +200,7 @@ class DuckShellViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), ShellUiState())
 
     init {
+        if (search.value.active) scheduleSearch(search.value.query)
         @OptIn(ExperimentalCoroutinesApi::class)
         viewModelScope.launch {
             selectedId.flatMapLatest { id ->
@@ -216,7 +235,7 @@ class DuckShellViewModel @Inject constructor(
         }
         viewModelScope.launch {
             observeNotes().distinctUntilChanged().collect {
-                if (search.value.query.isNotBlank()) scheduleSearch(search.value.query)
+                if (search.value.active) scheduleSearch(search.value.query)
             }
         }
     }
@@ -317,6 +336,23 @@ class DuckShellViewModel @Inject constructor(
                 throw failure
             }
         }
+    }
+
+    /** Freeze edits only while taking/committing a local transfer snapshot, never across a picker. */
+    suspend fun <T> withNotesLocked(block: suspend () -> T): T = writeLock.withLock {
+        val sessions = retired.toList() + listOfNotNull(editorSession)
+        sessions.forEach { it.transferPaused = true }
+        try {
+            sessions.forEach { flush(it) }
+            block()
+        } finally { sessions.forEach { it.transferPaused = false } }
+    }
+
+    /** Called inside withNotesLocked, after flushing, so tag/search membership includes the last edit. */
+    suspend fun currentCollectionIdsForTransfer(): List<String> {
+        val current = search.value
+        val values = if (current.active) searchNotes(SearchQuery(current.query, filters = current.filters)) else notes.first()
+        return values.map { it.id }
     }
 
     private suspend fun settleRetired() {
@@ -460,22 +496,64 @@ class DuckShellViewModel @Inject constructor(
 
     fun onSearchChanged(query: String) = scheduleSearch(query)
     fun onRetrySearch() = scheduleSearch(search.value.query)
+    fun onNoteSortChanged(order: NoteSort, locale: Locale = Locale.getDefault()) {
+        val next = NoteOrder(order, locale)
+        if (next == noteOrder.value) return
+        noteOrder.value = next
+        if (search.value.active) scheduleSearch(search.value.query)
+    }
+    fun onTimeChanged() { dateRevision.value += 1L }
+
+    private fun restoredSearchFilters(): SearchFilters {
+        val stored = handle.get<Any>(KEY_SEARCH_FILTERS) as? List<*> ?: return SearchFilters()
+        return SearchFilters(
+            tagPath = (stored.getOrNull(0) as? String)?.takeIf { it.isNotBlank() },
+            pinnedOnly = stored.getOrNull(1) == "1", openTasksOnly = stored.getOrNull(2) == "1", imagesOnly = stored.getOrNull(3) == "1",
+            scope = SearchScope.entries.firstOrNull { it.name == stored.getOrNull(4) } ?: SearchScope.Both,
+        )
+    }
+
+    fun onSearchFiltersChanged(next: SearchFilters) {
+        handle[KEY_SEARCH_FILTERS] = arrayListOf(next.tagPath.orEmpty(), if (next.pinnedOnly) "1" else "0", if (next.openTasksOnly) "1" else "0", if (next.imagesOnly) "1" else "0", next.scope.name)
+        search.value = search.value.copy(filters = next)
+        scheduleSearch(search.value.query)
+    }
+
     private fun scheduleSearch(query: String) {
         val revision = ++searchRevision
         searchJob?.cancel()
-        search.value = SearchState(query, if (query.isBlank()) SearchPhase.Idle else SearchPhase.Pending)
-        if (query.isBlank()) return
+        handle[KEY_SEARCH_TEXT] = query
+        val filters = search.value.filters
+        val active = query.isNotBlank() || filters != SearchFilters()
+        search.value = SearchState(query, if (active) SearchPhase.Pending else SearchPhase.Idle, filters = filters)
+        if (!active) return
         searchJob = viewModelScope.launch {
             delay(200)
             try {
-                val matches = searchNotes(SearchQuery(query))
-                if (revision == searchRevision) search.value = SearchState(query, SearchPhase.Results, matches)
+                val matches = withContext(autosaveDispatcher) {
+                    val ordering = noteOrder.value
+                    orderedNotes(searchNotes(SearchQuery(query, filters = filters)), ordering.order, false, ordering.locale)
+                }
+                if (revision == searchRevision) search.value = SearchState(query, SearchPhase.Results, matches, filters)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) {
-                if (revision == searchRevision) search.value = SearchState(query, SearchPhase.Failed)
+                if (revision == searchRevision) search.value = SearchState(query, SearchPhase.Failed, filters = filters)
             }
         }
     }
+
+    fun onPinNote(id: String, pinned: Boolean) {
+        val origin = editorSession
+        if (origin?.noteId == id) changeStatus(origin) { saveNote.setPinned(id, pinned) }
+        else viewModelScope.launch {
+            writeLock.withLock {
+                try { saveNote.setPinned(id, pinned) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { operationFailure.value = OperationFailure.Change }
+            }
+        }
+    }
+
     fun onDismissOperationFailure() { operationFailure.value = null }
 
     fun onArchiveNote(origin: EditorSession? = editorSession) = changeStatus(origin) { archiveNote(it.noteId, !it.note.isArchived) }
@@ -524,7 +602,13 @@ class DuckShellViewModel @Inject constructor(
     fun onSetTagIcon(tagId: String, iconKey: String?) = tagMetadata { setTagIcon(tagId, iconKey) }
     private fun tagMetadata(action: suspend () -> Unit) {
         viewModelScope.launch {
-            try { action() } catch (cancelled: CancellationException) { throw cancelled }
+            try {
+                writeLock.withLock {
+                    pendingUndo = null
+                    undo.value = null
+                    action()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { operationFailure.value = OperationFailure.Change }
         }
     }
@@ -579,9 +663,17 @@ class DuckShellViewModel @Inject constructor(
         return true
     }
     fun onImagePickerResult(sourceUri: String?, mime: String) {
+        pendingImageSelection.value = null
         val origin = pickerSession
         pickerSession = null
         if (sourceUri != null) onAttachImages(origin, listOf(sourceUri to mime))
+    }
+    fun queueImagePickerSelection(sourceUri: String?) {
+        if (pickerSession != null && pendingImageSelection.value == null) pendingImageSelection.value = ImagePickerSelection(sourceUri)
+    }
+    internal fun consumeImagePickerSelection(selected: ImagePickerSelection, mime: String) {
+        if (pendingImageSelection.value !== selected) return
+        onImagePickerResult(selected.uri, mime)
     }
     fun onAttachImage(sourceUri: String, mime: String) = onAttachImages(listOf(sourceUri to mime))
     fun onAttachImages(images: List<Pair<String, String>>) = onAttachImages(editorSession, images)
@@ -613,10 +705,11 @@ class DuckShellViewModel @Inject constructor(
     fun onUndo() {
         viewModelScope.launch {
             val pending = pendingUndo ?: return@launch
-            pendingUndo = null
-            undo.value = null
             try {
                 writeLock.withLock {
+                    if (pendingUndo !== pending) return@withLock
+                    pendingUndo = null
+                    undo.value = null
                     val affected = (retired.toList() + listOfNotNull(editorSession))
                         .filter { it.noteId in pending.snapshot.bodies }
                     check(affected.all { it.buffer.text.toString() == pending.expectedBodies[it.noteId] }) {
@@ -656,13 +749,17 @@ class DuckShellViewModel @Inject constructor(
         ShellFilter.All -> observeNotes().map { it.filterNot(Note::isArchived) }
         ShellFilter.Untagged -> observeNotes.untagged()
         ShellFilter.Todo -> observeNotes().map { it.filter { note -> MarkdownScanner.hasOpenTask(note.body) } }
-        ShellFilter.Today -> startOfToday().let { midnight -> observeNotes().map { it.filter { note -> note.modifiedAt >= midnight } } }
+        ShellFilter.Today -> combine(observeNotes(), dateRevision) { values, _ ->
+            val midnight = startOfToday()
+            values.filter { it.modifiedAt >= midnight }
+        }
         ShellFilter.Locked -> observeNotes().map { it.filter(Note::isLocked) }
         ShellFilter.Archive -> observeNotes().map { it.filter(Note::isArchived) }
         ShellFilter.Trash -> observeNotes.trashed()
         is ShellFilter.Tag -> observeNotes.byTagPath(filter.path)
     }
     private fun startOfToday(): Long = ZoneId.systemDefault().let { zone -> Instant.ofEpochMilli(clock.nowMillis()).atZone(zone).toLocalDate().atStartOfDay(zone).toInstant().toEpochMilli() }
+    private data class NoteOrder(val order: NoteSort, val locale: Locale)
     private data class PendingUndo(val snapshot: BodySnapshot, val expectedBodies: Map<String, String>)
     private data class Selection(val session: EditorSession? = null, val note: Note? = null)
     private data class Owned<T>(val id: String?, val value: T)
@@ -671,6 +768,8 @@ class DuckShellViewModel @Inject constructor(
     private data class LinkState(val backlinks: Owned<List<NoteLink>>, val infoOpen: Boolean, val titles: Owned<List<String>>)
     private data class OperationState(val failed: EditorSession?, val failure: OperationFailure?, val creating: Boolean, val search: SearchState)
     companion object {
+        private const val KEY_SEARCH_TEXT = "shell.searchText"
+        private const val KEY_SEARCH_FILTERS = "shell.searchFilters"
         private const val KEY_FILTER = "shell.filter"
         private const val KEY_SELECTED = "shell.selectedNoteId"
         private const val KEY_EXPANDED = "shell.expandedTagPaths"

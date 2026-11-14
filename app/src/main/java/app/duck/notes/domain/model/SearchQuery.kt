@@ -1,10 +1,18 @@
 package app.duck.notes.domain.model
 
-/**
- * What the user is looking for. [text] is plain terms — the `@todo` / `tag:x` / `-exclude` /
- * `"phrase"` operator syntax is Phase 10 and will parse into richer fields here.
- */
+/** Literal prefix terms plus independent filters; no search operator language is interpreted. */
 data class SearchQuery(
     val text: String,
     val tagId: String? = null,
+    val filters: SearchFilters = SearchFilters(),
+)
+
+enum class SearchScope { Both, Active, Archive }
+
+data class SearchFilters(
+    val tagPath: String? = null,
+    val pinnedOnly: Boolean = false,
+    val openTasksOnly: Boolean = false,
+    val imagesOnly: Boolean = false,
+    val scope: SearchScope = SearchScope.Both,
 )

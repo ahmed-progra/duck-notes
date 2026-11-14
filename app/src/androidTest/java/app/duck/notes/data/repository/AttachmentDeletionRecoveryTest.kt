@@ -22,6 +22,32 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class AttachmentDeletionRecoveryTest {
+    /** Plant: clear a transfer's recovery marker while its interrupted pending copy still exists. */
+    @Test fun interruptedTransferCopyIsCleanedOnlyWhenItsDurableMarkerExists() = runBlocking<Unit> {
+        val base = ApplicationProvider.getApplicationContext<Context>()
+        val context = IsolatedAppDataContext(base, File(base.cacheDir, "transfer-recovery-${UUID.randomUUID()}"))
+        val database = DatabaseModule.provideDatabase(context)
+        val storage = AttachmentStorageImpl(context)
+        val id = UUID.randomUUID().toString()
+        val key = AttachmentFiles.key(id)
+        val pending = File(context.filesDir, "attachments/.pending").apply { mkdirs() }
+        val interrupted = File(pending, "$id.part").apply { writeText("interrupted synthetic copy") }
+        val neighbor = File(pending, "${UUID.randomUUID()}.part").apply { writeText("not marked") }
+        try {
+            storage.markForDeletion(key)
+            val recovery = RecoverAttachmentDeletions(AttachmentRepositoryImpl(database.attachmentDao()), storage)
+            Os.chmod(pending.path, 365)
+            recovery()
+            assertTrue("Failed pending unlink must retain its retry marker", key in storage.pendingDeletions())
+            assertTrue(interrupted.isFile)
+            Os.chmod(pending.path, 448)
+            recovery()
+            assertFalse("Interrupted transfer copy leaked", interrupted.exists())
+            assertTrue("Unmarked concurrent imports must be untouched", neighbor.isFile)
+            assertTrue(storage.pendingDeletions().isEmpty())
+        } finally { Os.chmod(pending.path, 448); database.close(); context.directory.deleteRecursively() }
+    }
+
     private fun image(base: Context): File = File.createTempFile("cleanup-boundary-", ".png", base.cacheDir).apply {
         val bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
         try { outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) } }

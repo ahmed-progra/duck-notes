@@ -61,6 +61,10 @@ class FakeNoteRepository : NoteRepository {
 
     fun current(id: String) = notes.value.find { it.id == id }
 
+    override suspend fun setPinned(id: String, pinned: Boolean) {
+        notes.value = notes.value.map { if (it.id == id && !it.isTrashed) it.copy(isPinned = pinned) else it }
+    }
+
     /** Every note, for [FakeTagRepository]'s optional body rewriting. */
     fun all(): List<Note> = notes.value
 

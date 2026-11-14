@@ -6,20 +6,23 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.duck.notes.R
 import app.duck.notes.core.theme.DuckTheme
@@ -32,15 +35,23 @@ import app.duck.notes.presentation.shell.DuckShellViewModel
 /** Retains the real editor owner and registered scroll state while Settings occupies the screen. */
 @Composable
 fun DuckScreen(
+    canAuthenticate: Boolean,
+    onLockChange: (Boolean) -> Unit,
+    canUseTransfers: () -> Boolean,
     modifier: Modifier = Modifier,
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     shellViewModel: DuckShellViewModel = hiltViewModel(),
+    transferViewModel: app.duck.notes.presentation.transfer.TransferViewModel = hiltViewModel(),
 ) {
     val ui by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val settingsOpen by settingsViewModel.settingsOpen.collectAsStateWithLifecycle()
+    val pendingTransfer by transferViewModel.request.collectAsStateWithLifecycle()
+    val transferUi by transferViewModel.ui.collectAsStateWithLifecycle()
+    val lifecycle by androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    LaunchedEffect(pendingTransfer, transferUi.step, lifecycle) {
+        if (canUseTransfers()) transferViewModel.processReturned(shellViewModel)
+    }
     val savedViews = rememberSaveableStateHolder()
-    // Saving belongs to the retained owner, including while its editor is absent from composition.
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { shellViewModel.onStop() }
     BackHandler(enabled = settingsOpen) { settingsViewModel.closeSettings() }
     val notice = when {
         ui.writeFailed -> stringResource(R.string.settings_write_failed)
@@ -61,15 +72,29 @@ fun DuckScreen(
         }
         Box(Modifier.weight(1f)) {
             if (settingsOpen) {
+                val shell by shellViewModel.state.collectAsStateWithLifecycle()
                 savedViews.SaveableStateProvider("settings") {
                     SettingsScreen(ui.snapshot.settings, ui.pendingWrite, notice,
                         onBack = settingsViewModel::closeSettings,
                         onTheme = settingsViewModel::setTheme,
-                        onRetry = settingsViewModel::retry)
+                        onLanguage = settingsViewModel::setLanguage,
+                        onEditorFont = settingsViewModel::setEditorFont,
+                        onEditorSize = settingsViewModel::setEditorSize,
+                        onRetry = settingsViewModel::retry,
+                        canAuthenticate = canAuthenticate, onLockChange = onLockChange,
+                        onBackup = { if (canUseTransfers()) transferViewModel.requestBackup() },
+                        onRestore = { if (canUseTransfers()) transferViewModel.requestRestore() })
                 }
+                if (shell.saveFailed) app.duck.notes.presentation.shell.SaveFailureBanner(
+                    shell.failedNoteTitle, shellViewModel::onRetryNavigation,
+                    Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding())
             } else {
                 savedViews.SaveableStateProvider("shell") {
-                    DuckShell(viewModel = shellViewModel, onSettings = settingsViewModel::openSettings)
+                    DuckShell(viewModel = shellViewModel, onSettings = settingsViewModel::openSettings,
+                        onImport = { if (canUseTransfers()) transferViewModel.importNotes() },
+                        onExport = { id, share -> if (canUseTransfers()) transferViewModel.export(shellViewModel, id, share) },
+                        canUseImages = canUseTransfers,
+                        noteSort = ui.snapshot.settings.noteSort, onNoteSort = settingsViewModel::setNoteSort, noteSortPending = ui.pendingWrite)
                 }
             }
         }

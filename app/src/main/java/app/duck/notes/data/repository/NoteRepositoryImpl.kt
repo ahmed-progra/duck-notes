@@ -33,6 +33,8 @@ class NoteRepositoryImpl @Inject constructor(
 
     override suspend fun getNote(id: String): Note? = notes.getById(id)?.toDomain()
 
+    override suspend fun setPinned(id: String, pinned: Boolean) = notes.setPinned(id, pinned)
+
     override suspend fun noteIdByTitle(title: String): String? = notes.noteIdByTitle(title)
 
     override suspend fun save(note: Note, tagNames: List<String>, linkTitles: List<String>) =

@@ -3,6 +3,7 @@ package app.duck.notes.presentation.markdown
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -46,7 +47,7 @@ class AttachmentStripUiTest {
     }
 
     @Test
-    fun aThumbnailLongPressFiresOnDeleteWithThatAttachment() {
+    fun aThumbnailLongPressRequiresConfirmationBeforeDeletion() {
         var deleted: Attachment? = null
         rule.setContent {
             DuckTheme {
@@ -54,6 +55,14 @@ class AttachmentStripUiTest {
             }
         }
         rule.onNodeWithContentDescription(ATTACHMENT).performTouchInput { longClick() }
+        assertEquals(null, deleted)
+        rule.onNodeWithText("Delete image").performClick()
+        assertEquals(null, deleted)
+        rule.onNodeWithText("Cancel").performClick()
+        assertEquals(null, deleted)
+        rule.onNodeWithContentDescription(ATTACHMENT).performTouchInput { longClick() }
+        rule.onNodeWithText("Delete image").performClick()
+        rule.onNodeWithText("Delete").performClick()
         assertEquals(sample, deleted)
     }
 

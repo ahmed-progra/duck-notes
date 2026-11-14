@@ -14,7 +14,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import app.duck.notes.data.local.DuckSQLiteDriver
 import javax.inject.Singleton
 
 /** Wires the Room database and its DAOs into the Hilt graph. Welcome notes use the ordinary save path after initialization. */
@@ -29,7 +29,7 @@ object DatabaseModule {
             // Bundled SQLite — the system one may lack the FTS5 module `notes_fts` needs.
             // Installing a driver also means DuckDatabaseCallback must override the
             // SQLiteConnection callbacks; the SupportSQLiteDatabase ones are never invoked.
-            .setDriver(BundledSQLiteDriver())
+            .setDriver(DuckSQLiteDriver())
             .addCallback(DuckDatabaseCallback())
             .addMigrations(*DUCK_MIGRATIONS)
             .build()

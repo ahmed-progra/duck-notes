@@ -14,8 +14,8 @@ android {
         applicationId = "app.duck.notes"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "2.0.0"
         testInstrumentationRunner = "app.duck.notes.settings.SettingsTestRunner"
         testInstrumentationRunnerArguments["notClass"] = "app.duck.notes.startup.WelcomeStartupTest,app.duck.notes.startup.WelcomeStartupGateTest,app.duck.notes.startup.OfflineActivityTest,app.duck.notes.data.repository.BackupTransportTest"
     }
@@ -103,6 +103,7 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.tink.android)
 
     debugImplementation(libs.androidx.ui.tooling)
 

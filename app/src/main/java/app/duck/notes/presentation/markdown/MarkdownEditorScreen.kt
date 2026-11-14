@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
@@ -66,7 +67,7 @@ import kotlin.math.roundToInt
  * re-query Room" — which is what makes *"kill the app mid-typing"* true for real rather than true up
  * to a `Bundle` size.
  *
- * This composable now holds **nothing saveable**. Do not give it a fallback `TextFieldState`: a
+ * The note body is never saved by this composable. Do not give it a fallback `TextFieldState`: a
  * default would let a caller silently get a detached buffer that autosave never sees.
  *
  * ## Phase 8c hung the format toolbar under it
@@ -111,6 +112,7 @@ fun MarkdownEditorScreen(
      * previews and the gallery, which have no panel to request from.
      */
     scrollToOffset: Flow<Int>? = null,
+    scroll: ScrollState = rememberScrollState(),
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -121,14 +123,16 @@ fun MarkdownEditorScreen(
     //
     // That a new instance is enough to repaint with no keystroke is not assumed: a theme switch is
     // not a buffer change, and ThemeRepaintTest is what settled it.
+    var findOpen by remember(state) { mutableStateOf(false) }
+    var findRange by remember(state) { mutableStateOf<IntRange?>(null) }
     val cache = remember { MarkdownTextCache() }
     val colors = DuckTheme.colors
     val type = DuckTheme.type
     val styles = remember(colors, type) { MarkdownStyles(colors, type) }
     // Keyed on focusMode too: flipping it produces a new instance, which is what repaints the dim —
     // the same "a new instance is enough to repaint with no keystroke" ThemeRepaintTest established.
-    val transformation = remember(styles, collapsedSections, focusMode) {
-        MarkdownOutputTransformation(cache, styles, collapsedSections, focusMode)
+    val transformation = remember(styles, collapsedSections, focusMode, findRange) {
+        MarkdownOutputTransformation(cache, styles, collapsedSections, focusMode, findRange)
     }
 
     // The toolbar's enabled state, off the SAME incremental scan the transformation renders from.
@@ -172,9 +176,6 @@ fun MarkdownEditorScreen(
     }
     val sections = remember(text) { SectionFolding.sections(text.toString(), scan.tokens) }
 
-    // Hoisted out of the modifier below so the contents panel can drive it. Phase 9e.
-    val scroll = rememberScrollState()
-
     // Scroll a heading into view on request from the info panel's table of contents.
     //
     // **This is 9e's one rendered-offset surface, and it is forward-only.** A source offset is mapped
@@ -215,6 +216,15 @@ fun MarkdownEditorScreen(
         }
     }
 
+    LaunchedEffect(findRange, layout) {
+        val match = findRange ?: return@LaunchedEffect
+        val measured = layout ?: return@LaunchedEffect
+        val rendered = SpanPlanner.renderedOffset(match.first, currentPlan.conceal.sortedBy { it.first })
+        if (rendered < measured.layoutInput.text.length) {
+            scroll.scrollTo(measured.getBoundingBox(rendered).top.roundToInt())
+        }
+    }
+
     // Paste (and drag-and-drop, and keyboard rich content): image items route to onAttachImages, the
     // same AttachImage path the picker uses. The ContentResolver is the authoritative source of a
     // content:// uri's MIME, exactly as the picker reads it. Text pastes fall through untouched.
@@ -227,7 +237,7 @@ fun MarkdownEditorScreen(
         // imePadding, so the bar rides above the keyboard instead of behind it.
         modifier = modifier.fillMaxSize().imePadding(),
         // The strip sits above the format toolbar: both are editor chrome over the keyboard, and the
-        // strip is always present so the leading add tile is the entry point to the first image.
+        // first image is added through the toolbar; an empty strip takes no writing space.
         //
         // Focus mode hides both — not rendered, so they leave the layout and the semantics tree
         // entirely rather than sitting there invisibly. The focus button lives in the toolbar, so it
@@ -235,6 +245,7 @@ fun MarkdownEditorScreen(
         bottomBar = {
             if (!focusMode) {
                 Column {
+                    if (findOpen) FindBar(state, canEdit, onMatch = { findRange = it }, onClose = { findOpen = false; findRange = null })
                     // The picker leads the chrome stack, closest to the text it completes into.
                     //
                     // Both values are SOURCE offsets straight off the buffer: `state.selection.start`
@@ -252,14 +263,14 @@ fun MarkdownEditorScreen(
                             null
                         }
                     }
-                    if (active != null && canEdit()) {
+                    if (active != null && canEdit() && !findOpen) {
                         val prefix = text.substring(active.first + 2, active.last + 1)
                         WikiLinkSuggestions(
                             titles = WikiLinkScanner.suggest(noteTitles, prefix),
                             onSelect = { if (canEdit()) state.completeWikiLink(active, it) },
                         )
                     }
-                    AttachmentStrip(
+                    if (attachments.isNotEmpty() && !findOpen) AttachmentStrip(
                         attachments = attachments,
                         onAddImage = { if (canEdit()) onAddImage() },
                         editable = canEdit(),
@@ -271,6 +282,8 @@ fun MarkdownEditorScreen(
                         canEdit = canEdit,
                         onEnterFocus = onToggleFocus,
                         onToggleInfo = onToggleInfo,
+                        onAddImage = onAddImage.takeIf { attachments.isEmpty() },
+                        onFind = { findOpen = true },
                     )
                 }
             }
