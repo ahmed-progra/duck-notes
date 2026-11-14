@@ -12,6 +12,7 @@ Duck Notes uses the libraries below. Their licenses apply independently of Duck 
 | Dagger / Hilt | 2.52 | [Apache-2.0](https://github.com/google/dagger/blob/master/LICENSE.txt) |
 | Coil | 3.2.0 | [Apache-2.0](https://github.com/coil-kt/coil/blob/main/LICENSE.txt) |
 | kotlinx.coroutines | 1.9.0 | [Apache-2.0](https://github.com/Kotlin/kotlinx.coroutines/blob/master/LICENSE.txt) |
+| Google Tink Android | 1.24.0 | [Apache-2.0](https://github.com/tink-crypto/tink-java/blob/v1.24.0/LICENSE); streaming encryption for portable backups |
 | commonmark-java and Markdown extensions | 0.29.0 | [BSD-2-Clause](https://github.com/commonmark/commonmark-java/blob/main/LICENSE.txt) |
 | JUnit 4 (tests) | 4.13.2 | [EPL-1.0](https://github.com/junit-team/junit4/blob/main/LICENSE-junit.txt) |
 | Gradle wrapper/build tooling | 8.13 | [Bundled Gradle license and notices](third-party/GRADLE-LICENSE.txt) |
@@ -25,6 +26,8 @@ The resolved runtime graph also contains the following families. Coordinates and
 |---|---|---|
 | Accompanist DrawablePainter | 0.37.3 | [Apache-2.0; published metadata](https://repo.maven.apache.org/maven2/com/google/accompanist/accompanist-drawablepainter/0.37.3/accompanist-drawablepainter-0.37.3.pom) |
 | FindBugs JSR-305 annotations | 3.0.2 | [Apache-2.0; published metadata](https://repo.maven.apache.org/maven2/com/google/code/findbugs/jsr305/3.0.2/jsr305-3.0.2.pom) |
+| Gson | 2.13.2 | [Apache-2.0; published metadata](https://repo.maven.apache.org/maven2/com/google/code/gson/gson/2.13.2/gson-2.13.2.pom) |
+| Error Prone annotations | 2.41.0 | [Apache-2.0; published metadata](https://repo.maven.apache.org/maven2/com/google/errorprone/error_prone_annotations/2.41.0/error_prone_annotations-2.41.0.pom) |
 | Guava ListenableFuture | 1.0 | [Apache-2.0; inherited parent metadata](https://repo.maven.apache.org/maven2/com/google/guava/guava-parent/26.0-android/guava-parent-26.0-android.pom) |
 | Okio | 3.11.0 | [Apache-2.0; published metadata](https://repo.maven.apache.org/maven2/com/squareup/okio/okio-jvm/3.11.0/okio-jvm-3.11.0.pom) |
 | Jakarta Dependency Injection API | 2.0.1 | [Apache-2.0; published metadata](https://repo.maven.apache.org/maven2/jakarta/inject/jakarta.inject-api/2.0.1/jakarta.inject-api-2.0.1.pom) |

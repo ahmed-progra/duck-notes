@@ -58,7 +58,8 @@ class MainActivity : AppCompatActivity() {
     private val shellOwner = viewModels<DuckShellViewModel>()
     private val shellViewModel by shellOwner
     private val lockSession: AppLockSession by viewModels()
-    private val transferViewModel: app.duck.notes.presentation.transfer.TransferViewModel by viewModels()
+    private val transferOwner = viewModels<app.duck.notes.presentation.transfer.TransferViewModel>()
+    private val transferViewModel by transferOwner
     private val keyguard by lazy { getSystemService(KeyguardManager::class.java) }
     private var deviceSecure by mutableStateOf(false)
     private val authenticate = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -138,7 +139,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 app.duck.notes.presentation.transfer.TransferHost(transferViewModel, canAccess,
                     canUseTransfers = ::canUseTransfers,
-                    onRetry = { if (canUseTransfers()) transferViewModel.retryExport(shellViewModel) })
+                    onRetry = { if (canUseTransfers()) transferViewModel.retryExport(shellViewModel) },
+                    onSubmit = { if (canUseTransfers()) transferViewModel.submitPassphrase(shellViewModel) })
             }
         }
     }
@@ -179,6 +181,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun lockWhenInactive(changingConfigurations: Boolean) {
+        if (transferOwner.isInitialized()) transferViewModel.background()
         // The editor can be absent from composition while authentication is showing.
         if (shellOwner.isInitialized()) shellViewModel.onStop()
         lockSession.background(changingConfigurations)

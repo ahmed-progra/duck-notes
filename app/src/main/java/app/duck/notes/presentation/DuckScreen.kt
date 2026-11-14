@@ -77,7 +77,9 @@ fun DuckScreen(
                         onEditorFont = settingsViewModel::setEditorFont,
                         onEditorSize = settingsViewModel::setEditorSize,
                         onRetry = settingsViewModel::retry,
-                        canAuthenticate = canAuthenticate, onLockChange = onLockChange)
+                        canAuthenticate = canAuthenticate, onLockChange = onLockChange,
+                        onBackup = { if (canUseTransfers()) transferViewModel.requestBackup() },
+                        onRestore = { if (canUseTransfers()) transferViewModel.requestRestore() })
                 }
             } else {
                 savedViews.SaveableStateProvider("shell") {

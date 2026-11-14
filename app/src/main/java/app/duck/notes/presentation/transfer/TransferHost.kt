@@ -29,14 +29,18 @@ import app.duck.notes.core.theme.DuckTheme
 
 /** Always registered, including while app authentication covers the notes. */
 @Composable
-fun TransferHost(viewModel: TransferViewModel, canAccessNotes: Boolean, canUseTransfers: () -> Boolean, onRetry: () -> Unit) {
+fun TransferHost(viewModel: TransferViewModel, canAccessNotes: Boolean, canUseTransfers: () -> Boolean, onRetry: () -> Unit, onSubmit: () -> Unit) {
     val request by viewModel.request.collectAsStateWithLifecycle()
     val state by viewModel.ui.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> viewModel.pickerReturned(TransferKind.Import, uri?.toString()) }
+    val restore = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> viewModel.pickerReturned(TransferKind.Restore, uri?.toString()) }
     val create = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         viewModel.pickerReturned(TransferKind.Export, result.data?.data?.toString().takeIf { result.resultCode == Activity.RESULT_OK })
+    }
+    val backup = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        viewModel.pickerReturned(TransferKind.Backup, result.data?.data?.toString().takeIf { result.resultCode == Activity.RESULT_OK })
     }
     LaunchedEffect(request, canAccessNotes, lifecycle) {
         val pending = request ?: return@LaunchedEffect
@@ -45,6 +49,12 @@ fun TransferHost(viewModel: TransferViewModel, canAccessNotes: Boolean, canUseTr
         try {
             when (pending.kind) {
                 TransferKind.Import -> open.launch(arrayOf("text/markdown", "text/plain", "application/zip", "application/octet-stream"))
+                TransferKind.Restore -> restore.launch(arrayOf("application/octet-stream", "application/zip", "*/*"))
+                TransferKind.Backup -> backup.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE)
+                    type = checkNotNull(pending.document).mime
+                    putExtra(Intent.EXTRA_TITLE, pending.document.displayName)
+                })
                 TransferKind.Export -> create.launch(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                     addCategory(Intent.CATEGORY_OPENABLE)
                     type = checkNotNull(pending.document).mime
@@ -72,10 +82,14 @@ fun TransferHost(viewModel: TransferViewModel, canAccessNotes: Boolean, canUseTr
             TransferStep.Reading -> R.string.transfer_reading
             TransferStep.Importing -> R.string.transfer_importing
             TransferStep.Writing -> R.string.transfer_writing
+            TransferStep.Unlocking -> R.string.backup_unlocking
+            TransferStep.Restoring -> R.string.backup_restoring
         }
         AlertDialog(onDismissRequest = {}, title = { Text(stringResource(R.string.transfer_title)) },
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(DuckTheme.spacing.md)) { CircularProgressIndicator(); Text(stringResource(message)) } },
-            confirmButton = { if (step != TransferStep.Importing) TextButton(onClick = viewModel::cancel) { Text(stringResource(R.string.transfer_cancel)) } })
+            confirmButton = { if (step !in setOf(TransferStep.Importing, TransferStep.Restoring)) TextButton(onClick = viewModel::cancel) { Text(stringResource(R.string.transfer_cancel)) } })
+    } else if (state.prompt != null) {
+        BackupPasswordDialog(viewModel, state, onSubmit)
     } else if (state.notice != null || state.cleanupFailed) {
         val message = when (state.notice) {
             TransferNotice.Cancelled -> R.string.transfer_cancelled
@@ -85,12 +99,19 @@ fun TransferHost(viewModel: TransferViewModel, canAccessNotes: Boolean, canUseTr
             TransferNotice.ImportFailed -> R.string.transfer_import_failed
             TransferNotice.WriteFailed -> R.string.transfer_write_failed
             TransferNotice.Unavailable -> R.string.transfer_unavailable
+            TransferNotice.BackupWritten -> R.string.backup_written
+            TransferNotice.Restored -> R.string.backup_restored
+            TransferNotice.RestoreFailed -> R.string.backup_failed
             null -> R.string.transfer_cleanup_failed
             else -> R.string.transfer_interrupted
         }
         AlertDialog(onDismissRequest = viewModel::dismissNotice, title = { Text(stringResource(R.string.transfer_title)) },
             text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(DuckTheme.spacing.md)) {
-                Text(if (state.notice == TransferNotice.Imported) stringResource(message, state.imported) else stringResource(message))
+                Text(when (state.notice) {
+                    TransferNotice.Imported -> stringResource(message, state.imported)
+                    TransferNotice.Restored -> stringResource(message, state.imported, state.skipped)
+                    else -> stringResource(message)
+                })
                 if (state.notice == TransferNotice.Imported && state.duplicates > 0) Text(stringResource(R.string.transfer_duplicates, state.duplicates))
                 if (state.cleanupFailed && state.notice != null) Text(stringResource(R.string.transfer_cleanup_failed))
             } },

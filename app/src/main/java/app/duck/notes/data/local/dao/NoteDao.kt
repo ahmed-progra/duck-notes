@@ -291,6 +291,7 @@ abstract class NoteDao {
         note: NoteEntity,
         tagNames: List<String>,
         linkTitles: List<String> = emptyList(),
+        pruneOrphans: Boolean = true,
     ) {
         val existingRowid = rowidFor(note.id)
         if (existingRowid == null) insert(note) else update(note.copy(rowid = existingRowid))
@@ -298,7 +299,7 @@ abstract class NoteDao {
         for (name in tagNames) {
             insertCrossRef(NoteTagCrossRef(noteId = note.id, tagId = ensureTag(name)))
         }
-        deleteOrphanTags()
+        if (pruneOrphans) deleteOrphanTags()
         clearLinksFrom(note.id)
         for (title in linkTitles) {
             val literal = title.trim()
@@ -364,7 +365,7 @@ abstract class NoteDao {
         """
         DELETE FROM tags
         WHERE id NOT IN (SELECT tag_id FROM note_tags)
-          AND is_pinned = 0 AND icon_key IS NULL
+            AND is_pinned = 0 AND icon_key IS NULL AND sort_order = 0
         """,
     )
     protected abstract suspend fun deleteOrphanTags()

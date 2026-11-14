@@ -98,7 +98,7 @@ public final class TransferDocumentProvider extends ContentProvider {
         }
         if ("full".equals(path)) return ParcelFileDescriptor.open(new File("/dev/full"), ParcelFileDescriptor.MODE_WRITE_ONLY);
         if ("fail".equals(path)) throw new FileNotFoundException("Synthetic provider unavailable");
-        File target = new File(owner.getCacheDir(), "r".equals(mode) ? "transfer-source" : "transfer-output");
+        File target = new File(owner.getCacheDir(), "r".equals(mode) && !"output".equals(path) ? "transfer-source" : "transfer-output");
         return ParcelFileDescriptor.open(target, ParcelFileDescriptor.parseMode(mode));
     }
 }

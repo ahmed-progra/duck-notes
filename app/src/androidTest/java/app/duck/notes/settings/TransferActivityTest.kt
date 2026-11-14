@@ -90,6 +90,153 @@ class TransferActivityTest {
         compose.waitUntil(10_000) { compose.onAllNodesWithTag("noteEditor").fetchSemanticsNodes().isNotEmpty() }
     }
 
+    /** Real settings/password controls: mismatches cannot start work; backgrounding clears secrets. */
+    @Test fun backupRequiresMatchingPassphrasesAndClearsThemWhenBackgrounded() {
+        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText("Create encrypted backup").performScrollTo().performClick()
+        compose.onNodeWithTag("backupPassphrase").performTextInput("a synthetic backup passphrase")
+        compose.onNodeWithTag("backupConfirmation").performTextInput("different synthetic passphrase")
+        compose.onNodeWithText("Create backup").performClick()
+        compose.onNodeWithText("Passphrases do not match.").assertIsDisplayed()
+        scenario?.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+        scenario?.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+        compose.onNodeWithTag("backupPassphrase").assertTextEquals("")
+        compose.onNodeWithTag("backupConfirmation").assertTextEquals("")
+        compose.onNodeWithText("Cancel").performClick()
+        runBlocking { assertEquals(body, database.noteDao().getById(id)?.body) }
+    }
+
+    /** Real editor -> save -> encrypted payload -> ACTION_CREATE_DOCUMENT, then system cancellation. */
+    @Test fun backupCreationFlushesActualTypingAndKeepsNoPasswordHistory() {
+        selectNote()
+        val editor = compose.onNodeWithTag("noteEditor")
+        editor.performSemanticsAction(SemanticsActions.SetSelection) { it(body.length, body.length, false) }
+        editor.performTextInput(" Latest backup edit.")
+        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText("Create encrypted backup").performScrollTo().performClick()
+        val password = "a synthetic portable passphrase"
+        compose.onNodeWithTag("backupPassphrase").performTextInput(password)
+        compose.onNodeWithTag("backupConfirmation").performTextInput(password)
+        compose.onNodeWithText("Create backup").performClick()
+        compose.waitUntil(30_000) { instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()?.endsWith(".documentsui") == true }
+        lateinit var document: app.duck.notes.domain.model.PreparedDocument
+        scenario?.onActivity { activity ->
+            val transfer = ViewModelProvider(activity)[TransferViewModel::class.java]
+            document = requireNotNull(transfer.request.value?.document)
+            assertTrue(document.displayName.endsWith(".duckbackup"))
+            assertEquals("", transfer.passphrase.text.toString())
+            assertEquals("", transfer.confirmation.text.toString())
+            assertFalse(transfer.passphrase.undoState.canUndo)
+            assertFalse(transfer.confirmation.undoState.canUndo)
+        }
+        val context = instrumentation.targetContext
+        val payload = File(context.noBackupFilesDir, "transfers/${document.id}/payload")
+        val plain = File(context.noBackupFilesDir, "backup-ui-${UUID.randomUUID()}.zip")
+        try {
+            runBlocking { app.duck.notes.data.transfer.BackupEncryption.decrypt(payload, plain, password.toCharArray()) }
+            java.util.zip.ZipFile(plain).use { zip ->
+                assertEquals(body + " Latest backup edit.", zip.getInputStream(zip.getEntry("notes/$id.md")).bufferedReader(Charsets.UTF_8).use { it.readText() })
+            }
+            runBlocking { assertEquals(body + " Latest backup edit.", database.noteDao().getById(id)?.body) }
+            cancelPicker()
+        } finally {
+            plain.delete()
+            app.duck.notes.data.transfer.TransferFiles(context).close(document.id)
+        }
+    }
+
+    /** Actual backup picker/result and provider; successful app auth is supplied directly, not by OS credentials. */
+    @Test fun restoreSelectionCannotReadOrPromptForAPassphraseUntilTheAppUnlocks() {
+        val context = instrumentation.targetContext
+        val resolver = context.contentResolver
+        val output = Uri.parse("content://${TransferDocumentProvider.AUTHORITY}/output")
+        resolver.call(output, "reset", null, null); resolver.call(output, "grant", null, null)
+        val port = app.duck.notes.data.repository.NoteTransferRepositoryImpl(context,
+            app.duck.notes.data.transfer.NoteArchiveStore(context, database, app.duck.notes.data.repository.AttachmentStorageImpl(context),
+                app.duck.notes.domain.usecase.DeriveTitle(), app.duck.notes.domain.usecase.ParseTags(), app.duck.notes.domain.usecase.ResolveWikiLinks()))
+        val password = "a synthetic portable passphrase"
+        val document = runBlocking { port.prepareBackup(password.toCharArray()).also { port.writePrepared(it.id, output.toString()) } }
+        lateinit var transfer: TransferViewModel
+        lateinit var lock: AppLockSession
+        try {
+            resolver.call(output, "reset", null, null)
+            scenario?.onActivity { activity ->
+                transfer = ViewModelProvider(activity)[TransferViewModel::class.java]
+                lock = ViewModelProvider(activity)[AppLockSession::class.java]
+                lock.begin(); lock.finish(true)
+                ViewModelProvider(activity)[SettingsViewModel::class.java].setLockEnabled(true)
+            }
+            compose.waitUntil(10_000) { resources.advanceSettingsWork(); settings.state.value.settings.lockEnabled }
+            compose.onNodeWithText("Settings").performClick()
+            compose.onNodeWithText("Restore backup").performScrollTo().performClick()
+            picker()
+            instrumentation.runOnMainSync { transfer.pickerReturned(TransferKind.Restore, output.toString()) }
+            instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            instrumentation.waitForIdleSync()
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("Set device screen lock").fetchSemanticsNodes().isNotEmpty() || compose.onAllNodesWithText("Unlock").fetchSemanticsNodes().isNotEmpty() }
+            scenario?.recreate()
+            assertEquals(0, resolver.call(output, "status", null, null)?.getInt("opened"))
+            compose.onNodeWithTag("backupPassphrase").assertDoesNotExist()
+            scenario?.onActivity { lock.begin(); lock.finish(true) }
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("backupPassphrase").fetchSemanticsNodes().isNotEmpty() }
+            assertTrue((resolver.call(output, "status", null, null)?.getInt("opened") ?: 0) > 0)
+            compose.onNodeWithTag("backupPassphrase").performTextInput("wrong synthetic passphrase")
+            compose.onNodeWithText("Unlock and restore").performClick()
+            val unlockError = "Could not unlock this backup. Check the passphrase and file, or cancel and choose the file again. Existing notes are unchanged."
+            compose.waitUntil(30_000) { compose.onAllNodesWithText(unlockError).fetchSemanticsNodes().isNotEmpty() }
+            compose.onNodeWithTag("backupPassphrase").assertTextEquals("")
+            runBlocking { assertEquals(body, database.noteDao().getById(id)?.body) }
+            compose.onNodeWithTag("backupPassphrase").performTextInput(password)
+            compose.onNodeWithText("Unlock and restore").performClick()
+            val result = "Restored notes: 0. Existing note IDs skipped: 1. Existing notes were kept unchanged."
+            compose.waitUntil(30_000) { compose.onAllNodesWithText(result).fetchSemanticsNodes().isNotEmpty() }
+            runBlocking { assertEquals(1, database.noteDao().count()); assertEquals(body, database.noteDao().getById(id)?.body) }
+        } finally {
+            runBlocking { port.discardPrepared(document.id) }
+            resolver.call(output, "revoke", null, null)
+        }
+    }
+
+    /** Plant: omit ViewModel finish cleanup; encrypted staging then survives a finished restore dialog. */
+    @Test fun finishingTheActivityDiscardsAPendingEncryptedRestore() {
+        val context = instrumentation.targetContext
+        val resolver = context.contentResolver
+        val output = Uri.parse("content://${TransferDocumentProvider.AUTHORITY}/output")
+        resolver.call(output, "reset", null, null); resolver.call(output, "grant", null, null)
+        val port = app.duck.notes.data.repository.NoteTransferRepositoryImpl(context,
+            app.duck.notes.data.transfer.NoteArchiveStore(context, database, app.duck.notes.data.repository.AttachmentStorageImpl(context),
+                app.duck.notes.domain.usecase.DeriveTitle(), app.duck.notes.domain.usecase.ParseTags(), app.duck.notes.domain.usecase.ResolveWikiLinks()))
+        val document = runBlocking { port.prepareBackup("a synthetic portable passphrase".toCharArray()).also { port.writePrepared(it.id, output.toString()) } }
+        val directory = File(context.noBackupFilesDir, "transfers")
+        val before = directory.list().orEmpty().toSet()
+        var pending: String? = null
+        try {
+            lateinit var transfer: TransferViewModel
+            scenario?.onActivity { transfer = ViewModelProvider(it)[TransferViewModel::class.java] }
+            compose.onNodeWithText("Settings").performClick()
+            compose.onNodeWithText("Restore backup").performScrollTo().performClick()
+            picker()
+            instrumentation.runOnMainSync { transfer.pickerReturned(TransferKind.Restore, output.toString()) }
+            instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            instrumentation.waitForIdleSync()
+            compose.waitUntil(10_000) { compose.onAllNodesWithTag("backupPassphrase").fetchSemanticsNodes().isNotEmpty() }
+            val created = directory.list().orEmpty().toSet() - before
+            assertEquals("Positive control: pending encrypted stage was not created", 1, created.size)
+            pending = created.single()
+            scenario?.close(); scenario = null
+            val cleaned = runBlocking { kotlinx.coroutines.withTimeoutOrNull(2_000) {
+                while (File(directory, requireNotNull(pending)).exists()) kotlinx.coroutines.delay(10)
+                true
+            } ?: false }
+            assertTrue("Finished Activity leaked the encrypted restore stage", cleaned)
+            runBlocking { assertEquals(body, database.noteDao().getById(id)?.body) }
+        } finally {
+            pending?.let { app.duck.notes.data.transfer.TransferFiles(context).close(it) }
+            runBlocking { port.discardPrepared(document.id) }
+            resolver.call(output, "revoke", null, null)
+        }
+    }
+
     /** Real ACTION_OPEN_DOCUMENT, actual system cancellation, and retained user-visible result. */
     @Test fun importCancellationReturnsFromTheRealPickerWithoutChangingNotes() {
         compose.onNodeWithText("Files").performClick()

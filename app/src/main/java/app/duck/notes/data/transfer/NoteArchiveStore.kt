@@ -9,6 +9,7 @@ import app.duck.notes.core.files.attachmentImageInfo
 import app.duck.notes.data.local.DuckDatabase
 import app.duck.notes.data.local.entity.AttachmentEntity
 import app.duck.notes.data.local.entity.NoteEntity
+import app.duck.notes.data.local.entity.TagEntity
 import app.duck.notes.domain.markdown.MarkdownScanner
 import app.duck.notes.domain.model.TransferLimits
 import app.duck.notes.domain.model.TransferReport
@@ -25,6 +26,7 @@ import java.io.IOException
 import java.io.OutputStreamWriter
 import java.nio.charset.CodingErrorAction
 import java.util.UUID
+import java.security.MessageDigest
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -43,10 +45,17 @@ internal class NoteArchiveStore @Inject constructor(
 ) {
     private val files get() = AttachmentFiles(context.filesDir)
 
-    suspend fun snapshot(noteIds: List<String>, directory: File): StagedArchive = withContext(Dispatchers.IO) {
-        if (noteIds.isEmpty() || noteIds.size > TransferLimits.MAX_NOTES || noteIds.toSet().size != noteIds.size) throw IOException("Invalid note collection")
+    suspend fun snapshotBackup(directory: File): StagedArchive = snapshot(null, directory, backup = true)
+
+    suspend fun restore(contents: StagedArchive): TransferReport = receive(contents, restoring = true)
+
+    suspend fun snapshot(noteIds: List<String>, directory: File): StagedArchive = snapshot(noteIds, directory, backup = false)
+
+    private suspend fun snapshot(requestedIds: List<String>?, directory: File, backup: Boolean): StagedArchive = withContext(Dispatchers.IO) {
         AttachmentWorkLock.mutex.withLock {
             db.useWriterConnection { connection -> connection.immediateTransaction {
+                val noteIds = requestedIds ?: db.noteDao().allIds()
+                if ((!backup && noteIds.isEmpty()) || noteIds.size > TransferLimits.MAX_NOTES || noteIds.toSet().size != noteIds.size) throw IOException("Invalid note collection")
                 if (!File(directory, "notes").mkdir() || !File(directory, "assets").mkdir()) throw IOException("Temporary storage is unavailable")
                 val notes = mutableListOf<ArchiveNote>()
                 val images = mutableListOf<ArchiveImage>()
@@ -78,50 +87,64 @@ internal class NoteArchiveStore @Inject constructor(
                         destinations[MarkdownScanner.ATTACHMENT_SCHEME + image.id] = metadata.entry
                     }
                     val metadata = ArchiveNote(id, note.createdAt, note.modifiedAt, note.isPinned, note.isArchived, note.isTrashed, note.trashedAt)
-                    val body = MarkdownScanner.rewriteImageDestinations(note.body, destinations)
+                    val body = if (backup) note.body else MarkdownScanner.rewriteImageDestinations(note.body, destinations)
                     val target = File(directory, metadata.entry)
                     writeNoteText(target, body)
                     textBytes += target.length()
                     if (textBytes > TransferLimits.MAX_TEXT_BYTES || expandedBytes + textBytes > TransferLimits.MAX_ARCHIVE_BYTES) throw IOException("Collection exceeds transfer limits")
                     notes += metadata
                 }
-                val manifest = ArchiveManifest("markdown", notes, images, emptyList())
+                val tags = if (backup) db.tagDao().all().filter { it.isPinned || it.iconKey != null || it.sortOrder != 0 }
+                    .map { ArchiveTag(it.name, it.isPinned, it.iconKey, it.sortOrder) } else emptyList()
+                val manifest = ArchiveManifest(if (backup) "backup" else "markdown", notes, images, tags)
                 ArchiveManifestCodec.write(File(directory, "manifest.json"), manifest)
                 StagedArchive(manifest, directory).also { MarkdownArchive.validate(it) }
             } }
         }
     }
 
-    suspend fun import(contents: StagedArchive): TransferReport = withContext(Dispatchers.IO) {
-        if (contents.manifest.kind != "markdown") throw IOException("Not a Markdown package")
+    suspend fun import(contents: StagedArchive): TransferReport = receive(contents, restoring = false)
+
+    private suspend fun receive(contents: StagedArchive, restoring: Boolean): TransferReport = withContext(Dispatchers.IO) {
+        if (contents.manifest.kind != if (restoring) "backup" else "markdown") throw IOException("Unexpected archive kind")
         ArchiveManifestCodec.write(File(contents.directory, "manifest.json"), contents.manifest)
         MarkdownArchive.validate(contents)
-        val noteIds = contents.manifest.notes.associate { it.id to UUID.randomUUID().toString() }
-        val imageIds = contents.manifest.images.associate { it.id to UUID.randomUUID().toString() }
+        val noteIds = contents.manifest.notes.associate { it.id to if (restoring) it.id else UUID.randomUUID().toString() }
+        val imageIds = contents.manifest.images.associate { it.id to if (restoring) it.id else UUID.randomUUID().toString() }
         val imagesByNote = contents.manifest.images.groupBy { it.noteId }
         val rewritten = File(contents.directory, "import-notes")
-        if (!rewritten.mkdir()) throw IOException("Import was already attempted")
-        var addedTextBytes = 0L
-        val tags = mutableSetOf<String>()
-        for (note in contents.manifest.notes) {
+        fun bodyFile(note: ArchiveNote) = if (restoring) File(contents.directory, note.entry) else File(rewritten, noteIds.getValue(note.id))
+        if (!restoring && !rewritten.mkdir()) throw IOException("Import was already attempted")
+        if (!restoring) for (note in contents.manifest.notes) {
             currentCoroutineContext().ensureActive()
             val destinations = imagesByNote[note.id].orEmpty().associate { it.entry to MarkdownScanner.ATTACHMENT_SCHEME + imageIds.getValue(it.id) }
-            val body = MarkdownScanner.rewriteImageDestinations(readNoteText(File(contents.directory, note.entry)), destinations)
-            val parsedTags = parseTags(body)
-            if (parsedTags.any { it.length > 256 || it.count { c -> c == '/' } >= 32 }) throw IOException("Too many or oversized tags")
-            tags += parsedTags
-            if (tags.size > 10_000) throw IOException("Too many or oversized tags")
-            val target = File(rewritten, noteIds.getValue(note.id))
+            val original = readNoteText(File(contents.directory, note.entry))
+            val body = MarkdownScanner.rewriteImageDestinations(original, destinations)
+            val target = bodyFile(note)
             writeNoteText(target, body)
-            addedTextBytes += target.length()
-            if (addedTextBytes > TransferLimits.MAX_TEXT_BYTES) throw IOException("Too much note text")
         }
         AttachmentWorkLock.mutex.withLock {
+            val selected = contents.manifest.notes.filter { !restoring || db.noteDao().getById(it.id) == null }
+            val selectedIds = selected.map { it.id }.toSet()
+            val selectedImages = contents.manifest.images.filter { it.noteId in selectedIds }
+            val addedTextBytes = selected.sumOf { bodyFile(it).length() }
+            if (restoring) {
+                for (image in contents.manifest.images) {
+                    currentCoroutineContext().ensureActive()
+                    val existing = db.attachmentDao().getById(image.id) ?: continue
+                    if (existing.noteId != image.noteId || existing.createdAt != image.createdAt) throw IOException("Image identity conflict")
+                    val file = files.resolve(existing.uri) ?: throw IOException("Invalid image location")
+                    if (file.name != image.id || file.length() !in 1..AttachmentImageLimits.MAX_BYTES) throw IOException("Image identity conflict")
+                    val info = attachmentImageInfo(file) ?: throw IOException("Invalid existing image")
+                    if (info.mime != image.mime || info.width != image.width || info.height != image.height || info.size != image.bytes ||
+                        !digest(file).contentEquals(digest(File(contents.directory, image.entry)))) throw IOException("Image identity conflict")
+                }
+            }
             val published = mutableListOf<String>()
             var committed = false
             try {
                 currentCoroutineContext().ensureActive()
-                for (image in contents.manifest.images) {
+                for (image in selectedImages) {
                     val imageId = imageIds.getValue(image.id)
                     if (db.attachmentDao().getById(imageId) != null) throw IOException("Image identity conflict")
                     val destination = files.target(imageId) ?: throw IOException("Attachment storage is unavailable")
@@ -150,32 +173,54 @@ internal class NoteArchiveStore @Inject constructor(
                         val existingImages = db.attachmentDao().all()
                         val existingText = db.noteDao().totalBodyBytes()
                         val existingBytes = existingImages.sumOf { image -> files.resolve(image.uri)?.takeIf { it.isFile }?.length() ?: image.size ?: 0L }
-                        val newBytes = contents.manifest.images.sumOf { it.bytes }
-                        if (db.noteDao().count() + noteIds.size > TransferLimits.MAX_NOTES || existingImages.size + imageIds.size > TransferLimits.MAX_IMAGES ||
+                        val existingTags = if (restoring) db.tagDao().all().map { it.name }.toSet() else emptySet()
+                        val newBytes = selectedImages.sumOf { it.bytes }
+                        if (db.noteDao().count() + selected.size > TransferLimits.MAX_NOTES || existingImages.size + selectedImages.size > TransferLimits.MAX_IMAGES ||
                             existingText + addedTextBytes > TransferLimits.MAX_TEXT_BYTES || existingBytes + newBytes + existingText + addedTextBytes > TransferLimits.MAX_ARCHIVE_BYTES) throw IOException("Collection exceeds transfer limits")
                         var duplicates = 0
                         val now = System.currentTimeMillis()
-                        for (note in contents.manifest.notes) {
+                        for (note in selected) {
                             val id = noteIds.getValue(note.id)
                             if (db.noteDao().getById(id) != null) throw IOException("Note identity conflict")
-                            val body = readNoteText(File(rewritten, id))
+                            val body = readNoteText(bodyFile(note))
                             val title = deriveTitle(body)
                             if (db.noteDao().countWithTitle(title) > 0) duplicates++
-                            db.noteDao().saveNoteWithTagsAndLinks(NoteEntity(id = id, title = title, body = body, createdAt = now, modifiedAt = now), parseTags(body), links(body))
+                            val entity = if (restoring) NoteEntity(id = id, title = title, body = body, createdAt = note.createdAt, modifiedAt = note.modifiedAt,
+                                isPinned = note.pinned, isArchived = note.archived, isTrashed = note.trashed, trashedAt = note.trashedAt)
+                                else NoteEntity(id = id, title = title, body = body, createdAt = now, modifiedAt = now)
+                            db.noteDao().saveNoteWithTagsAndLinks(entity, parseTags(body), links(body), pruneOrphans = false)
                             for (image in imagesByNote[note.id].orEmpty()) {
                                 val imageId = imageIds.getValue(image.id)
                                 if (db.attachmentDao().getById(imageId) != null) throw IOException("Image identity conflict")
                                 val key = AttachmentFiles.key(imageId)
-                                db.attachmentDao().insertNew(AttachmentEntity(imageId, id, key, image.mime, image.width, image.height, image.bytes, now))
+                                db.attachmentDao().insertNew(AttachmentEntity(imageId, id, key, image.mime, image.width, image.height, image.bytes, if (restoring) image.createdAt else now))
                             }
                         }
-                        TransferReport(noteIds.values.toList(), duplicateTitles = duplicates)
+                        if (restoring) for (tag in contents.manifest.tags.filter { it.name !in existingTags }) {
+                            val row = db.tagDao().getByName(tag.name) ?: TagEntity(UUID.randomUUID().toString(), tag.name)
+                            db.tagDao().upsert(row.copy(isPinned = tag.pinned, iconKey = tag.icon, sortOrder = tag.order))
+                        }
+                        TransferReport(selected.map { noteIds.getValue(it.id) }, skipped = contents.manifest.notes.size - selected.size, duplicateTitles = duplicates)
                     } }.also { committed = true }
                 }
             } finally {
                 if (!committed) withContext(NonCancellable) { published.forEach { storage.delete(it) } }
             }
         }
+    }
+
+    private suspend fun digest(file: File): ByteArray {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(32 * 1024)
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val count = input.read(buffer)
+                if (count == -1) break
+                if (count > 0) digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest()
     }
 }
 

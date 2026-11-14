@@ -65,6 +65,8 @@ fun SettingsScreen(
     onLanguage: (LanguagePreference) -> Unit = {},
     onEditorFont: (EditorFont) -> Unit = {},
     onEditorSize: (Int) -> Unit = {},
+    onBackup: (() -> Unit)? = null,
+    onRestore: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -126,6 +128,12 @@ fun SettingsScreen(
             Text(stringResource(if (canAuthenticate) R.string.lock_explanation else R.string.lock_setup_required),
                 style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
             Text(stringResource(R.string.privacy_storage), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            if (onBackup != null && onRestore != null) {
+                SettingsHeading(stringResource(R.string.backup_title))
+                Text(stringResource(R.string.backup_explanation), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+                TextButton(onClick = onBackup) { Text(stringResource(R.string.backup_create)) }
+                TextButton(onClick = onRestore) { Text(stringResource(R.string.backup_restore)) }
+            }
             SettingsHeading(stringResource(R.string.settings_about))
             Image(painterResource(R.drawable.duck_mascot), contentDescription = null,
                 modifier = Modifier.size(64.dp), colorFilter = ColorFilter.tint(colors.chromeMuted))

@@ -28,6 +28,72 @@ class NoteTransferRepositoryImpl @Inject internal constructor(
     private val store: NoteArchiveStore,
 ) : NoteTransferRepository {
     private val jobs = TransferFiles(context)
+    private val authenticatedRestores = java.util.concurrent.ConcurrentHashMap<String, StagedArchive>()
+
+    override suspend fun prepareBackup(passphrase: CharArray): PreparedDocument = try {
+        stage { job ->
+            val directory = File(job.directory, "contents").apply { if (!mkdir()) throw IOException("Temporary storage unavailable") }
+            val contents = store.snapshotBackup(directory)
+            val archive = File(job.directory, "archive.zip")
+            MarkdownArchive.write(contents, archive)
+            val payload = File(job.directory, "payload")
+            BackupEncryption.encrypt(archive, payload, passphrase)
+            val archiveRemoved = archive.delete()
+            val contentsRemoved = directory.deleteRecursively()
+            if (!archiveRemoved || !contentsRemoved) throw IOException("Temporary cleanup unavailable")
+            PreparedDocument(job.id, "Duck-Notes.duckbackup", "application/octet-stream", payload.length())
+        }
+    } finally { passphrase.fill('\u0000') }
+
+    override suspend fun prepareRestore(sourceUri: String): String = stage { job ->
+        withDocument(sourceUri, "r") { descriptor ->
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                FileOutputStream(File(job.directory, "input")).use { output ->
+                    copyTransfer(input, output, TransferLimits.MAX_ARCHIVE_BYTES)
+                    output.fd.sync()
+                }
+                descriptor.checkError()
+            }
+        }
+        job.id
+    }
+
+    override suspend fun authenticateRestore(id: String, passphrase: CharArray) {
+        var directory: File? = null
+        var archive: File? = null
+        try {
+            withContext(Dispatchers.IO) {
+                val job = jobs.find(id)
+                if (authenticatedRestores.containsKey(id)) throw IOException("Backup was already authenticated")
+                val contents = File(job.directory, "restore-${UUID.randomUUID()}").apply { if (!mkdir()) throw IOException("Temporary storage unavailable") }
+                directory = contents
+                val plain = File(job.directory, "authenticated-${UUID.randomUUID()}.zip")
+                archive = plain
+                BackupEncryption.decrypt(File(job.directory, "input"), plain, passphrase)
+                // No archive parser or database access occurs before the complete stream authenticates.
+                val staged = MarkdownArchive.read(plain, contents)
+                if (staged.manifest.kind != "backup") throw IOException("Not a Duck backup")
+                if (!plain.delete()) throw IOException("Temporary cleanup unavailable")
+                authenticatedRestores[id] = staged
+            }
+        } catch (failure: Throwable) {
+            authenticatedRestores.remove(id)
+            withContext(NonCancellable + Dispatchers.IO) {
+                val archiveFailed = archive?.let { it.exists() && !it.delete() } == true
+                val directoryFailed = directory?.let { it.exists() && !it.deleteRecursively() } == true
+                if (archiveFailed || directoryFailed) {
+                    failure.addSuppressed(IOException("Backup cleanup unavailable"))
+                }
+            }
+            throw failure
+        } finally { passphrase.fill('\u0000') }
+    }
+
+    override suspend fun restorePrepared(id: String): TransferReport = withContext(Dispatchers.IO) {
+        jobs.find(id)
+        val staged = authenticatedRestores.remove(id) ?: throw IOException("Backup requires authentication")
+        store.restore(staged)
+    }
 
     override suspend fun prepareExport(noteIds: List<String>): PreparedDocument = stage { job ->
             val directory = File(job.directory, "contents").apply { if (!mkdir()) throw IOException("Temporary storage unavailable") }
@@ -136,7 +202,7 @@ class NoteTransferRepositoryImpl @Inject internal constructor(
         } catch (failure: Throwable) { directory.deleteRecursively(); throw failure }
     }
 
-    override suspend fun discardPrepared(id: String) = withContext(Dispatchers.IO) { jobs.close(id) }
+    override suspend fun discardPrepared(id: String) = withContext(Dispatchers.IO) { authenticatedRestores.remove(id); jobs.close(id) }
 
     /** Catch outside withContext: cancellation can discard a completed result during return dispatch. */
     private suspend fun <T> stage(block: suspend (TransferJob) -> T): T {

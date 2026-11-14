@@ -103,6 +103,7 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.tink.android)
 
     debugImplementation(libs.androidx.ui.tooling)
 

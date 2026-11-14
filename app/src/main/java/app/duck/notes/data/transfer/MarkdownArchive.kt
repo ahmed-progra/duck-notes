@@ -91,10 +91,15 @@ internal object MarkdownArchive {
         var textBytes = 0L
         var expanded = File(contents.directory, "manifest.json").length()
         val imagesByNote = manifest.images.groupBy { it.noteId }
+        val tags = manifest.tags.mapTo(mutableSetOf()) { it.name }
         for (note in manifest.notes) {
             currentCoroutineContext().ensureActive()
             val file = File(contents.directory, note.entry)
             val body = readNoteText(file)
+            val names = app.duck.notes.domain.usecase.ParseTags()(body)
+            if (names.any { it.length > 256 || it.count { c -> c == '/' } >= 32 }) throw IOException("Too many or oversized tags")
+            tags += names
+            if (tags.size > 10_000) throw IOException("Too many or oversized tags")
             textBytes += file.length()
             if (textBytes > TransferLimits.MAX_TEXT_BYTES) throw IOException("Too much note text")
             val owned = imagesByNote[note.id].orEmpty()
