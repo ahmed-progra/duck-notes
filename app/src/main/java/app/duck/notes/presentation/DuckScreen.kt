@@ -11,6 +11,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -32,12 +34,20 @@ import app.duck.notes.presentation.shell.DuckShellViewModel
 fun DuckScreen(
     canAuthenticate: Boolean,
     onLockChange: (Boolean) -> Unit,
+    canUseTransfers: () -> Boolean,
     modifier: Modifier = Modifier,
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     shellViewModel: DuckShellViewModel = hiltViewModel(),
+    transferViewModel: app.duck.notes.presentation.transfer.TransferViewModel = hiltViewModel(),
 ) {
     val ui by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val settingsOpen by settingsViewModel.settingsOpen.collectAsStateWithLifecycle()
+    val pendingTransfer by transferViewModel.request.collectAsStateWithLifecycle()
+    val transferUi by transferViewModel.ui.collectAsStateWithLifecycle()
+    val lifecycle by androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+    LaunchedEffect(pendingTransfer, transferUi.step, lifecycle) {
+        if (canUseTransfers()) transferViewModel.processReturned(shellViewModel)
+    }
     val savedViews = rememberSaveableStateHolder()
     BackHandler(enabled = settingsOpen) { settingsViewModel.closeSettings() }
     val notice = when {
@@ -72,6 +82,8 @@ fun DuckScreen(
             } else {
                 savedViews.SaveableStateProvider("shell") {
                     DuckShell(viewModel = shellViewModel, onSettings = settingsViewModel::openSettings,
+                        onImport = { if (canUseTransfers()) transferViewModel.importNotes() },
+                        onExport = { id, share -> if (canUseTransfers()) transferViewModel.export(shellViewModel, id, share) },
                         noteSort = ui.snapshot.settings.noteSort, onNoteSort = settingsViewModel::setNoteSort, noteSortPending = ui.pendingWrite)
                 }
             }

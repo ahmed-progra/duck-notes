@@ -357,6 +357,8 @@ data class ShellActions(
     val onPinNote: ((id: String, pinned: Boolean) -> Unit)? = null,
     val onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
     val onSearchFilters: ((app.duck.notes.domain.model.SearchFilters) -> Unit)? = null,
+    val onImport: (() -> Unit)? = null,
+    val onExport: ((noteId: String?, share: Boolean) -> Unit)? = null,
 )
 
 enum class OperationFailure { Create, Open, Change }

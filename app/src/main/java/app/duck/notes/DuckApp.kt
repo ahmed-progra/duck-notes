@@ -40,5 +40,11 @@ open class DuckApp : Application() {
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { android.util.Log.e("DuckStorage", "Attachment cleanup unavailable") }
         }
+        if (processName == packageName) startupScope.launch {
+            try {
+                app.duck.notes.data.transfer.TransferFiles(this@DuckApp).apply { cleanAbandoned(); cleanSharedExports() }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { android.util.Log.e("DuckStorage", "Transfer cleanup unavailable") }
+        }
     }
 }

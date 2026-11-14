@@ -333,6 +333,23 @@ class DuckShellViewModel @Inject constructor(
         }
     }
 
+    /** Freeze edits only while taking/committing a local transfer snapshot, never across a picker. */
+    suspend fun <T> withNotesLocked(block: suspend () -> T): T = writeLock.withLock {
+        val sessions = retired.toList() + listOfNotNull(editorSession)
+        sessions.forEach { it.transferPaused = true }
+        try {
+            sessions.forEach { flush(it) }
+            block()
+        } finally { sessions.forEach { it.transferPaused = false } }
+    }
+
+    /** Called inside withNotesLocked, after flushing, so tag/search membership includes the last edit. */
+    suspend fun currentCollectionIdsForTransfer(): List<String> {
+        val current = search.value
+        val values = if (current.active) searchNotes(SearchQuery(current.query, filters = current.filters)) else notes.first()
+        return values.map { it.id }
+    }
+
     private suspend fun settleRetired() {
         retired.toList().forEach { session ->
             if (session.editors > 0) session.detached.await()

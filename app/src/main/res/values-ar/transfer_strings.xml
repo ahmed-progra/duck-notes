@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="transfer_title">الملفات</string>
+    <string name="transfer_files">الملفات</string>
+    <string name="transfer_import">استيراد ملاحظات</string>
+    <string name="transfer_export_note">تصدير الملاحظة</string>
+    <string name="transfer_share_note">مشاركة الملاحظة</string>
+    <string name="transfer_export_collection">تصدير هذه المجموعة</string>
+    <string name="transfer_share_collection">مشاركة هذه المجموعة</string>
+    <string name="transfer_share">مشاركة الملاحظات المصدّرة</string>
+    <string name="transfer_preparing">جارٍ حفظ التغييرات وتجهيز التصدير…</string>
+    <string name="transfer_reading">جارٍ قراءة الملاحظات والتحقق منها…</string>
+    <string name="transfer_importing">جارٍ استيراد الملاحظات. تبقى الملاحظات الحالية دون تغيير.</string>
+    <string name="transfer_writing">جارٍ كتابة الملف المصدّر…</string>
+    <string name="transfer_cancel">إلغاء</string>
+    <string name="transfer_cancelled">أُلغيت العملية.</string>
+    <string name="transfer_written">كُتب الملف المصدّر بنجاح.</string>
+    <string name="transfer_imported">عدد الملاحظات المستوردة: %1$d. بقيت الملاحظات الحالية دون تغيير.</string>
+    <string name="transfer_duplicates">العناوين المكررة: %1$d. تُحل روابط الملاحظات حسب العنوان؛ راجع الروابط بعد الاستيراد.</string>
+    <string name="transfer_prepare_failed">تعذّر تجهيز التصدير. عالج أي خطأ في الحفظ وتحقّق من مساحة التخزين، ثم أعد المحاولة.</string>
+    <string name="transfer_import_failed">تعذّر استيراد هذا الملف. استخدم Markdown أو نصًا عاديًا بترميز UTF-8، أو ملف ZIP مصدّرًا من Duck. تحقّق من الملف وإذن الوصول ومساحة التخزين.</string>
+    <string name="transfer_write_failed">فشل التصدير. قد تحتوي الوجهة على ملف جزئي أو فارغ. تحقّق منه قبل إعادة المحاولة.</string>
+    <string name="transfer_unavailable">تعذّر فتح منتقي الملفات أو قائمة المشاركة. أعد المحاولة.</string>
+    <string name="transfer_interrupted">انقطعت العملية. تحقّق من ملاحظاتك والوجهة قبل إعادة المحاولة.</string>
+    <string name="transfer_cleanup_failed">تعذّرت إزالة الملفات المؤقتة. تحقّق من التخزين وأعد تشغيل Duck Notes لإعادة محاولة التنظيف.</string>
+</resources>

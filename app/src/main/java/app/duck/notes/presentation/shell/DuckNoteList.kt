@@ -10,6 +10,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.unit.dp
 import app.duck.notes.core.ui.DuckIconButton
@@ -45,6 +52,8 @@ fun DuckNoteList(
     onSearchFilters: ((app.duck.notes.domain.model.SearchFilters) -> Unit)? = null,
     tagPaths: List<String> = emptyList(),
     sortPending: Boolean = false,
+    onImport: (() -> Unit)? = null,
+    onExport: ((String?, Boolean) -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -72,6 +81,17 @@ fun DuckNoteList(
             )
             onNewNote?.let { create ->
                 DuckIconButton(R.drawable.duck_new_note, stringResource(R.string.note_new), create, enabled = !creatingNote)
+            }
+            if (onImport != null || onExport != null) Box {
+                var filesOpen by remember { mutableStateOf(false) }
+                TextButton(onClick = { filesOpen = true }) { Text(stringResource(R.string.transfer_files)) }
+                DropdownMenu(filesOpen, onDismissRequest = { filesOpen = false }) {
+                    onImport?.let { import -> DropdownMenuItem(text = { Text(stringResource(R.string.transfer_import)) }, onClick = { filesOpen = false; import() }) }
+                    onExport?.let { export ->
+                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_export_collection)) }, onClick = { filesOpen = false; export(null, false) })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_share_collection)) }, onClick = { filesOpen = false; export(null, true) })
+                    }
+                }
             }
         }
         onSearchChanged?.let { change ->

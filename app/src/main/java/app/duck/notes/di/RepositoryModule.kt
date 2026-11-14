@@ -30,6 +30,10 @@ abstract class RepositoryModule {
 
     @Binds
     @Singleton
+    abstract fun bindNoteTransferRepository(impl: app.duck.notes.data.repository.NoteTransferRepositoryImpl): app.duck.notes.domain.repository.NoteTransferRepository
+
+    @Binds
+    @Singleton
     abstract fun bindNoteRepository(impl: NoteRepositoryImpl): NoteRepository
 
     @Binds

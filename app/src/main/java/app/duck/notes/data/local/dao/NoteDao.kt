@@ -43,6 +43,15 @@ abstract class NoteDao {
     @Query("SELECT COUNT(*) FROM notes")
     abstract suspend fun count(): Int
 
+    @Query("SELECT id FROM notes ORDER BY id")
+    abstract suspend fun allIds(): List<String>
+
+    @Query("SELECT COALESCE(SUM(length(CAST(body AS BLOB))), 0) FROM notes")
+    abstract suspend fun totalBodyBytes(): Long
+
+    @Query("SELECT COUNT(*) FROM notes WHERE title = :title")
+    abstract suspend fun countWithTitle(title: String): Int
+
     /**
      * Notes carrying **exactly** this tag row, by id. The search path's tag narrowing.
      *

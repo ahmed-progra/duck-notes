@@ -125,6 +125,8 @@ fun DuckShell(
     noteSort: app.duck.notes.domain.model.NoteSort = app.duck.notes.domain.model.NoteSort.Modified,
     onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
     noteSortPending: Boolean = false,
+    onImport: (() -> Unit)? = null,
+    onExport: ((String?, Boolean) -> Unit)? = null,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -154,6 +156,8 @@ fun DuckShell(
         state = state.copy(noteSortPending = noteSortPending),
         buffer = state.editorSession?.buffer ?: viewModel.buffer,
         actions = ShellActions(
+            onImport = onImport,
+            onExport = onExport,
             onNewNote = viewModel::onNewNote,
             onPinNote = viewModel::onPinNote,
             onNoteSort = onNoteSort,
@@ -307,6 +311,8 @@ fun DuckShell(
                 onSearchFilters = actions.onSearchFilters,
                 tagPaths = state.allTagPaths,
                 sortPending = state.noteSortPending,
+                onImport = actions.onImport,
+                onExport = actions.onExport,
             )
         }
 
@@ -356,6 +362,10 @@ fun DuckShell(
                                         }
                                         DropdownMenuItem(text = { Text(stringResource(if (state.selectedNoteArchived) R.string.note_unarchive else R.string.note_archive)) }, onClick = { menu = false; actions.onArchiveNote.invoke() })
                                         DropdownMenuItem(text = { Text(stringResource(R.string.note_trash)) }, onClick = { menu = false; actions.onTrashNote?.invoke() })
+                                    }
+                                    actions.onExport?.let { export ->
+                                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_export_note)) }, onClick = { menu = false; export(state.selectedNoteId, false) })
+                                        DropdownMenuItem(text = { Text(stringResource(R.string.transfer_share_note)) }, onClick = { menu = false; export(state.selectedNoteId, true) })
                                     }
                                 }
                             }

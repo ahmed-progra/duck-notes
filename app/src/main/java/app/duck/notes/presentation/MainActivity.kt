@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private val shellOwner = viewModels<DuckShellViewModel>()
     private val shellViewModel by shellOwner
     private val lockSession: AppLockSession by viewModels()
+    private val transferViewModel: app.duck.notes.presentation.transfer.TransferViewModel by viewModels()
     private val keyguard by lazy { getSystemService(KeyguardManager::class.java) }
     private var deviceSecure by mutableStateOf(false)
     private val authenticate = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -121,11 +122,13 @@ class MainActivity : AppCompatActivity() {
             val systemDark = isNight(if (ui.snapshot.settings.theme == ThemePreference.System) systemResources.configuration else configuration)
             val dark = effectiveDark(ui.snapshot.settings.theme, systemDark)
             DuckTheme(dark = dark, editorFont = ui.snapshot.settings.editorFont, editorSizeSp = ui.snapshot.settings.editorSizeSp) {
-                if (welcomeState != WelcomeStartupState.Loading &&
-                    (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut)) {
-                    if (mayShowNotes(securitySnapshot, lock.authenticated) && !lock.authenticating) {
+                val ready = welcomeState != WelcomeStartupState.Loading && (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut)
+                val canAccess = ready && mayShowNotes(securitySnapshot, lock.authenticated) && !lock.authenticating
+                if (ready) {
+                    if (canAccess) {
                         DuckScreen(settingsViewModel = settingsViewModel, shellViewModel = shellViewModel,
-                            canAuthenticate = deviceSecure, onLockChange = ::requestLockChange)
+                            canAuthenticate = deviceSecure, onLockChange = ::requestLockChange, transferViewModel = transferViewModel,
+                            canUseTransfers = ::canUseTransfers)
                     } else {
                         AppLockScreen(deviceSecure, lock.authenticating, onUnlock = { requestAuthentication() },
                             onRetry = settingsViewModel::retryRead, onConfigureLock = ::configureDeviceLock)
@@ -133,6 +136,9 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     Box(Modifier.fillMaxSize().background(DuckTheme.colors.surface))
                 }
+                app.duck.notes.presentation.transfer.TransferHost(transferViewModel, canAccess,
+                    canUseTransfers = ::canUseTransfers,
+                    onRetry = { if (canUseTransfers()) transferViewModel.retryExport(shellViewModel) })
             }
         }
     }
@@ -140,6 +146,15 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         deviceSecure = keyguard.isDeviceSecure
+    }
+
+    private fun canUseTransfers(): Boolean {
+        val ui = settingsViewModel.uiState.value
+        val lock = lockSession.state.value
+        return lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+            welcomeStartup.state.value != WelcomeStartupState.Loading &&
+            (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut) &&
+            mayShowNotes(settingsViewModel.snapshot.value, lock.authenticated) && !lock.authenticating
     }
 
     public override fun onUserLeaveHint() {

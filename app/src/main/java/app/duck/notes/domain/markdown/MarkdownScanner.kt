@@ -150,6 +150,23 @@ object MarkdownScanner {
         return ids
     }
 
+    fun imageDestinationsIn(body: String): Set<String> = buildSet {
+        forEachImage(body) { destination, _, _ -> add(destination) }
+    }
+
+    /** Portable import/export changes destinations, never labels, links or code examples. */
+    fun rewriteImageDestinations(body: String, destinations: Map<String, String>): String {
+        val edits = mutableListOf<Triple<Int, Int, String>>()
+        forEachImage(body) { destination, token, _ ->
+            val replacement = destinations[destination]
+            val tail = token.markers.getOrNull(1)
+            if (replacement != null && tail != null) edits += Triple(tail.first + 2, tail.last, replacement)
+        }
+        return StringBuilder(body).apply {
+            edits.asReversed().forEach { (start, end, value) -> replace(start, end, value) }
+        }.toString()
+    }
+
     /**
      * [body] without the reference to attachment [id] — the mirror of the append, used by
      * `DeleteAttachment` and the editor buffer alike.

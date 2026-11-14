@@ -24,5 +24,6 @@ class EditorSession internal constructor(note: Note) {
     internal var autosave: Job? = null
     internal var closed by mutableStateOf(false)
     internal var readOnly by mutableStateOf(note.isTrashed)
-    val canEdit: Boolean get() = !closed && !readOnly
+    internal var transferPaused by mutableStateOf(false)
+    val canEdit: Boolean get() = !closed && !readOnly && !transferPaused
 }

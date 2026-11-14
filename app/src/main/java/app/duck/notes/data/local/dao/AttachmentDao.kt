@@ -18,6 +18,12 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface AttachmentDao {
 
+    @Query("SELECT * FROM attachments ORDER BY id")
+    suspend fun all(): List<AttachmentEntity>
+
+    @Insert
+    suspend fun insertNew(attachment: AttachmentEntity)
+
     @Query("SELECT * FROM attachments WHERE note_id = :noteId ORDER BY created_at ASC")
     fun observeForNote(noteId: String): Flow<List<AttachmentEntity>>
 

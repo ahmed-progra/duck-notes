@@ -3,9 +3,29 @@
     <uses-permission android:name="app.duck.notes.test.READ_IMAGES" />
     <application>
         <activity
+            android:name="app.duck.notes.data.repository.ShareReceiverActivity"
+            android:label="Duck Notes transfer test"
+            android:exported="true"
+            android:process=":share_receiver">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+        <activity
             android:name="app.duck.notes.settings.PauseOnlyOverlayActivity"
             android:exported="true"
             android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+        <provider
+            android:name="app.duck.notes.data.repository.TransferDocumentProvider"
+            android:authorities="app.duck.notes.test.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:readPermission="app.duck.notes.test.READ_IMAGES"
+            android:process=":documents">
+            <path-permission android:pathPrefix="/" android:writePermission="app.duck.notes.test.READ_IMAGES" />
+        </provider>
         <provider
             android:name="app.duck.notes.data.repository.ImageSourceProvider"
             android:authorities="app.duck.notes.test.images"
