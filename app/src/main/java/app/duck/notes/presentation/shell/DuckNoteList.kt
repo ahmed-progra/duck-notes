@@ -39,6 +39,12 @@ fun DuckNoteList(
     search: SearchState = SearchState(),
     onSearchChanged: ((String) -> Unit)? = null,
     onRetrySearch: () -> Unit = {},
+    order: app.duck.notes.domain.model.NoteSort = app.duck.notes.domain.model.NoteSort.Modified,
+    onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
+    onPinNote: ((String, Boolean) -> Unit)? = null,
+    onSearchFilters: ((app.duck.notes.domain.model.SearchFilters) -> Unit)? = null,
+    tagPaths: List<String> = emptyList(),
+    sortPending: Boolean = false,
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -51,7 +57,7 @@ fun DuckNoteList(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (search.query.isBlank()) filter.label() else stringResource(R.string.search_results),
+                text = if (!search.active) filter.label() else stringResource(R.string.search_results),
                 style = DuckTheme.type.uiTitle,
                 color = colors.onSurface,
                 maxLines = 1,
@@ -80,6 +86,7 @@ fun DuckNoteList(
                 },
             )
         }
+        NoteListControls(order, search.filters, tagPaths, onNoteSort, onSearchFilters, sortPending)
         DuckDivider()
         when (search.phase) {
             SearchPhase.Pending -> { DuckEmptyState(stringResource(R.string.search_pending)); return@Column }
@@ -92,7 +99,7 @@ fun DuckNoteList(
         }
 
         if (notes.isEmpty()) {
-            DuckEmptyState(stringResource(if (search.query.isBlank()) R.string.shell_empty_notes else R.string.search_empty))
+            DuckEmptyState(stringResource(if (!search.active) R.string.shell_empty_notes else R.string.search_empty))
         } else {
             val motion = DuckTheme.motion
             LazyColumn(Modifier.fillMaxSize()) {
@@ -120,6 +127,8 @@ fun DuckNoteList(
                             selected = note.id == selectedNoteId,
                             onClick = { onSelectNote(note.id) },
                             onAddTag = if (note.isTrashed) null else ({ onAddTag(note.id) }),
+                            pinned = note.isPinned,
+                            onTogglePin = if (note.isTrashed || onPinNote == null) null else ({ onPinNote(note.id, !note.isPinned) }),
                         )
                         DuckDivider()
                     }

@@ -8,6 +8,7 @@ enum class ThemePreference(val storedValue: String) {
 
 enum class LanguagePreference(val languageTag: String) { System(""), English("en"), Arabic("ar") }
 enum class EditorFont(val storedValue: String) { Serif("serif"), Sans("sans"), Mono("mono") }
+enum class NoteSort(val storedValue: String) { Modified("modified"), Created("created"), Title("title") }
 
 data class AppSettings(
     val theme: ThemePreference = ThemePreference.System,
@@ -17,6 +18,7 @@ data class AppSettings(
     val language: LanguagePreference = LanguagePreference.System,
     val editorFont: EditorFont = EditorFont.Serif,
     val editorSizeSp: Int = 17,
+    val noteSort: NoteSort = NoteSort.Modified,
 )
 
 enum class SettingsReadStatus { Loading, Ready, TemporaryDefaults }

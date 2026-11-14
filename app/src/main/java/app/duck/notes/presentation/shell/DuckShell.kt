@@ -122,14 +122,42 @@ fun DuckShell(
     modifier: Modifier = Modifier,
     viewModel: DuckShellViewModel = hiltViewModel(),
     onSettings: (() -> Unit)? = null,
+    noteSort: app.duck.notes.domain.model.NoteSort = app.duck.notes.domain.model.NoteSort.Modified,
+    onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
+    noteSortPending: Boolean = false,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales.get(0) ?: java.util.Locale.getDefault()
+    LaunchedEffect(viewModel, noteSort, locale) { viewModel.onNoteSortChanged(noteSort, locale) }
+    LaunchedEffect(viewModel) { while (true) { kotlinx.coroutines.delay(60_000L); viewModel.onTimeChanged() } }
+    DisposableEffect(context, owner, viewModel) {
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) { viewModel.onTimeChanged() }
+        }
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.onTimeChanged()
+        }
+        val events = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_DATE_CHANGED)
+            addAction(android.content.Intent.ACTION_TIME_CHANGED)
+            addAction(android.content.Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        androidx.core.content.ContextCompat.registerReceiver(context, receiver, events, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        owner.lifecycle.addObserver(observer)
+        viewModel.onTimeChanged()
+        onDispose { owner.lifecycle.removeObserver(observer); context.unregisterReceiver(receiver) }
+    }
 
     DuckShell(
-        state = state,
+        state = state.copy(noteSortPending = noteSortPending),
         buffer = state.editorSession?.buffer ?: viewModel.buffer,
         actions = ShellActions(
             onNewNote = viewModel::onNewNote,
+            onPinNote = viewModel::onPinNote,
+            onNoteSort = onNoteSort,
+            onSearchFilters = viewModel::onSearchFiltersChanged,
             onSearchChanged = viewModel::onSearchChanged,
             onRetrySearch = viewModel::onRetrySearch,
             onArchiveNote = { viewModel.onArchiveNote(state.editorSession) },
@@ -273,6 +301,12 @@ fun DuckShell(
                 search = state.search,
                 onSearchChanged = actions.onSearchChanged,
                 onRetrySearch = actions.onRetrySearch,
+                order = state.noteSort,
+                onNoteSort = actions.onNoteSort,
+                onPinNote = actions.onPinNote,
+                onSearchFilters = actions.onSearchFilters,
+                tagPaths = state.allTagPaths,
+                sortPending = state.noteSortPending,
             )
         }
 
@@ -316,6 +350,10 @@ fun DuckShell(
                                     if (state.selectedNoteTrashed) {
                                         DropdownMenuItem(text = { Text(stringResource(R.string.note_restore)) }, onClick = { menu = false; actions.onRestoreNote?.invoke() })
                                     } else {
+                                        actions.onPinNote?.let { pin ->
+                                            DropdownMenuItem(text = { Text(stringResource(if (state.selectedNotePinned) R.string.note_unpin else R.string.note_pin)) },
+                                                onClick = { menu = false; state.selectedNoteId?.let { pin(it, !state.selectedNotePinned) } })
+                                        }
                                         DropdownMenuItem(text = { Text(stringResource(if (state.selectedNoteArchived) R.string.note_unarchive else R.string.note_archive)) }, onClick = { menu = false; actions.onArchiveNote.invoke() })
                                         DropdownMenuItem(text = { Text(stringResource(R.string.note_trash)) }, onClick = { menu = false; actions.onTrashNote?.invoke() })
                                     }

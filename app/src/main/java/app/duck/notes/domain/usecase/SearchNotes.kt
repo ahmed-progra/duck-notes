@@ -5,10 +5,10 @@ import app.duck.notes.domain.model.SearchQuery
 import app.duck.notes.domain.repository.SearchRepository
 import javax.inject.Inject
 
-/** Full-text search. Blank text short-circuits — an empty query means "show the list", not "match all". */
+/** Blank unfiltered text returns to the sidebar; filters can search without text. */
 class SearchNotes @Inject constructor(
     private val search: SearchRepository,
 ) {
     suspend operator fun invoke(query: SearchQuery): List<Note> =
-        if (query.text.isBlank()) emptyList() else search.search(query)
+        if (query.text.isBlank() && query.tagId == null && query.filters == app.duck.notes.domain.model.SearchFilters()) emptyList() else search.search(query)
 }

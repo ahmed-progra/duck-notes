@@ -104,6 +104,11 @@ class SettingsRepository @Inject constructor(
         resumeReadAfterWrite()
     }
 
+    suspend fun setNoteSort(value: app.duck.notes.domain.model.NoteSort) {
+        dataStore.edit { it[stringPreferencesKey("note_sort")] = value.storedValue }
+        resumeReadAfterWrite()
+    }
+
     suspend fun setLockEnabled(value: Boolean) {
         dataStore.edit { it[lockEnabledKey] = value }
         resumeReadAfterWrite()
@@ -135,6 +140,8 @@ class SettingsRepository @Inject constructor(
             language = LanguagePreference.entries.firstOrNull { it.languageTag == values["language"] } ?: LanguagePreference.System,
             editorFont = EditorFont.entries.firstOrNull { it.storedValue == values["editor_font"] } ?: EditorFont.Serif,
             editorSizeSp = (values["editor_size_sp"] as? Int)?.takeIf { it in 14..24 } ?: 17,
+            noteSort = app.duck.notes.domain.model.NoteSort.entries.firstOrNull { it.storedValue == values["note_sort"] }
+                ?: app.duck.notes.domain.model.NoteSort.Modified,
             theme = ThemePreference.entries.firstOrNull { it.storedValue == storedTheme }
                 ?: ThemePreference.System,
             lockEnabled = values["lock_enabled"] as? Boolean ?: values.containsKey("lock_enabled"),

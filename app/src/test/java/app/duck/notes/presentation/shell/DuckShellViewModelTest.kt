@@ -77,7 +77,7 @@ class DuckShellViewModelTest {
     )
 
     /** Fixed noon on 2024-11-30 local, so the Today row has a midnight to compare against. */
-    private val now = 1_733_000_000_000L
+    private var now = 1_733_000_000_000L
     private val midnight = Instant.ofEpochMilli(now)
         .atZone(ZoneId.systemDefault()).toLocalDate()
         .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
@@ -254,6 +254,32 @@ class DuckShellViewModelTest {
         settle()
 
         assertEquals(listOf("today"), vm.state.value.notes.map { it.id })
+    }
+
+    /** Plant: retain the old captured midnight; the prior-day note remains after refresh. */
+    @Test fun todayRecomputesAfterDateChangeWithoutDatabaseWrites() = runShell { vm, settle ->
+        val tomorrow = Instant.ofEpochMilli(midnight).atZone(ZoneId.systemDefault()).plusDays(1).toInstant().toEpochMilli()
+        notes.seed(note("prior", modifiedAt = now))
+        notes.seed(note("next", modifiedAt = tomorrow + 1))
+        vm.onFilter(ShellFilter.Today)
+        settle()
+        assertEquals(setOf("prior", "next"), vm.state.value.notes.map { it.id }.toSet())
+        now = tomorrow + 1000
+        vm.onTimeChanged()
+        settle()
+        assertEquals(listOf("next"), vm.state.value.notes.map { it.id })
+    }
+
+    @Test fun pinningAnOpenNotePreservesItsBodyAndTimestamp() = runShell { vm, settle ->
+        notes.seed(note("pin-me", body = "unsurprising content"))
+        vm.onSelectNote("pin-me")
+        settle()
+        vm.onPinNote("pin-me", true)
+        settle()
+        assertEquals(true, notes.current("pin-me")?.isPinned)
+        assertEquals(now, notes.current("pin-me")?.modifiedAt)
+        assertEquals("unsurprising content", vm.buffer.text.toString())
+        assertEquals(true, vm.state.value.selectedNotePinned)
     }
 
     @Test

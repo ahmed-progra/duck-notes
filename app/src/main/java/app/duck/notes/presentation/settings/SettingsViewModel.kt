@@ -84,6 +84,8 @@ class SettingsViewModel @Inject constructor(
 
     fun setEditorSize(value: Int) = writePreference { repository.setEditorSize(value) }
 
+    fun setNoteSort(value: app.duck.notes.domain.model.NoteSort) = writePreference { repository.setNoteSort(value) }
+
     private fun writePreference(write: suspend () -> Unit) {
         if (pendingWrite.value) return
         pendingWrite.value = true

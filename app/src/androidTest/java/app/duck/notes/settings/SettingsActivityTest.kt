@@ -116,6 +116,41 @@ class SettingsActivityTest {
         }
     }
 
+    /** Plant: disconnect pin/filter actions; the actual Room-backed collection cannot follow the menu. */
+    @Test fun notePinSortAndFilterMenusUseTheRealRepository() {
+        selectFixture()
+        fun fixture() = runBlocking { database.noteDao().getById("settings-fixture") }
+        val modified = fixture()?.modifiedAt
+        compose.onNodeWithText("Note actions").performClick()
+        compose.onNodeWithText("Pin note").performClick()
+        pumpUntil { fixture()?.isPinned == true }
+        assertEquals(modified, fixture()?.modifiedAt)
+        compose.onNodeWithText("Sort notes").performClick()
+        compose.onNodeWithText("Title").performClick()
+        pumpUntil { repository.state.value.settings.noteSort == app.duck.notes.domain.model.NoteSort.Title }
+        compose.onNodeWithText("Filters (0)").performClick()
+        compose.onNodeWithText("Pinned notes").performClick()
+        compose.onNodeWithText("Close").performClick()
+        pumpUntil {
+            var correct = false
+            scenario?.onActivity { activity ->
+                val state = ViewModelProvider(activity)[DuckShellViewModel::class.java].state.value
+                correct = state.search.phase == app.duck.notes.presentation.shell.SearchPhase.Results && state.search.filters.pinnedOnly && state.notes.map { it.id } == listOf("settings-fixture")
+            }
+            correct
+        }
+        compose.onNodeWithText("Note actions").performClick()
+        compose.onNodeWithText("Unpin note").performClick()
+        pumpUntil { fixture()?.isPinned == false }
+        assertEquals(modified, fixture()?.modifiedAt)
+        compose.onNodeWithText("Filters (1)").performClick()
+        compose.onNodeWithText("Clear filters").performClick()
+        compose.onNodeWithText("Close").performClick()
+        scenario?.recreate()
+        compose.waitForIdle()
+        assertEquals(app.duck.notes.domain.model.NoteSort.Title, repository.state.value.settings.noteSort)
+    }
+
     /** Plant: suppress autosave after undo; the real Room body retains the appended probe. */
     @Test fun toolbarUndoAndRedoPersistThroughTheRealActivityAndRoom() {
         selectFixture()

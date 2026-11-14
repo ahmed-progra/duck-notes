@@ -240,6 +240,12 @@ abstract class NoteDao {
     @Update
     abstract suspend fun update(note: NoteEntity)
 
+    @Query("UPDATE notes SET is_pinned = :pinned, sync_state = 'PENDING' WHERE id = :id AND is_trashed = 0")
+    abstract suspend fun setPinned(id: String, pinned: Boolean)
+
+    @Query("SELECT DISTINCT note_id FROM attachments")
+    abstract suspend fun noteIdsWithImages(): List<String>
+
     @Delete
     abstract suspend fun delete(note: NoteEntity)
 

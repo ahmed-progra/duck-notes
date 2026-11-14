@@ -230,5 +230,23 @@
     <string name="editor_replace_one">Replace</string>
     <string name="editor_replace_all">Replace all</string>
     <string name="settings_language_system">Device language</string>
+    <string name="note_pin">Pin note</string>
+    <string name="note_unpin">Unpin note</string>
+    <string name="note_pinned">Pinned</string>
+    <string name="note_sort">Sort notes</string>
+    <string name="note_sort_modified">Last modified</string>
+    <string name="note_sort_created">Newest created</string>
+    <string name="note_sort_title">Title</string>
+    <string name="search_filters">Filters (%1$d)</string>
+    <string name="search_filter_title">Filter notes</string>
+    <string name="search_any_tag">Any tag</string>
+    <string name="search_choose_tag">Choose a tag</string>
+    <string name="search_pinned">Pinned notes</string>
+    <string name="search_open_tasks">Unfinished tasks</string>
+    <string name="search_images">Has images</string>
+    <string name="search_scope_both">Active and archived</string>
+    <string name="search_scope_active">Active notes</string>
+    <string name="search_scope_archive">Archived notes</string>
+    <string name="search_reset_filters">Clear filters</string>
     <string name="attachment_actions">Image actions</string>
 </resources>

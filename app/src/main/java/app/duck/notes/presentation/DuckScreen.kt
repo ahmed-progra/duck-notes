@@ -71,7 +71,8 @@ fun DuckScreen(
                 }
             } else {
                 savedViews.SaveableStateProvider("shell") {
-                    DuckShell(viewModel = shellViewModel, onSettings = settingsViewModel::openSettings)
+                    DuckShell(viewModel = shellViewModel, onSettings = settingsViewModel::openSettings,
+                        noteSort = ui.snapshot.settings.noteSort, onNoteSort = settingsViewModel::setNoteSort, noteSortPending = ui.pendingWrite)
                 }
             }
         }

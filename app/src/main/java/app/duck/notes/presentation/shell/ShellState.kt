@@ -301,6 +301,9 @@ data class ShellUiState(
     val allNoteTitles: List<String> = emptyList(),
     val undo: TagPrompt? = null,
     val saveFailed: Boolean = false,
+    val selectedNotePinned: Boolean = false,
+    val noteSort: app.duck.notes.domain.model.NoteSort = app.duck.notes.domain.model.NoteSort.Modified,
+    val noteSortPending: Boolean = false,
 )
 
 /** Everything a tap in the shell can do. Hoisted so the gallery can drive it from a fixture. */
@@ -351,8 +354,18 @@ data class ShellActions(
      * carries — both come from one scanner.
      */
     val tagsOfNote: (noteId: String) -> List<String> = { emptyList() },
+    val onPinNote: ((id: String, pinned: Boolean) -> Unit)? = null,
+    val onNoteSort: ((app.duck.notes.domain.model.NoteSort) -> Unit)? = null,
+    val onSearchFilters: ((app.duck.notes.domain.model.SearchFilters) -> Unit)? = null,
 )
 
 enum class OperationFailure { Create, Open, Change }
 enum class SearchPhase { Idle, Pending, Results, Failed }
-data class SearchState(val query: String = "", val phase: SearchPhase = SearchPhase.Idle, val notes: List<Note> = emptyList())
+data class SearchState(
+    val query: String = "",
+    val phase: SearchPhase = SearchPhase.Idle,
+    val notes: List<Note> = emptyList(),
+    val filters: app.duck.notes.domain.model.SearchFilters = app.duck.notes.domain.model.SearchFilters(),
+) {
+    val active: Boolean get() = query.isNotBlank() || filters != app.duck.notes.domain.model.SearchFilters()
+}

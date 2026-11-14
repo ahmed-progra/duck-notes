@@ -5,7 +5,7 @@ import app.duck.notes.domain.model.Attachment
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Note storage. [save] is the single write path — insert and update alike — so tag rewiring and
+ * Note storage. [save] is the body write path — insert and update alike — so tag rewiring and
  * search-index upkeep can never diverge between two code paths.
  */
 interface NoteRepository {
@@ -41,6 +41,9 @@ interface NoteRepository {
     fun observeTitles(excludeId: String?): Flow<List<String>>
 
     suspend fun getNote(id: String): Note?
+
+    /** Metadata only: preserve timestamps, body and derived rows; ignore Trash and missing IDs. */
+    suspend fun setPinned(id: String, pinned: Boolean)
 
     /**
      * The note a `[[title]]` resolves to, or null — the same rule the save path links by.

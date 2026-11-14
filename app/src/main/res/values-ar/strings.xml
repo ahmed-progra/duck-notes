@@ -202,5 +202,23 @@
     <string name="editor_replace_one">استبدال</string>
     <string name="editor_replace_all">استبدال الكل</string>
     <string name="settings_language_system">لغة الجهاز</string>
+    <string name="note_pin">تثبيت الملاحظة</string>
+    <string name="note_unpin">إلغاء تثبيت الملاحظة</string>
+    <string name="note_pinned">مثبتة</string>
+    <string name="note_sort">ترتيب الملاحظات</string>
+    <string name="note_sort_modified">آخر تعديل</string>
+    <string name="note_sort_created">الأحدث إنشاءً</string>
+    <string name="note_sort_title">العنوان</string>
+    <string name="search_filters">عوامل التصفية (%1$d)</string>
+    <string name="search_filter_title">تصفية الملاحظات</string>
+    <string name="search_any_tag">أي وسم</string>
+    <string name="search_choose_tag">اختيار وسم</string>
+    <string name="search_pinned">الملاحظات المثبتة</string>
+    <string name="search_open_tasks">المهام غير المكتملة</string>
+    <string name="search_images">تحتوي على صور</string>
+    <string name="search_scope_both">النشطة والمؤرشفة</string>
+    <string name="search_scope_active">الملاحظات النشطة</string>
+    <string name="search_scope_archive">الملاحظات المؤرشفة</string>
+    <string name="search_reset_filters">مسح عوامل التصفية</string>
     <string name="attachment_actions">خيارات الصورة</string>
 </resources>

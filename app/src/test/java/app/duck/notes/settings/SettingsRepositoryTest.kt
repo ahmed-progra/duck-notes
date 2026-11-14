@@ -56,6 +56,7 @@ class SettingsRepositoryTest {
             first.repository.setLanguage(app.duck.notes.domain.model.LanguagePreference.Arabic)
             first.repository.setEditorFont(app.duck.notes.domain.model.EditorFont.Mono)
             first.repository.setEditorSize(22)
+            first.repository.setNoteSort(app.duck.notes.domain.model.NoteSort.Created)
         } finally { first.close() }
         val reopened = open(file)
         try {
@@ -63,6 +64,7 @@ class SettingsRepositoryTest {
             assertEquals(app.duck.notes.domain.model.LanguagePreference.Arabic, settings.language)
             assertEquals(app.duck.notes.domain.model.EditorFont.Mono, settings.editorFont)
             assertEquals(22, settings.editorSizeSp)
+            assertEquals(app.duck.notes.domain.model.NoteSort.Created, settings.noteSort)
         } finally { reopened.close() }
     }
 
