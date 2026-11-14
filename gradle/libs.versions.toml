@@ -12,7 +12,7 @@ activityCompose = "1.9.3"
 # hiltViewModel() lives here even with no NavHost — the artifact name predates the split.
 hiltNavigationCompose = "1.2.0"
 composeBom = "2025.10.01"
-room = "2.7.2"
+room = "2.8.5"
 androidxSqlite = "2.5.2"
 # Coil 3: coil-core drops the network fetcher, so loading local Files needs no network artifact.
 # Pinned to 3.2.0, not the newer 3.5.0: 3.3.0+ require compileSdk 36 and Duck stays on 35 this phase.
