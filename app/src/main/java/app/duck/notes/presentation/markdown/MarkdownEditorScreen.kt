@@ -259,7 +259,7 @@ fun MarkdownEditorScreen(
                             onSelect = { if (canEdit()) state.completeWikiLink(active, it) },
                         )
                     }
-                    AttachmentStrip(
+                    if (attachments.isNotEmpty()) AttachmentStrip(
                         attachments = attachments,
                         onAddImage = { if (canEdit()) onAddImage() },
                         editable = canEdit(),
@@ -271,6 +271,7 @@ fun MarkdownEditorScreen(
                         canEdit = canEdit,
                         onEnterFocus = onToggleFocus,
                         onToggleInfo = onToggleInfo,
+                        onAddImage = onAddImage.takeIf { attachments.isEmpty() },
                     )
                 }
             }

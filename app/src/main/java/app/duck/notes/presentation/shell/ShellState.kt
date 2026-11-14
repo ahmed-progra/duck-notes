@@ -9,22 +9,7 @@ import app.duck.notes.domain.model.NoteLink
 import app.duck.notes.domain.model.TagCount
 import app.duck.notes.domain.model.TagNode
 
-/**
- * What the sidebar is filtering the note list by — the seven fixed rows, plus a tag.
- *
- * [key] is what survives into `SavedStateHandle`: a single string rather than a parcelable, so there
- * is no `@Parcelize` annotation to keep in sync and nothing that can fail to restore. [fromKey] is
- * **total** — an unrecognised key falls back to [All] rather than throwing, because the only way to
- * see one is an older build reading a newer bundle.
- *
- * All seven filter for real. Five are fields [Note] already carries, so they cost nothing;
- * [Untagged] and [Trash] each needed one `NoteDao` query, since `observeNotes` deliberately hides
- * trashed rows and knows nothing about tag membership.
- *
- * [Locked] will be empty until Phase 12 encrypts anything, and that is the honest result rather than
- * a stub: the row filters `isLocked` correctly and finds nothing, which is what "no locked notes"
- * means today.
- */
+/** Sidebar selection, persisted by key. Unknown and retired keys fall back to All. */
 sealed interface ShellFilter {
 
     val key: String
@@ -68,8 +53,8 @@ sealed interface ShellFilter {
     companion object {
         private const val TAG_PREFIX = "tag:"
 
-        /** The six fixed rows above the tag tree, in sidebar order. [Trash] is rendered below it. */
-        val navRows: List<ShellFilter> = listOf(All, Untagged, Todo, Today, Locked, Archive)
+        /** Available fixed rows above the tag tree; Trash is rendered below it. */
+        val navRows: List<ShellFilter> = listOf(All, Untagged, Todo, Today, Archive)
 
         fun fromKey(key: String?): ShellFilter = when {
             key == null -> All
@@ -89,10 +74,10 @@ sealed interface ShellFilter {
  */
 enum class PaneMode { Compact, Medium, Expanded }
 
-/** Material's own breakpoints: 600dp and 840dp. */
+/** Reserve 360dp for prose after the list, sidebar and their 1dp dividers. */
 fun paneModeFor(width: Dp): PaneMode = when {
-    width < 600.dp -> PaneMode.Compact
-    width < 840.dp -> PaneMode.Medium
+    width < 681.dp -> PaneMode.Compact
+    width < 962.dp -> PaneMode.Medium
     else -> PaneMode.Expanded
 }
 

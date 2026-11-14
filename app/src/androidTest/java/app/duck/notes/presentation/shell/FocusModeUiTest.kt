@@ -56,10 +56,10 @@ class FocusModeUiTest {
         val ATTACHMENT = Attachment(id = "a1", noteId = "n1", uri = "/nope/a1", mime = "image/png", createdAt = 0L)
     }
 
-    private fun setShell() {
+    private fun setShell(width: androidx.compose.ui.unit.Dp = COMPACT_WIDTH) {
         compose.setContent {
             DuckTheme {
-                Box(Modifier.size(COMPACT_WIDTH, COMPACT_HEIGHT)) {
+                Box(Modifier.size(width, COMPACT_HEIGHT)) {
                     DuckShell(
                         state = ShellUiState(
                             notes = listOf(NOTE),
@@ -75,6 +75,23 @@ class FocusModeUiTest {
             }
         }
         compose.waitForIdle()
+    }
+
+    /** Plant: remove the Medium sidebar button; this click must become unavailable. */
+    @Test fun mediumLayoutProvidesVisibleSidebarNavigation() {
+        setShell(800.dp)
+        compose.onNodeWithContentDescription(OPEN_SIDEBAR).assertIsDisplayed().performClick()
+        compose.onNodeWithText("Untagged").assertIsDisplayed()
+    }
+
+    /** Plant: render normal wide panes while focusing; Notes remains in the tree. */
+    @Test fun wideFocusHidesTheListAndRestoresIt() {
+        setShell(1000.dp)
+        compose.onNodeWithText("Fixture").assertExists()
+        compose.onNodeWithContentDescription(ENTER_FOCUS).performScrollTo().performClick()
+        compose.onNodeWithText("Fixture").assertDoesNotExist()
+        compose.onNodeWithContentDescription(EXIT_FOCUS).performClick()
+        compose.onNodeWithText("Fixture").assertExists()
     }
 
     @Test

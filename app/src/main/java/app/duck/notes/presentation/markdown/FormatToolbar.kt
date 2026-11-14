@@ -11,6 +11,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.tooling.preview.Preview
@@ -58,6 +60,7 @@ fun FormatToolbar(
     modifier: Modifier = Modifier,
     onEnterFocus: (() -> Unit)? = null,
     onToggleInfo: (() -> Unit)? = null,
+    onAddImage: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
 
@@ -70,6 +73,12 @@ fun FormatToolbar(
             // the targets: 48dp is the accessibility floor, not a starting suggestion.
             modifier = Modifier.horizontalScroll(rememberScrollState()),
         ) {
+            val addImageLabel = stringResource(R.string.attachment_add)
+            onAddImage?.let { add ->
+                androidx.compose.material3.TextButton(enabled = enabled, modifier = Modifier.semantics { contentDescription = addImageLabel }, onClick = { if (canEdit()) add() }) {
+                    androidx.compose.material3.Text(stringResource(R.string.attachment_add))
+                }
+            }
             FormatAction.entries.forEach { action ->
                 DuckIconButton(
                     icon = action.icon,

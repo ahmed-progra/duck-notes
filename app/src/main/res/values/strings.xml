@@ -206,4 +206,10 @@
     <string name="lock_setting">Require device screen lock</string>
     <string name="lock_explanation">Locks whenever Duck Notes leaves the foreground. Your device PIN, pattern, or password also protects this lock.</string>
     <string name="privacy_storage">Screenshots and Recents previews are blocked. Files use Android private storage, not separate app encryption. Cloud backup requires an encrypted transport and remains subject to Android backup limits.</string>
+    <string name="attachment_view">View image</string>
+    <string name="attachment_delete_confirmation">Remove this image from the note? This cannot be undone.</string>
+    <string name="attachment_zoom_in">Zoom in</string>
+    <string name="attachment_zoom_out">Zoom out</string>
+    <string name="attachment_close">Close</string>
+    <string name="attachment_actions">Image actions</string>
 </resources>

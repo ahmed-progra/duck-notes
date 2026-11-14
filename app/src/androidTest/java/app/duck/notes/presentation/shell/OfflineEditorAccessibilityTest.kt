@@ -177,9 +177,14 @@ class OfflineEditorAccessibilityTest {
         assertTouchTarget(rule.onNodeWithContentDescription(labels.addImage), "restored add image")
         image.assert(SemanticsMatcher.keyIsDefined(SemanticsActions.OnLongClick))
         val expectedDelete = if (arabic) "\u062d\u0630\u0641 \u0627\u0644\u0635\u0648\u0631\u0629" else "Delete image"
-        assertEquals("Attachment deletion must expose its localized accessibility action label", expectedDelete,
+        val expectedActions = if (arabic) "خيارات الصورة" else "Image actions"
+        assertEquals("The image menu must expose its localized accessibility action label", expectedActions,
             image.fetchSemanticsNode().config[SemanticsActions.OnLongClick].label)
         image.performSemanticsAction(SemanticsActions.OnLongClick) { it() }
+        rule.runOnIdle { assertEquals(null, deleted) }
+        rule.onNodeWithText(expectedDelete).performClick()
+        rule.runOnIdle { assertEquals(null, deleted) }
+        rule.onNodeWithText(if (arabic) "حذف" else "Delete").performClick()
         rule.runOnIdle { assertEquals(ATTACHMENT.id, deleted) }
     }
 

@@ -275,7 +275,7 @@ class RtlLayoutTest {
      */
     @Test
     fun theInfoPaneMirrorsWithLayoutDirection() {
-        shellWithInfoOpen(width = 1200.dp)
+        shellWithInfoOpen(width = 1400.dp)
 
         val ltrPane = rule.onNodeWithText(BACKLINKS).getUnclippedBoundsInRoot()
         val ltrEditor = fieldBounds()

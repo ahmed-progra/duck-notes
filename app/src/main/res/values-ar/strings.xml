@@ -178,4 +178,10 @@
     <string name="lock_setting">طلب قفل شاشة الجهاز</string>
     <string name="lock_explanation">يُقفل التطبيق كلما غادر الواجهة. يحميه رمز PIN أو النمط أو كلمة مرور جهازك.</string>
     <string name="privacy_storage">تُحجب لقطات الشاشة ومعاينات التطبيقات الحديثة. تستخدم الملفات مساحة Android الخاصة دون تشفير إضافي للتطبيق. يتطلب النسخ السحابي وسيلة نقل مشفرة ويخضع لحدود Android.</string>
+    <string name="attachment_view">عرض الصورة</string>
+    <string name="attachment_delete_confirmation">إزالة هذه الصورة من الملاحظة؟ لا يمكن التراجع عن ذلك.</string>
+    <string name="attachment_zoom_in">تكبير</string>
+    <string name="attachment_zoom_out">تصغير</string>
+    <string name="attachment_close">إغلاق</string>
+    <string name="attachment_actions">خيارات الصورة</string>
 </resources>

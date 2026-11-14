@@ -1,5 +1,17 @@
 package app.duck.notes.presentation.markdown
 
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -78,7 +90,9 @@ fun AttachmentStrip(
     editable: Boolean = true,
 ) {
     val colors = DuckTheme.colors
-    var zoomed by remember { mutableStateOf<Attachment?>(null) }
+    var zoomed by remember(attachments) { mutableStateOf<Attachment?>(null) }
+    var menu by remember(attachments) { mutableStateOf<Attachment?>(null) }
+    var deleting by remember(attachments) { mutableStateOf<Attachment?>(null) }
 
     Column(modifier.fillMaxWidth().background(colors.surfaceElevated)) {
         // Separates the strip from the editor body above. surfaceElevated on surface is 1.06 in
@@ -94,12 +108,25 @@ fun AttachmentStrip(
                 Thumbnail(
                     attachment = attachment,
                     onClick = { zoomed = attachment },
-                    onLongClick = if (editable) ({ onDeleteAttachment(attachment) }) else null,
+                    onLongClick = if (editable) ({ menu = attachment }) else null,
                 )
             }
         }
     }
 
+    DropdownMenu(expanded = menu != null && editable, onDismissRequest = { menu = null }) {
+        DropdownMenuItem(text = { Text(stringResource(R.string.attachment_view)) }, onClick = { zoomed = menu; menu = null })
+        DropdownMenuItem(text = { Text(stringResource(R.string.attachment_delete)) }, onClick = { deleting = menu; menu = null })
+    }
+    deleting?.takeIf { editable }?.let { selected ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text(stringResource(R.string.attachment_delete)) },
+            text = { Text(stringResource(R.string.attachment_delete_confirmation)) },
+            confirmButton = { TextButton(onClick = { deleting = null; onDeleteAttachment(selected) }) { Text(stringResource(R.string.tag_delete_confirm)) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.tag_cancel)) } },
+        )
+    }
     zoomed?.let { ZoomDialog(it, onDismiss = { zoomed = null }) }
 }
 
@@ -125,7 +152,7 @@ private fun AddTile(onClick: () -> Unit) {
     }
 }
 
-/** One thumbnail. Tap zooms it, long-press deletes it (and its body reference). */
+/** One thumbnail. Tap views it; long-press opens its action menu. */
 @Composable
 private fun Thumbnail(
     attachment: Attachment,
@@ -143,23 +170,41 @@ private fun Thumbnail(
             .clip(shape)
             .background(colors.surfaceElevated)
             .border(1.dp, colors.divider, shape)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = stringResource(R.string.attachment_delete)),
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = stringResource(R.string.attachment_actions)),
     )
 }
 
-/** Full-width view of one image. Tap anywhere — image or scrim — to dismiss. */
+/** Bounded pan/zoom keeps the image reachable; explicit controls also work without gestures. */
 @Composable
 private fun ZoomDialog(attachment: Attachment, onDismiss: () -> Unit) {
+    var scale by remember(attachment.id) { mutableStateOf(1f) }
+    var pan by remember(attachment.id) { mutableStateOf(Offset.Zero) }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    val transform = rememberTransformableState { zoom, movement, _ ->
+        scale = (scale * zoom).coerceIn(1f, 5f)
+        val maxX = size.width * (scale - 1f) / 2f
+        val maxY = size.height * (scale - 1f) / 2f
+        pan = Offset((pan.x + movement.x).coerceIn(-maxX, maxX), (pan.y + movement.y).coerceIn(-maxY, maxY))
+    }
     Dialog(onDismissRequest = onDismiss) {
-        AsyncImage(
-            model = attachmentRequest(attachment.uri, AttachmentImageLimits.DECODE_SIDE),
-            contentDescription = stringResource(R.string.attachment_image),
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(DuckTheme.shapes.medium)
-                .clickable(onClick = onDismiss),
-        )
+        Column(Modifier.fillMaxWidth().clip(DuckTheme.shapes.medium).background(DuckTheme.colors.surface)) {
+            Box(Modifier.fillMaxWidth().height(360.dp).clip(DuckTheme.shapes.medium).onSizeChanged { size = it }.transformable(transform)) {
+                AsyncImage(
+                    model = attachmentRequest(attachment.uri, AttachmentImageLimits.DECODE_SIDE),
+                    contentDescription = stringResource(R.string.attachment_image),
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.matchParentSize().graphicsLayer {
+                        scaleX = scale; scaleY = scale
+                        translationX = pan.x; translationY = pan.y
+                    },
+                )
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                TextButton(onClick = { scale = (scale - 1f).coerceAtLeast(1f); pan = Offset.Zero }, enabled = scale > 1f) { Text(stringResource(R.string.attachment_zoom_out)) }
+                TextButton(onClick = { scale = (scale + 1f).coerceAtMost(5f) }, enabled = scale < 5f) { Text(stringResource(R.string.attachment_zoom_in)) }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.attachment_close)) }
+            }
+        }
     }
 }
 

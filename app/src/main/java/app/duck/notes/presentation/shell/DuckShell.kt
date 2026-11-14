@@ -26,6 +26,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalDrawerSheet
@@ -181,7 +185,7 @@ fun DuckShell(
 
     BoxWithConstraints(modifier.fillMaxSize().background(colors.surface)) {
         val mode = paneModeFor(maxWidth)
-        val inlineInfo = mode == PaneMode.Expanded && maxWidth >= 1120.dp
+        val inlineInfo = mode == PaneMode.Expanded && maxWidth >= 1243.dp
         val context = LocalContext.current
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
             val mime = uri?.let { source ->
@@ -301,7 +305,7 @@ fun DuckShell(
                 }
                 key(session ?: buffer) {
                 Column(m) {
-                    if (actions.onArchiveNote != null) {
+                    if (actions.onArchiveNote != null && !focusing) {
                         var menu by remember { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                             androidx.compose.foundation.layout.Box {
@@ -389,7 +393,10 @@ fun DuckShell(
         // what keeps `divider` exempt from a 1.4.11 floor at all. So "do not delete" is a Duck design
         // rule, not a WCAG one, and is negotiable with eyes open. The numbers and the full argument
         // live in ContrastTest.dividerAndElevationAreRecorded.
-        when (mode) {
+        if (focusing) {
+            BackHandler { focusMode = false }
+            editor(Modifier.fillMaxSize().statusBarsPadding())
+        } else when (mode) {
             PaneMode.Expanded -> Row(Modifier.fillMaxSize().statusBarsPadding()) {
                 androidx.compose.foundation.layout.Box(Modifier.width(SIDEBAR)) { sidebar() }
                 VerticalDivider(color = colors.divider)
@@ -414,7 +421,14 @@ fun DuckShell(
             // three panes leave the editor too narrow to read a serif body in.
             PaneMode.Medium -> DrawerHost(drawer, sidebar) {
                 Row(Modifier.fillMaxSize().statusBarsPadding()) {
-                    list(Modifier.width(NOTE_LIST))
+                    Column(Modifier.width(NOTE_LIST)) {
+                        DuckIconButton(
+                            icon = DuckIcon.Tag,
+                            contentDescription = stringResource(R.string.shell_open_sidebar),
+                            onClick = { scope.launch { drawer.open() } },
+                        )
+                        list(Modifier.weight(1f))
+                    }
                     VerticalDivider(color = colors.divider)
                     editor(Modifier.weight(1f))
                 }
@@ -436,12 +450,18 @@ fun DuckShell(
                         // insets to arbitrary content — only its own `TopAppBar` does. Without it
                         // the button draws over the clock under `enableEdgeToEdge`.
                         if (!focusing) {
-                            DuckIconButton(
-                                icon = DuckIcon.Tag,
-                                contentDescription = stringResource(R.string.shell_open_sidebar),
-                                onClick = { scope.launch { drawer.open() } },
-                                modifier = Modifier.statusBarsPadding(),
-                            )
+                            Row(Modifier.fillMaxWidth().statusBarsPadding()) {
+                                if (state.selectedNoteId != null) {
+                                    IconButton(onClick = actions.onClearSelection) {
+                                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.settings_back), tint = colors.onSurface)
+                                    }
+                                }
+                                DuckIconButton(
+                                    icon = DuckIcon.Tag,
+                                    contentDescription = stringResource(R.string.shell_open_sidebar),
+                                    onClick = { scope.launch { drawer.open() } },
+                                )
+                            }
                         }
                     },
                 ) { padding ->
@@ -498,7 +518,7 @@ fun DuckShell(
         // Compose, which this project measures rather than assumes —
         // `RtlLayoutTest.theInfoSheetMirrorsWithLayoutDirection` does, and the plant that proves it
         // can fail is a hardcoded `LocalLayoutDirection provides Ltr` wrapped around the panel.
-        if (state.infoOpen && !inlineInfo) {
+        if (state.infoOpen && !inlineInfo && !focusing) {
             ModalBottomSheet(
                 onDismissRequest = actions.onToggleInfo,
                 containerColor = colors.surfaceElevated,

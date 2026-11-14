@@ -257,17 +257,13 @@ class DuckShellViewModelTest {
     }
 
     @Test
-    fun lockedIsEmptyUntilPhase12ButFiltersCorrectly() = runShell { vm, settle ->
+    fun unavailableLockedFilterFallsBackToNotes() = runShell { vm, settle ->
         notes.seed(note("open"))
         settle()
         vm.onFilter(ShellFilter.Locked)
         settle()
-        assertEquals(emptyList<String>(), vm.state.value.notes.map { it.id })
-
-        // Not a stub: give it a locked note and the same row finds it.
-        notes.seed(note("sealed", locked = true))
-        settle()
-        assertEquals(listOf("sealed"), vm.state.value.notes.map { it.id })
+        assertEquals(ShellFilter.All, vm.state.value.filter)
+        assertEquals(listOf("open"), vm.state.value.notes.map { it.id })
     }
 
     @Test

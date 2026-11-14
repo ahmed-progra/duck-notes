@@ -136,13 +136,31 @@ fun DuckNoteList(
  * every note's title twice. Blank lines are dropped rather than collapsed into the two visible
  * lines, since a markdown body is mostly blank lines between blocks.
  */
-private fun Note.previewLine(): String =
-    body.lineSequence()
-        .map(String::trim)
-        .filter(String::isNotEmpty)
-        .drop(1)
-        .joinToString(" ")
-        .take(PREVIEW_CHARS)
+internal fun Note.previewLine(): String {
+    // Bound work before splitting: list previews must not join an entire large note.
+    val prefix = body.take(4096)
+    var carry = app.duck.notes.domain.markdown.LineCarry()
+    var titleSeen = false
+    val result = StringBuilder()
+    for (line in prefix.lineSequence()) {
+        val (tokens, next) = app.duck.notes.domain.markdown.MarkdownScanner.scanLine(line, 0, carry)
+        carry = next
+        if (line.isBlank()) continue
+        if (!titleSeen) { titleSeen = true; continue }
+        val hidden = BooleanArray(line.length)
+        tokens.flatMap { it.markers }.forEach { range ->
+            range.forEach { if (it in hidden.indices) hidden[it] = true }
+        }
+        val plain = buildString { line.forEachIndexed { i, c -> if (!hidden[i]) append(c) } }.trim()
+        if (plain.isNotEmpty()) {
+            if (result.isNotEmpty()) result.append(' ')
+            result.append(plain)
+        }
+        if (result.length >= PREVIEW_CHARS) break
+    }
+    val preview = result.toString().take(PREVIEW_CHARS).trim()
+    return if (preview.lastOrNull()?.isHighSurrogate() == true) preview.dropLast(1) else preview
+}
 
 /** Two lines at `uiSecondary` never reach this; it caps the string a `maxLines` would clip anyway. */
 private const val PREVIEW_CHARS = 200
