@@ -1,8 +1,10 @@
 # Duck Notes
 
+![Duck Notes: Your notes. Connected. Offline. Actual Android editor showing synthetic research notes.](docs/media/duck-notes-github-cover.png)
+
 Duck Notes is an offline Markdown notes app for Android 8.0 and later. Notes live in a local Room database; images stay in app-owned storage. No account or network connection is required.
 
-This source tree targets the `0.1.1` security update. The release page identifies the currently published APK version. See [SECURITY.md](SECURITY.md) for known dependency risks and verification limits.
+This source tree targets the `0.1.1` security and visual identity update. The release page identifies the currently published APK version. See [SECURITY.md](SECURITY.md) for known dependency risks and verification limits.
 
 ## Install
 
