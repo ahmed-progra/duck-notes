@@ -1,6 +1,9 @@
 package app.duck.notes.presentation
 
+import android.app.KeyguardManager
 import android.app.UiModeManager
+import android.content.Intent
+import android.provider.Settings
 import android.content.res.Configuration
 import android.content.res.Resources
 import android.graphics.drawable.ColorDrawable
@@ -9,6 +12,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.SystemBarStyle
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -18,6 +22,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
@@ -26,6 +33,11 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import app.duck.notes.R
+import app.duck.notes.presentation.shell.DuckShellViewModel
+import app.duck.notes.presentation.settings.AppLockScreen
+import app.duck.notes.presentation.settings.AppLockSession
+import app.duck.notes.presentation.settings.mayShowNotes
 import app.duck.notes.core.theme.DuckTheme
 import app.duck.notes.core.theme.DuckThemeSpec
 import app.duck.notes.domain.model.SettingsReadStatus
@@ -43,6 +55,14 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
     @Inject lateinit var welcomeStartup: WelcomeStartup
     private val settingsViewModel: SettingsViewModel by viewModels()
+    private val shellOwner = viewModels<DuckShellViewModel>()
+    private val shellViewModel by shellOwner
+    private val lockSession: AppLockSession by viewModels()
+    private val keyguard by lazy { getSystemService(KeyguardManager::class.java) }
+    private var deviceSecure by mutableStateOf(false)
+    private val authenticate = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        lockSession.finish(result.resultCode == RESULT_OK)?.let(settingsViewModel::setLockEnabled)
+    }
     private var appliedTheme: ThemePreference? = null
     private var appliedDark: Boolean? = null
     // A display-area context excludes the persisted app override from the System appearance.
@@ -58,6 +78,7 @@ class MainActivity : AppCompatActivity() {
         val firstEntry = SystemClock.elapsedRealtime()
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         settingsViewModel.retainFirstLaunch(firstEntry)
         splash.setKeepOnScreenCondition {
             val snapshot = settingsViewModel.snapshot.value
@@ -82,6 +103,8 @@ class MainActivity : AppCompatActivity() {
         }
         setContent {
             val ui by settingsViewModel.uiState.collectAsStateWithLifecycle()
+            val securitySnapshot by settingsViewModel.snapshot.collectAsState()
+            val lock by lockSession.state.collectAsState()
             val welcomeState by welcomeStartup.state.collectAsStateWithLifecycle()
             // Register configuration invalidation while sampling System outside the app override.
             val configuration = LocalConfiguration.current
@@ -90,11 +113,81 @@ class MainActivity : AppCompatActivity() {
             DuckTheme(dark = dark) {
                 if (welcomeState != WelcomeStartupState.Loading &&
                     (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut)) {
-                    DuckScreen(settingsViewModel = settingsViewModel)
+                    if (mayShowNotes(securitySnapshot, lock.authenticated) && !lock.authenticating) {
+                        DuckScreen(settingsViewModel = settingsViewModel, shellViewModel = shellViewModel,
+                            canAuthenticate = deviceSecure, onLockChange = ::requestLockChange)
+                    } else {
+                        AppLockScreen(deviceSecure, lock.authenticating, onUnlock = { requestAuthentication() },
+                            onRetry = settingsViewModel::retryRead, onConfigureLock = ::configureDeviceLock)
+                    }
                 } else {
                     Box(Modifier.fillMaxSize().background(DuckTheme.colors.surface))
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        deviceSecure = keyguard.isDeviceSecure
+    }
+
+    public override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        lockWhenInactive(changingConfigurations = false)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        lockWhenInactive(isChangingConfigurations)
+    }
+
+    @androidx.annotation.RequiresApi(29)
+    override fun onTopResumedActivityChanged(isTopResumedActivity: Boolean) {
+        super.onTopResumedActivityChanged(isTopResumedActivity)
+        if (!isTopResumedActivity) lockWhenInactive(isChangingConfigurations)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        lockWhenInactive(isChangingConfigurations)
+    }
+
+    private fun lockWhenInactive(changingConfigurations: Boolean) {
+        // The editor can be absent from composition while authentication is showing.
+        if (shellOwner.isInitialized()) shellViewModel.onStop()
+        lockSession.background(changingConfigurations)
+    }
+
+    private fun requestLockChange(enabled: Boolean) {
+        requestAuthentication(enabled)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun requestAuthentication(changeLock: Boolean? = null) {
+        val intent = keyguard.createConfirmDeviceCredentialIntent(getString(R.string.app_name), getString(R.string.lock_message))
+        if (intent == null) {
+            configureDeviceLock()
+            return
+        }
+        if (changeLock != null) shellViewModel.onStop()
+        if (!lockSession.begin(changeLock)) return
+        try {
+            authenticate.launch(intent)
+        } catch (_: android.content.ActivityNotFoundException) {
+            lockSession.finish(false)
+        } catch (_: SecurityException) {
+            lockSession.finish(false)
+        }
+    }
+
+    private fun configureDeviceLock() {
+        try {
+            startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+        } catch (_: android.content.ActivityNotFoundException) {
+            deviceSecure = false
+        } catch (_: SecurityException) {
+            deviceSecure = false
         }
     }
 

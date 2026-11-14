@@ -524,7 +524,13 @@ class DuckShellViewModel @Inject constructor(
     fun onSetTagIcon(tagId: String, iconKey: String?) = tagMetadata { setTagIcon(tagId, iconKey) }
     private fun tagMetadata(action: suspend () -> Unit) {
         viewModelScope.launch {
-            try { action() } catch (cancelled: CancellationException) { throw cancelled }
+            try {
+                writeLock.withLock {
+                    pendingUndo = null
+                    undo.value = null
+                    action()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { operationFailure.value = OperationFailure.Change }
         }
     }
@@ -613,10 +619,11 @@ class DuckShellViewModel @Inject constructor(
     fun onUndo() {
         viewModelScope.launch {
             val pending = pendingUndo ?: return@launch
-            pendingUndo = null
-            undo.value = null
             try {
                 writeLock.withLock {
+                    if (pendingUndo !== pending) return@withLock
+                    pendingUndo = null
+                    undo.value = null
                     val affected = (retired.toList() + listOfNotNull(editorSession))
                         .filter { it.noteId in pending.snapshot.bodies }
                     check(affected.all { it.buffer.text.toString() == pending.expectedBodies[it.noteId] }) {

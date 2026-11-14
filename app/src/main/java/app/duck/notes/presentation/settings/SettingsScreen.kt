@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -48,6 +50,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onTheme: (ThemePreference) -> Unit,
     onRetry: () -> Unit,
+    canAuthenticate: Boolean,
+    onLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = DuckTheme.colors
@@ -74,7 +78,16 @@ fun SettingsScreen(
                 SettingsRadio(stringResource(R.string.settings_dark), settings.theme == ThemePreference.Dark, !pendingWrite) { onTheme(ThemePreference.Dark) }
             }
             SettingsHeading(stringResource(R.string.settings_app_lock))
-            Text(stringResource(R.string.settings_lock_pending), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            val lockLabel = stringResource(R.string.lock_setting)
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                .toggleable(settings.lockEnabled, enabled = !pendingWrite, role = Role.Switch, onValueChange = onLockChange),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(lockLabel, style = DuckTheme.type.uiBody, color = colors.onSurface, modifier = Modifier.weight(1f))
+                Switch(checked = settings.lockEnabled, onCheckedChange = null, enabled = !pendingWrite)
+            }
+            Text(stringResource(if (canAuthenticate) R.string.lock_explanation else R.string.lock_setup_required),
+                style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            Text(stringResource(R.string.privacy_storage), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
             SettingsHeading(stringResource(R.string.settings_about))
             Image(painterResource(R.drawable.duck_mascot), contentDescription = null,
                 modifier = Modifier.size(64.dp), colorFilter = ColorFilter.tint(colors.chromeMuted))

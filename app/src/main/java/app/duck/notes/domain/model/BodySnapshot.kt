@@ -17,7 +17,7 @@ package app.duck.notes.domain.model
  * @param bodies note id to body as it was. Held in memory for the life of the Snackbar only —
  *   **not durable across process death**, and N full bodies wide. A durable undo is an operation
  *   log, which is Phase 8's undo/redo stack or nothing.
- * @param tags the rows as they were, so pin and icon survive. `NoteDao.ensureTag` mints a fresh
+ * @param tags source rows and preexisting destinations as they were, so undo restores pin and icon. `NoteDao.ensureTag` mints a fresh
  *   UUID with no customization, so it has to be written back on top of whatever row now holds the
  *   name.
  * @param createdNames names the operation brought into existence — rename's targets; empty for

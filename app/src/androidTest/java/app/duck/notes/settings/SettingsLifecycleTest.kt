@@ -57,8 +57,8 @@ import org.junit.runner.RunWith
  * Lifecycle, buffer sync, state sharing and flush stay on real Main; stop tests hold autosave at 0.
  * HiltTestApplication makes this isolated Activity coverage, not production Application startup.
  *
- * Named plants in real DuckScreen.kt, each a single anchored deletion of
- * LifecycleEventEffect(Lifecycle.Event.ON_STOP) { shellViewModel.onStop() }:
+ * Named plants in MainActivity.lockWhenInactive, each a single anchored deletion of
+ * if (shellOwner.isInitialized()) shellViewModel.onStop():
  * ON_STOP_EDITOR_NO_FLUSH -> editorStopWritesActualRoomWhileRealDebounceRemainsAtZero.
  * ON_STOP_SETTINGS_NO_FLUSH -> settingsOpenStopWritesActualRoomWhileRealDebounceRemainsAtZero.
  * A build/runtime failure is not the intended assertion RED. Both must fail their Room-save

@@ -157,7 +157,7 @@
     <string name="settings_dark">Dark</string>
     <string name="settings_version">Version %1$s (%2$s)</string>
     <string name="settings_write_failed">Could not save the change. Try again.</string>
-    <string name="settings_reset">Settings were reset after an unreadable settings file.</string>
+    <string name="settings_reset">Settings were reset after an unreadable file. App lock was enabled for safety.</string>
     <string name="settings_read_failed">Settings could not be read. Temporary defaults are in use.</string>
     <string name="settings_startup_timeout">Settings are taking longer to load. Temporary defaults are in use.</string>
     <string name="settings_retry">Retry</string>
@@ -200,4 +200,10 @@
     <string name="search_pending">Searching…</string>
     <string name="search_failed">Search failed. Try again.</string>
     <string name="search_empty">No matching notes</string>
+    <string name="lock_message">Unlock Duck Notes with your device screen lock.</string>
+    <string name="lock_setup">Set device screen lock</string>
+    <string name="lock_setup_required">Set a PIN, pattern, or password in Android settings to use app lock.</string>
+    <string name="lock_setting">Require device screen lock</string>
+    <string name="lock_explanation">Locks whenever Duck Notes leaves the foreground. Your device PIN, pattern, or password also protects this lock.</string>
+    <string name="privacy_storage">Screenshots and Recents previews are blocked. Files use Android private storage, not separate app encryption. Cloud backup requires an encrypted transport and remains subject to Android backup limits.</string>
 </resources>

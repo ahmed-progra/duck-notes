@@ -30,10 +30,9 @@ object WikiLinkScanner {
      */
     fun matchAt(line: String, i: Int): Int? {
         if (!line.startsWith("[[", i)) return null
-        val close = line.indexOf("]]", i + 2)
-        if (close < 0) return null
-        for (k in i + 2 until close) if (line[k] == '[' || line[k] == ']') return null
-        return if (close > i + 2) close + 2 else null
+        var close = i + 2
+        while (close < line.length && line[close] != '[' && line[close] != ']') close++
+        return if (close > i + 2 && line.startsWith("]]", close)) close + 2 else null
     }
 
     /**

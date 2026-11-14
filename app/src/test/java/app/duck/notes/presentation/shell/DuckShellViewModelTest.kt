@@ -33,6 +33,7 @@ import app.duck.notes.domain.usecase.RenameTag
 import app.duck.notes.domain.usecase.SaveNote
 import app.duck.notes.domain.usecase.SetTagIcon
 import app.duck.notes.domain.usecase.UndoTagChange
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -45,6 +46,9 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -423,4 +427,92 @@ class DuckShellViewModelTest {
         settle()
         assertEquals(false, vm.state.value.infoOpen)
     }
+    /** Dispatch-only guard; real tag customization and merge restoration are in TagRewriteTest.
+     * Plant TAG_METADATA_UNDO: omit pendingUndo/undo invalidation in tagMetadata.
+     */
+    @Test fun pinMetadataInvalidatesThePreviousUndo() = runShell { vm, settle ->
+        vm.onRenameTag("work", "job")
+        settle()
+        assertNotNull(vm.state.value.undo)
+        vm.onUndo()
+        settle()
+        assertEquals("positive control: undo reaches the repository", 1, tags.restores.size)
+        vm.onRenameTag("work", "job")
+        settle()
+        assertNotNull(vm.state.value.undo)
+        vm.onPinTag("work", true)
+        settle()
+        assertTrue(tags.current().single { it.id == "work" }.isPinned)
+        assertNull(vm.state.value.undo)
+        vm.onUndo()
+        settle()
+        assertEquals("a later metadata action invalidates the old snapshot", 1, tags.restores.size)
+    }
+
+    @Test fun iconMetadataInvalidatesThePreviousUndo() = runShell { vm, settle ->
+        vm.onRenameTag("work", "job")
+        settle()
+        assertNotNull(vm.state.value.undo)
+        vm.onSetTagIcon("work", "star")
+        settle()
+        assertEquals("star", tags.current().single { it.id == "work" }.iconKey)
+        assertNull(vm.state.value.undo)
+        vm.onUndo()
+        settle()
+        assertTrue(tags.restores.isEmpty())
+    }
+
+    /** Plant TAG_METADATA_RACE: execute metadata without the actual ViewModel writeLock. */
+    @Test fun tagMetadataWaitsForAnInFlightUndo() = runShell { vm, settle ->
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        tags.afterRestore = { entered.complete(Unit); release.await() }
+        vm.onRenameTag("work", "job")
+        settle()
+        vm.onUndo()
+        settle()
+        assertTrue("positive control: the real ViewModel reached the suspended repository call", entered.isCompleted)
+        try {
+            vm.onPinTag("work", true)
+            settle()
+            assertFalse("metadata must wait until the in-flight undo releases the writer", tags.current().single { it.id == "work" }.isPinned)
+        } finally {
+            release.complete(Unit)
+            settle()
+            tags.afterRestore = {}
+        }
+        assertTrue("positive control: metadata eventually writes", tags.current().single { it.id == "work" }.isPinned)
+    }
+
+    /** Plant TAG_UNDO_STALE_CANDIDATE: remove onUndo's identity check after acquiring writeLock. */
+    @Test fun tagMetadataInvalidationRejectsAnAlreadyQueuedUndoCandidate() = runShell { vm, settle ->
+        vm.onRenameTag("work", "job")
+        settle()
+        vm.onUndo()
+        settle()
+        assertEquals("positive control: restore dispatch works", 1, tags.restores.size)
+        vm.onRenameTag("work", "secondjob")
+        settle()
+        assertEquals("secondjob", vm.state.value.undo?.tagName)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        tags.beforeRename = { entered.complete(Unit); release.await() }
+        vm.onRenameTag("work", "thirdjob")
+        settle()
+        assertTrue("positive control: another operation holds the real ViewModel writer", entered.isCompleted)
+        try {
+            vm.onPinTag("work", true)
+            vm.onUndo()
+            settle()
+            assertFalse("positive control: metadata is still queued", tags.current().single { it.id == "work" }.isPinned)
+        } finally {
+            release.complete(Unit)
+            settle()
+            tags.beforeRename = {}
+        }
+        assertTrue(tags.current().single { it.id == "work" }.isPinned)
+        assertEquals("the stale queued Undo must not reach restore", 1, tags.restores.size)
+        assertNull(vm.state.value.undo)
+    }
+
 }

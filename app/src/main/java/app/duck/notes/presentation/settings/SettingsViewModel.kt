@@ -54,6 +54,7 @@ class SettingsViewModel @Inject constructor(
     private val startupTimedOut = MutableStateFlow(false)
     internal var firstLaunchElapsedMs: Long? = null
         private set
+    private var lastRequestedLock: Boolean? = null
     private var lastRequestedTheme: ThemePreference? = null
 
     val uiState = combine(snapshot, pendingWrite, writeFailed, startupTimedOut) {
@@ -74,10 +75,31 @@ class SettingsViewModel @Inject constructor(
         pendingWrite.value = true
         writeFailed.value = false
         lastRequestedTheme = value
+        lastRequestedLock = null
         viewModelScope.launch {
             try {
                 repository.setTheme(value)
                 lastRequestedTheme = null
+            } catch (failure: CancellationException) {
+                throw failure
+            } catch (_: Exception) {
+                writeFailed.value = true
+            } finally {
+                pendingWrite.value = false
+            }
+        }
+    }
+
+    fun setLockEnabled(value: Boolean) {
+        if (pendingWrite.value) return
+        pendingWrite.value = true
+        writeFailed.value = false
+        lastRequestedLock = value
+        lastRequestedTheme = null
+        viewModelScope.launch {
+            try {
+                repository.setLockEnabled(value)
+                lastRequestedLock = null
             } catch (failure: CancellationException) {
                 throw failure
             } catch (_: Exception) {
@@ -94,7 +116,12 @@ class SettingsViewModel @Inject constructor(
 
     fun retry() {
         val theme = lastRequestedTheme
-        if (writeFailed.value && theme != null) setTheme(theme) else retryRead()
+        val lock = lastRequestedLock
+        when {
+            writeFailed.value && lock != null -> setLockEnabled(lock)
+            writeFailed.value && theme != null -> setTheme(theme)
+            else -> retryRead()
+        }
     }
 
     fun retainFirstLaunch(startElapsedMs: Long) {

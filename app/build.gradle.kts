@@ -14,8 +14,8 @@ android {
         applicationId = "app.duck.notes"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
         testInstrumentationRunner = "app.duck.notes.settings.SettingsTestRunner"
         testInstrumentationRunnerArguments["notClass"] = "app.duck.notes.startup.WelcomeStartupTest,app.duck.notes.startup.WelcomeStartupGateTest,app.duck.notes.startup.OfflineActivityTest,app.duck.notes.data.repository.BackupTransportTest"
     }

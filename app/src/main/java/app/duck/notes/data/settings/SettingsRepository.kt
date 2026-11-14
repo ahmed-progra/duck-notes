@@ -6,7 +6,7 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.duck.notes.di.SettingsScope
@@ -38,7 +38,8 @@ internal fun createSettingsDataStore(
 ): DataStore<Preferences> = PreferenceDataStoreFactory.create(
     corruptionHandler = ReplaceFileCorruptionHandler {
         notices.value = SettingsNotice.ResetAfterCorruption
-        emptyPreferences()
+        // Unknown security settings must not silently disable app lock, including after restart.
+        mutablePreferencesOf(booleanPreferencesKey("lock_enabled") to true)
     },
     scope = scope,
     produceFile = { file },
@@ -114,7 +115,7 @@ class SettingsRepository @Inject constructor(
         return AppSettings(
             theme = ThemePreference.entries.firstOrNull { it.storedValue == storedTheme }
                 ?: ThemePreference.System,
-            lockEnabled = values["lock_enabled"] as? Boolean ?: false,
+            lockEnabled = values["lock_enabled"] as? Boolean ?: values.containsKey("lock_enabled"),
             lockTimeoutMs = timeout,
             hideRecents = values["hide_recents"] as? Boolean ?: true,
         )

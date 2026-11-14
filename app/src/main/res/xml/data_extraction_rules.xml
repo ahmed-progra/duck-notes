@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
-    <cloud-backup>
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
         <include domain="database" path="duck.db" />
         <include domain="database" path="duck.db-wal" />
         <include domain="database" path="duck.db-shm" />

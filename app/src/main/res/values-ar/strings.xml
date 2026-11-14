@@ -128,7 +128,7 @@
     <string name="settings_dark">داكن</string>
     <string name="settings_version">الإصدار %1$s (%2$s)</string>
     <string name="settings_write_failed">تعذر حفظ التغيير. أعد المحاولة.</string>
-    <string name="settings_reset">أُعيد ضبط الإعدادات لتعذر قراءة ملفها.</string>
+    <string name="settings_reset">أُعيد ضبط الإعدادات بسبب ملف غير قابل للقراءة. فُعّل قفل التطبيق للحماية.</string>
     <string name="settings_read_failed">تعذرت قراءة الإعدادات. تُستخدم إعدادات افتراضية مؤقتًا.</string>
     <string name="settings_startup_timeout">يستغرق تحميل الإعدادات وقتًا أطول. تُستخدم إعدادات افتراضية مؤقتًا.</string>
     <string name="settings_retry">إعادة المحاولة</string>
@@ -172,4 +172,10 @@
     <string name="search_pending">جارٍ البحث…</string>
     <string name="search_failed">تعذّر البحث. حاول مرة أخرى.</string>
     <string name="search_empty">لا توجد ملاحظات مطابقة</string>
+    <string name="lock_message">افتح Duck Notes باستخدام قفل شاشة جهازك.</string>
+    <string name="lock_setup">إعداد قفل شاشة الجهاز</string>
+    <string name="lock_setup_required">عيّن رمز PIN أو نمطًا أو كلمة مرور في إعدادات Android لاستخدام قفل التطبيق.</string>
+    <string name="lock_setting">طلب قفل شاشة الجهاز</string>
+    <string name="lock_explanation">يُقفل التطبيق كلما غادر الواجهة. يحميه رمز PIN أو النمط أو كلمة مرور جهازك.</string>
+    <string name="privacy_storage">تُحجب لقطات الشاشة ومعاينات التطبيقات الحديثة. تستخدم الملفات مساحة Android الخاصة دون تشفير إضافي للتطبيق. يتطلب النسخ السحابي وسيلة نقل مشفرة ويخضع لحدود Android.</string>
 </resources>

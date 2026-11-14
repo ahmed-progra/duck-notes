@@ -85,7 +85,10 @@ class FakeTagRepository(
         tags.value = tags.value.map { if (it.id == tagId) it.copy(iconKey = iconKey) else it }
     }
 
+    var beforeRename: suspend () -> Unit = {}
+
     override suspend fun rename(from: String, to: String): BodySnapshot {
+        beforeRename()
         renames += from to to
         return rewriteAll { TagScanner.rename(it, from, to) }
     }

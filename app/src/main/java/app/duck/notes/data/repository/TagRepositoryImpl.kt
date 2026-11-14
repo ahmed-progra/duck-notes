@@ -81,13 +81,14 @@ class TagRepositoryImpl @Inject constructor(
         val affected = notes.notesByTagPathOnce(from)
         val oldRows = tags.rowsUnderPath(from).map { it.toDomain() }
         val newNames = oldRows.map { to + it.name.removePrefix(from) }
+        val previousTargets = newNames.mapNotNull { tags.getByName(it)?.toDomain() }
         val createdNames = newNames.filter { tags.getByName(it) == null }
 
         oldRows.forEach { tags.deleteByName(it.name) }
         val bodies = rewriteAll(affected) { TagScanner.rename(it, from, to) }
         carryCustomization(oldRows, newNames)
 
-        BodySnapshot(bodies = bodies, tags = oldRows, createdNames = createdNames)
+        BodySnapshot(bodies = bodies, tags = (oldRows + previousTargets).distinctBy { it.name }, createdNames = createdNames)
     }
 
     /**
@@ -116,6 +117,7 @@ class TagRepositoryImpl @Inject constructor(
      * source IDs cannot move a restored name out from under another source row.
      * The editor supplies expected post-operation bodies; conflicts reject the whole transaction
      * before any restore writes, so later saved text cannot be overwritten by an old snapshot.
+     * shortcut: UI metadata actions invalidate Undo; add metadata conflict tracking before adding another restore caller.
      */
     override suspend fun restore(snapshot: BodySnapshot, expectedBodies: Map<String, String>?) = inTransaction {
         if (expectedBodies != null) {

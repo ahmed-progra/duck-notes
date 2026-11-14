@@ -3,6 +3,7 @@ package app.duck.notes.data.repository
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.test.filters.SdkSuppress
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.core.files.AttachmentFiles
@@ -58,18 +59,21 @@ class BackupRestorationTest {
 
     /** Plant BACKUP_LEGACY_DROP_DATABASE: change the duck.db include path to missing.db. */
     @Test
+    @SdkSuppress(minSdkVersion = 28)
     fun legacyPackagedRulesRestoreClosedDatabaseImagesAndPreferences() = runBlocking<Unit> {
         restoreRoundTrip(RuleSet.Legacy)
     }
 
     /** Plant BACKUP_CLOUD_DROP_SETTINGS: change the cloud settings.preferences_pb include path. */
     @Test
+    @SdkSuppress(minSdkVersion = 31)
     fun cloudPackagedRulesRestoreClosedDatabaseImagesAndPreferences() = runBlocking<Unit> {
         restoreRoundTrip(RuleSet.Cloud)
     }
 
     /** Plant BACKUP_TRANSFER_DROP_IMAGES: change the device-transfer attachments include path. */
     @Test
+    @SdkSuppress(minSdkVersion = 31)
     fun deviceTransferPackagedRulesRestoreClosedDatabaseImagesAndPreferences() = runBlocking<Unit> {
         restoreRoundTrip(RuleSet.Transfer)
     }
@@ -265,10 +269,18 @@ class BackupRestorationTest {
             var active = false
             while (xml.eventType != XmlPullParser.END_DOCUMENT) {
                 if (xml.eventType == XmlPullParser.START_TAG) {
-                    if (xml.name == mode.section) active = true
+                    if (xml.name == mode.section) {
+                        active = true
+                        if (mode == RuleSet.Cloud) assertTrue("cloud must require encryption capabilities",
+                            xml.getAttributeBooleanValue(null, "disableIfNoEncryptionCapabilities", false))
+                    }
                     if (active && xml.name in setOf("include", "exclude")) {
-                        // Fail rather than silently invent semantics for future conditional rules.
-                        assertNull("transport flags require a dedicated transport test", xml.getAttributeValue(null, "requireFlags"))
+                        // This copier models an eligible transport; capability gating needs real bmgr coverage.
+                        val flags = xml.getAttributeValue(null, "requireFlags")
+                        if (mode == RuleSet.Legacy && xml.name == "include") {
+                            assertTrue("unknown transport requirement: $flags",
+                                flags in setOf("clientSideEncryption", "deviceToDeviceTransfer"))
+                        } else assertNull(flags)
                         val domain = requireNotNull(xml.getAttributeValue(null, "domain"))
                         check(domain in setOf("file", "database")) { "Unsupported domain in test copier: $domain" }
                         val path = requireNotNull(xml.getAttributeValue(null, "path")).trimEnd('/')

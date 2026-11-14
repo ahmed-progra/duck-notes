@@ -18,8 +18,6 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.duck.notes.R
 import app.duck.notes.core.theme.DuckTheme
@@ -32,6 +30,8 @@ import app.duck.notes.presentation.shell.DuckShellViewModel
 /** Retains the real editor owner and registered scroll state while Settings occupies the screen. */
 @Composable
 fun DuckScreen(
+    canAuthenticate: Boolean,
+    onLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     settingsViewModel: SettingsViewModel = hiltViewModel(),
     shellViewModel: DuckShellViewModel = hiltViewModel(),
@@ -39,8 +39,6 @@ fun DuckScreen(
     val ui by settingsViewModel.uiState.collectAsStateWithLifecycle()
     val settingsOpen by settingsViewModel.settingsOpen.collectAsStateWithLifecycle()
     val savedViews = rememberSaveableStateHolder()
-    // Saving belongs to the retained owner, including while its editor is absent from composition.
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { shellViewModel.onStop() }
     BackHandler(enabled = settingsOpen) { settingsViewModel.closeSettings() }
     val notice = when {
         ui.writeFailed -> stringResource(R.string.settings_write_failed)
@@ -65,7 +63,8 @@ fun DuckScreen(
                     SettingsScreen(ui.snapshot.settings, ui.pendingWrite, notice,
                         onBack = settingsViewModel::closeSettings,
                         onTheme = settingsViewModel::setTheme,
-                        onRetry = settingsViewModel::retry)
+                        onRetry = settingsViewModel::retry,
+                        canAuthenticate = canAuthenticate, onLockChange = onLockChange)
                 }
             } else {
                 savedViews.SaveableStateProvider("shell") {

@@ -2,6 +2,10 @@
     <permission android:name="app.duck.notes.test.READ_IMAGES" android:protectionLevel="signature" />
     <uses-permission android:name="app.duck.notes.test.READ_IMAGES" />
     <application>
+        <activity
+            android:name="app.duck.notes.settings.PauseOnlyOverlayActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <provider
             android:name="app.duck.notes.data.repository.ImageSourceProvider"
             android:authorities="app.duck.notes.test.images"
