@@ -10,6 +10,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -23,35 +31,7 @@ import app.duck.notes.core.ui.DuckIconButton
 import app.duck.notes.domain.markdown.FormatAction
 import app.duck.notes.domain.markdown.MarkdownFormat
 
-/**
- * Nine format buttons over the keyboard, plus — since 8d-d — one focus-mode toggle at the trailing
- * end when [onEnterFocus] is supplied. The whole of Phase 8c-a's UI, grown by one control.
- *
- * The focus button is deliberately **not** a [FormatAction]: it writes nothing to the buffer, so it
- * has no `MarkdownFormat` arm and does not touch the `FormatAction.entries.size` guard. It rides the
- * same `DuckIconButton` (and its `ContrastTest` distinguishability row) as the format glyphs. Once
- * focus mode is on the whole toolbar is not rendered, so this button only ever *enters*; exit is the
- * persistent icon `DuckShell` floats at the top corner.
- *
- * It holds **no markdown knowledge**: every literal it writes comes from `MarkdownFormat`, which in
- * turn takes it from `MarkdownScanner`. `MarkdownFormatSourceTest` enforces that by scanning this
- * file for syntax literals — a `"**"` here would be the third implementation of Duck's markdown, one
- * layer up from the `[[WikiLink]]` defect Phase 9 documents.
- *
- * ## The edit is an ordinary edit
- *
- * `state.edit { }` is what the user's own typing goes through, so a toolbar press is
- * indistinguishable from typing to everything downstream: `snapshotFlow { buffer.text }` emits, the
- * 400ms debounce runs, and `DuckShellViewModel.save` writes. **No new write path, no `flush()`, no
- * lock.** It must never route through `rewriteBuffer`, which suppresses the snapshot notification and
- * clears undo history because it exists for *external* rewrites — a toolbar press is neither.
- *
- * ## No toggled state
- *
- * A button inserts syntax; it does not report whether the caret is already bold. That keeps every
- * button to the two states `DuckIconButton` already paints and already has a `ContrastTest`
- * distinguishability row for. Active-state highlighting would owe a third colour and a new row.
- */
+/** Formatting and editing commands share the session buffer, undo history and autosave path. */
 @Composable
 fun FormatToolbar(
     state: TextFieldState,
@@ -61,6 +41,7 @@ fun FormatToolbar(
     onEnterFocus: (() -> Unit)? = null,
     onToggleInfo: (() -> Unit)? = null,
     onAddImage: (() -> Unit)? = null,
+    onFind: (() -> Unit)? = null,
 ) {
     val colors = DuckTheme.colors
 
@@ -69,8 +50,7 @@ fun FormatToolbar(
         // separate from the page as a plane there. Same argument as the shell's vertical pane rules.
         DuckDivider()
         Row(
-            // Nine 48dp targets is 432dp — wider than a 360dp phone. Scrolling rather than shrinking
-            // the targets: 48dp is the accessibility floor, not a starting suggestion.
+            // Preserve full touch targets; secondary commands live in the overflow menu.
             modifier = Modifier.horizontalScroll(rememberScrollState()),
         ) {
             val addImageLabel = stringResource(R.string.attachment_add)
@@ -79,13 +59,30 @@ fun FormatToolbar(
                     androidx.compose.material3.Text(stringResource(R.string.attachment_add))
                 }
             }
-            FormatAction.entries.forEach { action ->
+            DuckIconButton(R.drawable.duckformat_undo, stringResource(R.string.editor_undo),
+                enabled = canEdit() && state.undoState.canUndo, onClick = { if (canEdit()) state.undoState.undo() })
+            DuckIconButton(R.drawable.duckformat_redo, stringResource(R.string.editor_redo),
+                enabled = canEdit() && state.undoState.canRedo, onClick = { if (canEdit()) state.undoState.redo() })
+            listOf(FormatAction.BOLD, FormatAction.ITALIC).forEach { action ->
                 DuckIconButton(
                     icon = action.icon,
                     contentDescription = stringResource(action.label),
                     enabled = enabled,
                     onClick = { if (canEdit()) state.applyFormat(action) },
                 )
+            }
+            Box {
+                var expanded by remember { mutableStateOf(false) }
+                DuckIconButton(R.drawable.duckformat_more, stringResource(R.string.editor_format_more), onClick = { expanded = true })
+                DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+                    FormatAction.entries.filter { it != FormatAction.BOLD && it != FormatAction.ITALIC }.forEach { action ->
+                        DropdownMenuItem(text = { Text(stringResource(action.label)) }, enabled = enabled,
+                            onClick = { expanded = false; if (canEdit()) state.applyFormat(action) })
+                    }
+                    onFind?.let { find ->
+                        DropdownMenuItem(text = { Text(stringResource(R.string.editor_find)) }, onClick = { expanded = false; find() })
+                    }
+                }
             }
             // Focus toggle trails the format actions. `enabled = true` unconditionally — entering
             // focus mode has nothing to do with whether the caret sits in writable markdown.

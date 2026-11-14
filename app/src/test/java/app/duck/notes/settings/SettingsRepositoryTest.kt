@@ -48,6 +48,47 @@ import org.junit.rules.TemporaryFolder
 class SettingsRepositoryTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    /** Plant: omit editor/language parsing; reopened values revert to defaults. */
+    @Test fun writingPreferencesSurviveReopeningTheRealStore() = runBlocking {
+        val file = newSettingsFile()
+        val first = open(file)
+        try {
+            first.repository.setLanguage(app.duck.notes.domain.model.LanguagePreference.Arabic)
+            first.repository.setEditorFont(app.duck.notes.domain.model.EditorFont.Mono)
+            first.repository.setEditorSize(22)
+        } finally { first.close() }
+        val reopened = open(file)
+        try {
+            val settings = ready(reopened).settings
+            assertEquals(app.duck.notes.domain.model.LanguagePreference.Arabic, settings.language)
+            assertEquals(app.duck.notes.domain.model.EditorFont.Mono, settings.editorFont)
+            assertEquals(22, settings.editorSizeSp)
+        } finally { reopened.close() }
+    }
+
+    @Test fun invalidWritingPreferencesUseDefaultsAndSetterRejectsOutOfRangeSizes() = runBlocking {
+        val file = newSettingsFile()
+        val first = open(file)
+        try {
+            for (size in listOf(13, 25)) {
+                try { first.repository.setEditorSize(size); fail("invalid size accepted") }
+                catch (_: IllegalArgumentException) { }
+            }
+            first.store.edit {
+                it[stringPreferencesKey("language")] = "unsupported"
+                it[stringPreferencesKey("editor_font")] = "unsupported"
+                it[intPreferencesKey("editor_size_sp")] = 999
+            }
+        } finally { first.close() }
+        val reopened = open(file)
+        try {
+            val settings = ready(reopened).settings
+            assertEquals(app.duck.notes.domain.model.LanguagePreference.System, settings.language)
+            assertEquals(app.duck.notes.domain.model.EditorFont.Serif, settings.editorFont)
+            assertEquals(17, settings.editorSizeSp)
+        } finally { reopened.close() }
+    }
+
     @Test fun missingKeysUseLiteralDefaults() = runBlocking {
         val opened = open(newSettingsFile())
         try {

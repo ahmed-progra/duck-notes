@@ -417,7 +417,7 @@ fun DuckShell(
                 }
             }
 
-            // Medium keeps the sidebar in the drawer and shows list + editor together: at 600-839dp
+            // Medium keeps the sidebar in the drawer and shows list + editor together: at 681-961dp
             // three panes leave the editor too narrow to read a serif body in.
             PaneMode.Medium -> DrawerHost(drawer, sidebar) {
                 Row(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -720,10 +720,5 @@ private fun DrawerHost(
 private val SIDEBAR = 280.dp
 private val NOTE_LIST = 320.dp
 
-/**
- * The Expanded info pane. Narrower than [NOTE_LIST] because its rows are single lines — a count, a
- * timestamp, a heading, a backlink title — not a title plus a two-line preview plus a timestamp. And
- * because Expanded starts at 840dp, where 280 + 320 + 280 already leaves the editor only 40dp of
- * slack at the breakpoint itself.
- */
+/** The information pane appears inline only when the editor retains at least 360dp. */
 private val INFO_PANE = 280.dp

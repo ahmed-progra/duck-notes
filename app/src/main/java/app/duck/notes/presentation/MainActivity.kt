@@ -97,6 +97,16 @@ class MainActivity : AppCompatActivity() {
                 settingsViewModel.snapshot.collect { snapshot ->
                     if (snapshot.readStatus != SettingsReadStatus.Loading) {
                         applyAppearance(snapshot.settings.theme)
+                        val locales = AppCompatDelegate.getApplicationLocales()
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            // Android owns app locales on 33+; retain external Settings changes.
+                            val language = app.duck.notes.domain.model.LanguagePreference.entries.firstOrNull {
+                                it.languageTag == (locales.get(0)?.language ?: "")
+                            } ?: app.duck.notes.domain.model.LanguagePreference.System
+                            if (language != snapshot.settings.language) settingsViewModel.syncSystemLanguage(language)
+                        } else if (locales.toLanguageTags() != snapshot.settings.language.languageTag) {
+                            AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.forLanguageTags(snapshot.settings.language.languageTag))
+                        }
                     }
                 }
             }
@@ -110,7 +120,7 @@ class MainActivity : AppCompatActivity() {
             val configuration = LocalConfiguration.current
             val systemDark = isNight(if (ui.snapshot.settings.theme == ThemePreference.System) systemResources.configuration else configuration)
             val dark = effectiveDark(ui.snapshot.settings.theme, systemDark)
-            DuckTheme(dark = dark) {
+            DuckTheme(dark = dark, editorFont = ui.snapshot.settings.editorFont, editorSizeSp = ui.snapshot.settings.editorSizeSp) {
                 if (welcomeState != WelcomeStartupState.Loading &&
                     (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut)) {
                     if (mayShowNotes(securitySnapshot, lock.authenticated) && !lock.authenticating) {

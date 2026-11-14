@@ -75,6 +75,18 @@ fun duckType(fonts: DuckFonts = DuckPlatformFonts): DuckType = DuckType(
     mono = fonts.mono,
 )
 
+/** Writing preferences affect prose roles; navigation and code retain their own families. */
+internal fun writingType(font: app.duck.notes.domain.model.EditorFont, sizeSp: Int): DuckType {
+    val family = when (font) {
+        app.duck.notes.domain.model.EditorFont.Serif -> DuckPlatformFonts.reading
+        app.duck.notes.domain.model.EditorFont.Sans -> DuckPlatformFonts.ui
+        app.duck.notes.domain.model.EditorFont.Mono -> DuckPlatformFonts.mono
+    }
+    val size = sizeSp.coerceIn(14, 24)
+    val base = duckType(DuckPlatformFonts.copy(reading = family))
+    return base.copy(noteBody = base.noteBody.copy(fontSize = size.sp, lineHeight = (size * 26f / 17f).sp))
+}
+
 /**
  * Material's own type scale, re-familied onto [DuckFonts.ui].
  *

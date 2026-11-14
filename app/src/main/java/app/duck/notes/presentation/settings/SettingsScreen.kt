@@ -39,6 +39,15 @@ import androidx.compose.ui.unit.dp
 import app.duck.notes.BuildConfig
 import app.duck.notes.R
 import app.duck.notes.core.theme.DuckTheme
+import app.duck.notes.domain.model.LanguagePreference
+import app.duck.notes.domain.model.EditorFont
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.material3.Slider
+import kotlin.math.roundToInt
 import app.duck.notes.domain.model.AppSettings
 import app.duck.notes.domain.model.ThemePreference
 
@@ -53,6 +62,9 @@ fun SettingsScreen(
     canAuthenticate: Boolean,
     onLockChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    onLanguage: (LanguagePreference) -> Unit = {},
+    onEditorFont: (EditorFont) -> Unit = {},
+    onEditorSize: (Int) -> Unit = {},
 ) {
     val colors = DuckTheme.colors
     val spacing = DuckTheme.spacing
@@ -70,7 +82,33 @@ fun SettingsScreen(
                 TextButton(onClick = onRetry, enabled = !pendingWrite) { Text(stringResource(R.string.settings_retry)) }
             }
             SettingsHeading(stringResource(R.string.settings_language))
-            Text(stringResource(R.string.settings_language_pending), style = DuckTheme.type.uiSecondary, color = colors.proseMuted)
+            Column(Modifier.selectableGroup()) {
+                LanguagePreference.entries.forEach { language ->
+                    val label = when (language) {
+                        LanguagePreference.System -> stringResource(R.string.settings_language_system)
+                        LanguagePreference.English -> stringResource(R.string.settings_language_english)
+                        LanguagePreference.Arabic -> stringResource(R.string.settings_language_arabic)
+                    }
+                    SettingsRadio(label, settings.language == language, !pendingWrite) { onLanguage(language) }
+                }
+            }
+            SettingsHeading(stringResource(R.string.settings_writing))
+            Column(Modifier.selectableGroup()) {
+                EditorFont.entries.forEach { font ->
+                    val label = when (font) {
+                        EditorFont.Serif -> R.string.settings_font_serif
+                        EditorFont.Sans -> R.string.settings_font_sans
+                        EditorFont.Mono -> R.string.settings_font_mono
+                    }
+                    SettingsRadio(stringResource(label), settings.editorFont == font, !pendingWrite) { onEditorFont(font) }
+                }
+            }
+            var draftSize by remember(settings.editorSizeSp) { mutableFloatStateOf(settings.editorSizeSp.toFloat()) }
+            val sizeLabel = stringResource(R.string.settings_text_size, draftSize.roundToInt())
+            Text(sizeLabel, style = DuckTheme.type.uiBody, color = colors.onSurface)
+            Slider(value = draftSize, onValueChange = { draftSize = it }, valueRange = 14f..24f, steps = 9,
+                modifier = Modifier.semantics { contentDescription = sizeLabel },
+                enabled = !pendingWrite, onValueChangeFinished = { onEditorSize(draftSize.roundToInt()) })
             SettingsHeading(stringResource(R.string.settings_theme))
             Column(Modifier.selectableGroup()) {
                 SettingsRadio(stringResource(R.string.settings_system), settings.theme == ThemePreference.System, !pendingWrite) { onTheme(ThemePreference.System) }

@@ -55,7 +55,7 @@ import coil3.request.allowHardware
 import coil3.size.Precision
 
 /**
- * The attachment strip — a horizontal row of thumbnails under the editor, with a leading add tile.
+ * The attachment strip — a horizontal row of thumbnails under the editor, with an add tile when images are present.
  *
  * **Not inline rendering.** The phase spec's "images in the note" is a strip beside the body, not a
  * bitmap spliced into the rendered markdown. Inline would mean an `InlineTextContent` keyed off a

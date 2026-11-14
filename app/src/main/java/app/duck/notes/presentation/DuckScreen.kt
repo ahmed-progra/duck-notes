@@ -63,6 +63,9 @@ fun DuckScreen(
                     SettingsScreen(ui.snapshot.settings, ui.pendingWrite, notice,
                         onBack = settingsViewModel::closeSettings,
                         onTheme = settingsViewModel::setTheme,
+                        onLanguage = settingsViewModel::setLanguage,
+                        onEditorFont = settingsViewModel::setEditorFont,
+                        onEditorSize = settingsViewModel::setEditorSize,
                         onRetry = settingsViewModel::retry,
                         canAuthenticate = canAuthenticate, onLockChange = onLockChange)
                 }

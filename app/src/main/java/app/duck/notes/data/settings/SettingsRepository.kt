@@ -10,6 +10,9 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.duck.notes.di.SettingsScope
+import app.duck.notes.domain.model.LanguagePreference
+import app.duck.notes.domain.model.EditorFont
+import androidx.datastore.preferences.core.intPreferencesKey
 import app.duck.notes.domain.model.AppSettings
 import app.duck.notes.domain.model.SettingsNotice
 import app.duck.notes.domain.model.SettingsReadStatus
@@ -85,6 +88,22 @@ class SettingsRepository @Inject constructor(
         resumeReadAfterWrite()
     }
 
+    suspend fun setLanguage(value: LanguagePreference) {
+        dataStore.edit { it[stringPreferencesKey("language")] = value.languageTag }
+        resumeReadAfterWrite()
+    }
+
+    suspend fun setEditorFont(value: EditorFont) {
+        dataStore.edit { it[stringPreferencesKey("editor_font")] = value.storedValue }
+        resumeReadAfterWrite()
+    }
+
+    suspend fun setEditorSize(value: Int) {
+        require(value in 14..24)
+        dataStore.edit { it[intPreferencesKey("editor_size_sp")] = value }
+        resumeReadAfterWrite()
+    }
+
     suspend fun setLockEnabled(value: Boolean) {
         dataStore.edit { it[lockEnabledKey] = value }
         resumeReadAfterWrite()
@@ -113,6 +132,9 @@ class SettingsRepository @Inject constructor(
             it == 0L || it == 60_000L || it == 300_000L || it == 900_000L
         } ?: 60_000L
         return AppSettings(
+            language = LanguagePreference.entries.firstOrNull { it.languageTag == values["language"] } ?: LanguagePreference.System,
+            editorFont = EditorFont.entries.firstOrNull { it.storedValue == values["editor_font"] } ?: EditorFont.Serif,
+            editorSizeSp = (values["editor_size_sp"] as? Int)?.takeIf { it in 14..24 } ?: 17,
             theme = ThemePreference.entries.firstOrNull { it.storedValue == storedTheme }
                 ?: ThemePreference.System,
             lockEnabled = values["lock_enabled"] as? Boolean ?: values.containsKey("lock_enabled"),

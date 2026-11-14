@@ -48,11 +48,13 @@ val LocalDuckMotion = staticCompositionLocalOf { DefaultMotion }
 fun DuckTheme(
     spec: DuckThemeSpec = DuckThemeSpec.DuckRed,
     dark: Boolean = isSystemInDarkTheme(),
+    editorFont: app.duck.notes.domain.model.EditorFont = app.duck.notes.domain.model.EditorFont.Serif,
+    editorSizeSp: Int = 17,
     content: @Composable () -> Unit,
 ) {
     CompositionLocalProvider(
         LocalDuckColors provides spec.colors(dark),
-        LocalDuckType provides DefaultType,
+        LocalDuckType provides writingType(editorFont, editorSizeSp),
         LocalDuckSpacing provides DefaultSpacing,
         LocalDuckShapes provides DefaultShapes,
         // The one token family that answers to the system rather than to [spec].

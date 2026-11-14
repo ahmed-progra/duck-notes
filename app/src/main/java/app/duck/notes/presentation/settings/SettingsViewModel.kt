@@ -54,8 +54,7 @@ class SettingsViewModel @Inject constructor(
     private val startupTimedOut = MutableStateFlow(false)
     internal var firstLaunchElapsedMs: Long? = null
         private set
-    private var lastRequestedLock: Boolean? = null
-    private var lastRequestedTheme: ThemePreference? = null
+    private var pendingPreference: (suspend () -> Unit)? = null
 
     val uiState = combine(snapshot, pendingWrite, writeFailed, startupTimedOut) {
             snapshot, pendingWrite, writeFailed, startupTimedOut ->
@@ -70,58 +69,43 @@ class SettingsViewModel @Inject constructor(
         savedStateHandle["settings_open"] = false
     }
 
-    fun setTheme(value: ThemePreference) {
+    fun setTheme(value: ThemePreference) = writePreference { repository.setTheme(value) }
+
+    fun setLockEnabled(value: Boolean) = writePreference { repository.setLockEnabled(value) }
+
+    fun setLanguage(value: app.duck.notes.domain.model.LanguagePreference) = writePreference {
+        repository.setLanguage(value)
+        androidx.appcompat.app.AppCompatDelegate.setApplicationLocales(androidx.core.os.LocaleListCompat.forLanguageTags(value.languageTag))
+    }
+
+    fun syncSystemLanguage(value: app.duck.notes.domain.model.LanguagePreference) = writePreference { repository.setLanguage(value) }
+
+    fun setEditorFont(value: app.duck.notes.domain.model.EditorFont) = writePreference { repository.setEditorFont(value) }
+
+    fun setEditorSize(value: Int) = writePreference { repository.setEditorSize(value) }
+
+    private fun writePreference(write: suspend () -> Unit) {
         if (pendingWrite.value) return
         pendingWrite.value = true
         writeFailed.value = false
-        lastRequestedTheme = value
-        lastRequestedLock = null
+        pendingPreference = write
         viewModelScope.launch {
             try {
-                repository.setTheme(value)
-                lastRequestedTheme = null
+                write()
+                pendingPreference = null
             } catch (failure: CancellationException) {
                 throw failure
             } catch (_: Exception) {
                 writeFailed.value = true
-            } finally {
-                pendingWrite.value = false
-            }
+            } finally { pendingWrite.value = false }
         }
     }
 
-    fun setLockEnabled(value: Boolean) {
-        if (pendingWrite.value) return
-        pendingWrite.value = true
-        writeFailed.value = false
-        lastRequestedLock = value
-        lastRequestedTheme = null
-        viewModelScope.launch {
-            try {
-                repository.setLockEnabled(value)
-                lastRequestedLock = null
-            } catch (failure: CancellationException) {
-                throw failure
-            } catch (_: Exception) {
-                writeFailed.value = true
-            } finally {
-                pendingWrite.value = false
-            }
-        }
-    }
-
-    fun retryRead() {
-        repository.retryRead()
-    }
+    fun retryRead() { repository.retryRead() }
 
     fun retry() {
-        val theme = lastRequestedTheme
-        val lock = lastRequestedLock
-        when {
-            writeFailed.value && lock != null -> setLockEnabled(lock)
-            writeFailed.value && theme != null -> setTheme(theme)
-            else -> retryRead()
-        }
+        val write = pendingPreference
+        if (writeFailed.value && write != null) writePreference(write) else retryRead()
     }
 
     fun retainFirstLaunch(startElapsedMs: Long) {
