@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PortableImageReferenceTest {
-    /** Plant: replace all matching text; fenced and inline code examples must remain unchanged. */
+    /** Plant: reset the production image scan's fence carry; fenced examples get rewritten. */
     @Test fun rewritesOnlyParsedImageDestinations() {
         val body = "![outside](attachment:a)\n`![code](attachment:a)`\n```md\n![fenced](attachment:a)\n```\n[ordinary](attachment:a)"
         val expected = "![outside](assets/a.png)\n`![code](attachment:a)`\n```md\n![fenced](attachment:a)\n```\n[ordinary](attachment:a)"

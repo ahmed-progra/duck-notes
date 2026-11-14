@@ -13,6 +13,7 @@ class NotePreviewTest {
         assertEquals("Bold and example and Target", preview("# Title\n\n**Bold** and [example](https://example.com) and [[Target]]"))
     }
 
+    /** Plant: raise production PREVIEW_CHARS from 200 to 201; the literal bound must fail. */
     @Test fun previewIsBoundedAndKeepsArabic() {
         assertTrue(preview("Title\n" + "ملاحظة ".repeat(20000)).length <= 200)
         assertEquals("ملاحظة عربية", preview("Title\nملاحظة عربية"))

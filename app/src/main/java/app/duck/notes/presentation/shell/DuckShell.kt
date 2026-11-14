@@ -10,6 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -50,6 +51,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -75,6 +77,8 @@ import app.duck.notes.core.ui.DuckTagChip
 import app.duck.notes.presentation.markdown.MarkdownEditorScreen
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * The three-pane shell: sidebar, note list, editor.
@@ -127,10 +131,25 @@ fun DuckShell(
     noteSortPending: Boolean = false,
     onImport: (() -> Unit)? = null,
     onExport: ((String?, Boolean) -> Unit)? = null,
+    canUseImages: () -> Boolean = { true },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val owner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val imageSelection by viewModel.imagePickerSelection.collectAsStateWithLifecycle()
+    val lifecycle by owner.lifecycle.currentStateFlow.collectAsState()
+    LaunchedEffect(imageSelection, lifecycle) {
+        val selected = imageSelection ?: return@LaunchedEffect
+        if (lifecycle != androidx.lifecycle.Lifecycle.State.RESUMED || !canUseImages()) return@LaunchedEffect
+        val mime = withContext(Dispatchers.IO) {
+            selected.uri?.let { value ->
+                app.duck.notes.presentation.markdown.resolveImageMime(android.net.Uri.parse(value)) { context.contentResolver.getType(it) }
+            } ?: "image/*"
+        }
+        if (owner.lifecycle.currentState == androidx.lifecycle.Lifecycle.State.RESUMED && canUseImages()) {
+            viewModel.consumeImagePickerSelection(selected, mime)
+        }
+    }
     val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales.get(0) ?: java.util.Locale.getDefault()
     LaunchedEffect(viewModel, noteSort, locale) { viewModel.onNoteSortChanged(noteSort, locale) }
     LaunchedEffect(viewModel) { while (true) { kotlinx.coroutines.delay(60_000L); viewModel.onTimeChanged() } }
@@ -171,7 +190,7 @@ fun DuckShell(
             onEditorAttached = viewModel::onEditorAttached,
             onEditorDetached = viewModel::onEditorDetached,
             onImagePickerOpened = { viewModel.onImagePickerOpened(state.editorSession) },
-            onImagePickerResult = viewModel::onImagePickerResult,
+            onImagePickerResult = { uri, _ -> viewModel.queueImagePickerSelection(uri) },
             onFilter = viewModel::onFilter,
             onSelectNote = viewModel::onSelectNote,
             onClearSelection = viewModel::onClearSelection,
@@ -218,12 +237,8 @@ fun DuckShell(
     BoxWithConstraints(modifier.fillMaxSize().background(colors.surface)) {
         val mode = paneModeFor(maxWidth)
         val inlineInfo = mode == PaneMode.Expanded && maxWidth >= 1243.dp
-        val context = LocalContext.current
         val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-            val mime = uri?.let { source ->
-                app.duck.notes.presentation.markdown.resolveImageMime(source) { context.contentResolver.getType(it) }
-            } ?: "image/*"
-            actions.onImagePickerResult(uri?.toString(), mime)
+            actions.onImagePickerResult(uri?.toString(), "image/*")
         }
         val drawer = rememberDrawerState(DrawerValue.Closed)
         val scope = rememberCoroutineScope()
@@ -243,6 +258,7 @@ fun DuckShell(
         var focusMode by remember { mutableStateOf(false) }
         LaunchedEffect(state.selectedNoteId) { focusMode = false }
         val focusing = focusMode && state.selectedNoteId != null
+        val editorScroll = key(state.selectedNoteId) { rememberScrollState() }
 
         // Table-of-contents scroll requests, panel -> editor. Phase 9e.
         //
@@ -397,6 +413,7 @@ fun DuckShell(
                         noteTitles = state.allNoteTitles,
                         onOpenWikiLink = actions.onOpenWikiLink,
                         scrollToOffset = headingScrolls,
+                        scroll = editorScroll,
                     )
                 }
                 }
@@ -578,19 +595,9 @@ fun DuckShell(
         // Hoisted above the pane branch on purpose: only Compact routes through a `Scaffold`, so a
         // `snackbarHost` slot would give undo to phones and silently withhold it from tablets.
         if (state.saveFailed) {
-            Snackbar(
+            SaveFailureBanner(state.failedNoteTitle, actions.onRetryNavigation,
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()
-                    .semantics { liveRegion = LiveRegionMode.Polite },
-                containerColor = colors.surfaceElevated,
-                contentColor = colors.onSurface,
-                action = {
-                    TextButton(onClick = actions.onRetryNavigation, modifier = Modifier.heightIn(min = 48.dp)) {
-                        Text(stringResource(R.string.editor_save_retry), color = colors.accentText)
-                    }
-                },
-            ) {
-                Text(state.failedNoteTitle?.let { stringResource(R.string.editor_save_failed_note, it) } ?: stringResource(R.string.editor_save_failed))
-            }
+            )
         } else if (state.operationFailure != null) {
             Snackbar(
                 modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding().semantics { liveRegion = LiveRegionMode.Polite },

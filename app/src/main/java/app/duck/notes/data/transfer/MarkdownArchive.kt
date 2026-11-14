@@ -148,7 +148,7 @@ internal fun boundedZipEntryCount(archive: File): Int = RandomAccessFile(archive
 internal fun readNoteText(file: File): String {
     if (file.length() > TransferLimits.MAX_NOTE_BYTES) throw IOException("Note exceeds 2 MiB")
     val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
-    return InputStreamReader(file.inputStream(), decoder).use { it.readText() }.removePrefix("\uFEFF")
+    return InputStreamReader(file.inputStream(), decoder).use { it.readText() }
 }
 
 internal suspend fun copyTransfer(input: InputStream, output: OutputStream, limit: Long): Long {

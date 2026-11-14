@@ -6,7 +6,8 @@ Pending edits must save successfully before an export is prepared. A failed save
 the edit available for retry.
 
 Imports accept UTF-8 Markdown, UTF-8 plain text, and Duck Markdown ZIP packages.
-An optional UTF-8 byte-order mark is removed. Import creates new note and image
+An optional UTF-8 byte-order mark is removed from standalone Markdown/plain-text
+documents. A leading U+FEFF in a Duck package remains note content. Import creates new note and image
 identities and makes the new notes active and unpinned. It never replaces a note
 because its title matches. Duplicate titles are reported because wiki links resolve
 by title.
@@ -26,7 +27,11 @@ rewritten; references used as code examples stay unchanged. External image URLs 
 kept as text and are not fetched. Missing local images, inconsistent ownership,
 duplicate entries, malformed UTF-8, damaged ZIP entries, and unsupported metadata
 are rejected. Generic ZIP files from other applications are not Duck packages;
-their individual Markdown files can be imported separately.
+their individual Markdown files can be imported separately. A standalone document
+cannot supply sibling image files: parsed relative image references or private
+`attachment:` references without their image bytes are rejected. Use a complete
+Duck ZIP package for notes with local images. Literal examples inside code blocks
+remain text.
 
 ## Limits
 

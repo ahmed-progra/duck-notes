@@ -16,8 +16,8 @@ class TransferViewModelTest {
         val handle = SavedStateHandle(mapOf("transfer.request" to arrayListOf("pending", "Backup", "expired", "Duck-Notes.duckbackup", "application/octet-stream", "10", "", "true", "false")))
         val store = ViewModelStore()
         val provider = ViewModelProvider(store, object : ViewModelProvider.Factory {
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = modelClass.cast(
-                TransferViewModel(Provider { calls++; error("Clearing a locked request opened the repository") }, handle))
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = requireNotNull(modelClass.cast(
+                TransferViewModel(Provider { calls++; error("Clearing a locked request opened the repository") }, handle)))
         })
         assertEquals(TransferKind.Backup, provider[TransferViewModel::class.java].request.value?.kind)
         store.clear()

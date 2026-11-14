@@ -69,6 +69,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.Assert.assertNull
 
 /**
  * Phase 8a: the editor's buffer is durable, and the two writers cannot corrupt each other.
@@ -1812,6 +1813,31 @@ class DuckShellAutosaveTest {
 
         val opened = vm.state.value.selectedNoteId
         assertEquals("Pond", notes.current(requireNotNull(opened))?.title)
+    }
+
+    /** Plant PICKER_QUEUE_IMPORTS: attach in the queue callback instead of waiting for consumption. */
+    @Test fun queuedPickerResultsDoNotAttachUntilConsumedAndCancellationReleasesTheOwner() = withOpenNote { vm ->
+        val origin = requireNotNull(vm.editorSession)
+        assertTrue(vm.onImagePickerOpened(origin))
+        vm.queueImagePickerSelection("content://queued-picker")
+        advanceUntilIdle()
+        assertTrue(attachments.all().isEmpty())
+        val selected = requireNotNull(vm.imagePickerSelection.value)
+        assertEquals("content://queued-picker", selected.uri)
+        vm.consumeImagePickerSelection(selected, "image/png")
+        advanceUntilIdle()
+        assertEquals("n1", attachments.all().single().noteId)
+        vm.consumeImagePickerSelection(selected, "image/png")
+        advanceUntilIdle()
+        assertEquals(1, attachments.all().size)
+        assertTrue(vm.onImagePickerOpened(origin))
+        vm.queueImagePickerSelection(null)
+        val cancelled = requireNotNull(vm.imagePickerSelection.value)
+        assertNull(cancelled.uri)
+        vm.consumeImagePickerSelection(cancelled, "image/*")
+        assertNull(vm.imagePickerSelection.value)
+        assertTrue(vm.onImagePickerOpened(origin))
+        vm.onImagePickerResult(null, "image/*")
     }
 
     /** Plant PICKER_KEEP_CANCELLED_OWNER: stop clearing pickerSession on a null result. */

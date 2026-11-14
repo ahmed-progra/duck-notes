@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -15,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -69,6 +72,7 @@ fun DuckScreen(
         }
         Box(Modifier.weight(1f)) {
             if (settingsOpen) {
+                val shell by shellViewModel.state.collectAsStateWithLifecycle()
                 savedViews.SaveableStateProvider("settings") {
                     SettingsScreen(ui.snapshot.settings, ui.pendingWrite, notice,
                         onBack = settingsViewModel::closeSettings,
@@ -81,11 +85,15 @@ fun DuckScreen(
                         onBackup = { if (canUseTransfers()) transferViewModel.requestBackup() },
                         onRestore = { if (canUseTransfers()) transferViewModel.requestRestore() })
                 }
+                if (shell.saveFailed) app.duck.notes.presentation.shell.SaveFailureBanner(
+                    shell.failedNoteTitle, shellViewModel::onRetryNavigation,
+                    Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding())
             } else {
                 savedViews.SaveableStateProvider("shell") {
                     DuckShell(viewModel = shellViewModel, onSettings = settingsViewModel::openSettings,
                         onImport = { if (canUseTransfers()) transferViewModel.importNotes() },
                         onExport = { id, share -> if (canUseTransfers()) transferViewModel.export(shellViewModel, id, share) },
+                        canUseImages = canUseTransfers,
                         noteSort = ui.snapshot.settings.noteSort, onNoteSort = settingsViewModel::setNoteSort, noteSortPending = ui.pendingWrite)
                 }
             }

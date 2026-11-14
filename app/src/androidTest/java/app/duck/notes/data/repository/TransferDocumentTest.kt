@@ -5,7 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.graphics.Bitmap
 import androidx.room.Room
-import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import app.duck.notes.data.local.DuckSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.data.local.DuckDatabase
@@ -54,7 +54,7 @@ class TransferDocumentTest {
     private fun uri(path: String) = base.buildUpon().appendPath(path).build().toString()
     @Before fun setUp() = runBlocking {
         control("reset"); control("grant")
-        db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java).setDriver(BundledSQLiteDriver()).addCallback(DuckDatabaseCallback()).build()
+        db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java).setDriver(DuckSQLiteDriver()).addCallback(DuckDatabaseCallback()).build()
         db.noteDao().saveNoteWithTagsAndLinks(note, listOf("research"))
         repository = NoteTransferRepositoryImpl(context, NoteArchiveStore(context, db, AttachmentStorageImpl(context), DeriveTitle(), ParseTags(), ResolveWikiLinks()))
     }
@@ -94,6 +94,19 @@ class TransferDocumentTest {
             try { context.contentResolver.openInputStream(escape)?.close(); fail("Share provider exposed private staging") } catch (_: SecurityException) { } catch (_: IllegalArgumentException) { }
         } finally { context.contentResolver.delete(shared, null, null) }
         assertEquals(note.body, db.noteDao().getById(note.id)?.body)
+    }
+
+    @Test fun exportKeepsStoredMarkersWhileStandaloneImportNormalizesOnlyItsBom() = runBlocking {
+        val body = "\uFEFF" + note.body
+        db.noteDao().saveNoteWithTagsAndLinks(note.copy(body = body), listOf("research"))
+        assertEquals(body, db.noteDao().getById(note.id)?.body)
+        val document = repository.prepareExport(listOf(note.id)).also { owned += it.id }
+        repository.writePrepared(document.id, uri("output"))
+        assertArrayEquals(body.toByteArray(Charsets.UTF_8), control("output")?.getByteArray("bytes"))
+        control("source", body.toByteArray(Charsets.UTF_8))
+        val input = repository.prepareImport(uri("source")).also { owned += it }
+        val report = repository.importPrepared(input)
+        assertEquals(note.body, db.noteDao().getById(report.addedNoteIds.single())?.body)
     }
 
     /** Plant: suppress provider write/close failure or skip partial-document cleanup. */

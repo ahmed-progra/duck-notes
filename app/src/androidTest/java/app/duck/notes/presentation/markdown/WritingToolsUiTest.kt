@@ -35,7 +35,7 @@ class WritingToolsUiTest {
         rule.runOnIdle { assertEquals("**alpha** beta alpha", state.text.toString()) }
     }
 
-    /** Plant: apply Replace All with a separate edit per match; one undo leaves a partial replacement. */
+    /** Plant: clear history after production Replace All; one undo can no longer recover the source. */
     @Test fun replaceAllIsOneUndoableEdit() {
         val state = TextFieldState("alpha beta alpha")
         rule.setContent { DuckTheme { MarkdownEditorScreen(state) } }

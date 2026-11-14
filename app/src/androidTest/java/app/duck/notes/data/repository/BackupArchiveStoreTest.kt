@@ -6,7 +6,7 @@ import android.graphics.Bitmap
 import androidx.room.Room
 import androidx.room.useWriterConnection
 import androidx.room.immediateTransaction
-import androidx.sqlite.driver.bundled.BundledSQLiteDriver
+import app.duck.notes.data.local.DuckSQLiteDriver
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.duck.notes.core.files.AttachmentFiles
@@ -55,7 +55,7 @@ class BackupArchiveStoreTest {
         val app = ApplicationProvider.getApplicationContext<Context>()
         root = File(app.noBackupFilesDir, "restore-${id()}").apply { check(mkdir()) }
         context = object : ContextWrapper(app) { override fun getFilesDir() = File(root, "files").apply { mkdirs() } }
-        db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java).setDriver(BundledSQLiteDriver()).addCallback(DuckDatabaseCallback()).build()
+        db = Room.inMemoryDatabaseBuilder(context, DuckDatabase::class.java).setDriver(DuckSQLiteDriver()).addCallback(DuckDatabaseCallback()).build()
         store = NoteArchiveStore(context, db, AttachmentStorageImpl(context), DeriveTitle(), ParseTags(), ResolveWikiLinks())
         val nid = id()
         val iid = id()
@@ -103,6 +103,40 @@ class BackupArchiveStoreTest {
         val second = store.restore(snapshot)
         assertEquals(1, second.skipped)
         assertTrue(second.addedNoteIds.isEmpty())
+    }
+
+    /** Plant: strip U+FEFF in the shared archive reader; stored note text must remain exact. */
+    @Test fun backupRestorePreservesAnActualLeadingByteOrderMarkInNoteText() = runBlocking {
+        val body = "\uFEFF" + note.body
+        db.useWriterConnection { connection -> connection.usePrepared("UPDATE notes SET body = CAST(? AS TEXT) WHERE id = ?") { statement ->
+            statement.bindBlob(1, body.toByteArray(Charsets.UTF_8)); statement.bindText(2, note.id); statement.step()
+        } }
+        assertEquals("Positive control: the source database must actually contain the leading marker", body, db.noteDao().getById(note.id)?.body)
+        val snapshot = backup()
+        assertArrayEquals(body.toByteArray(Charsets.UTF_8), File(snapshot.directory, snapshot.manifest.notes.single().entry).readBytes())
+        removeSource()
+        assertEquals(listOf(note.id), store.restore(snapshot).addedNoteIds)
+        assertEquals("Backup restore changed stored note text", body, db.noteDao().getById(note.id)?.body)
+    }
+
+    /** Plant: delegate bindText without preserving a leading UTF-16 marker in DuckSQLiteDriver. */
+    @Test fun writingAndBoundQueriesPreserveLeadingUnicodeMarkersLiterally() = runBlocking {
+        for (prefix in listOf("", "\uFEFF", "\uFEFF\uFEFF")) {
+            val value = prefix + "Literal text"
+            db.noteDao().saveNoteWithTagsAndLinks(note.copy(title = value, body = value), emptyList())
+            val saved = requireNotNull(db.noteDao().getById(note.id))
+            assertEquals(value, saved.title)
+            assertEquals(value, saved.body)
+            assertEquals(1, db.noteDao().countWithTitle(value))
+        }
+    }
+
+    /** SQLite replaces U+FFFE; its byte-order detection must not also swap the following text. */
+    @Test fun reversedByteOrderMarkerDoesNotSwapFollowingText() = runBlocking {
+        db.noteDao().saveNoteWithTagsAndLinks(note.copy(title = "\uFFFELiteral text", body = "\uFFFELiteral text"), emptyList())
+        val saved = requireNotNull(db.noteDao().getById(note.id))
+        assertEquals("\uFFFDLiteral text", saved.title)
+        assertEquals("\uFFFDLiteral text", saved.body)
     }
 
     /** Existing content and customization win, including order-only orphan customization. */

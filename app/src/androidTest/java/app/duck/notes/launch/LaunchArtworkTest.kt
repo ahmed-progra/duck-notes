@@ -23,7 +23,10 @@ import org.junit.Test
 class LaunchArtworkTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun captureSyntheticResearchNotes() {
+    @Test fun captureSyntheticResearchNotes() = capture(dark = false)
+    @Test fun captureSyntheticResearchNotesInDarkTheme() = capture(dark = true)
+
+    private fun capture(dark: Boolean) {
         val body = """
             # Research journal
 
@@ -41,12 +44,12 @@ class LaunchArtworkTest {
             **Write thoughtfully. Keep your notes close.**
         """.trimIndent()
         val notes = listOf(
-            Note("research", "Research journal", body, 1_794_528_000_000L, 1_794_528_000_000L),
+            Note("research", "Research journal", body, 1_794_528_000_000L, 1_794_528_000_000L, isPinned = true),
             Note("reading", "Reading list", "Sources, questions, and useful connections.", 1_794_528_000_000L, 1_794_528_000_000L),
             Note("ideas", "Working ideas", "Small observations for the next draft.", 1_794_528_000_000L, 1_794_528_000_000L),
         )
         compose.setContent {
-            DuckTheme(dark = false) {
+            DuckTheme(dark = dark) {
                 DuckShell(
                     state = ShellUiState(notes = notes, selectedNoteId = "research",
                         selectedNoteBody = body, selectedNoteTags = listOf("research/notes"),
@@ -55,8 +58,9 @@ class LaunchArtworkTest {
                             TagRow("research/notes", "notes", 1, false, false, "research/notes", false,
                                 count = 1, ownCount = 1),
                         )),
-                    buffer = rememberTextFieldState(body),
-                    actions = ShellActions(),
+                    buffer = rememberTextFieldState(body, initialSelection = androidx.compose.ui.text.TextRange(body.indexOf("\n\n") + 1)),
+                    actions = ShellActions(onPinNote = { _, _ -> }, onNoteSort = {},
+                        onSearchFilters = {}, onImport = {}, onExport = { _, _ -> }),
                 )
             }
         }
@@ -66,7 +70,7 @@ class LaunchArtworkTest {
         val image = compose.onRoot().captureToImage().asAndroidBitmap()
         assertTrue("Actual Compose capture must not be empty", image.width > 0 && image.height > 0)
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        File(context.filesDir, "launch-editor.png").outputStream().use {
+        File(context.filesDir, if (dark) "launch-editor-dark.png" else "launch-editor.png").outputStream().use {
             assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it))
         }
     }

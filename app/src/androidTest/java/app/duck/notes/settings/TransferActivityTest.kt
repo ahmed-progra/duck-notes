@@ -4,6 +4,9 @@ import android.accessibilityservice.AccessibilityService
 import android.app.LocaleManager
 import android.os.Build
 import android.os.LocaleList
+import android.content.ContentValues
+import android.provider.MediaStore
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.*
@@ -88,6 +91,141 @@ class TransferActivityTest {
     private fun selectNote() {
         compose.onNodeWithText("Transfer fixture").performClick()
         compose.waitUntil(10_000) { compose.onAllNodesWithTag("noteEditor").fetchSemanticsNodes().isNotEmpty() }
+    }
+
+    private fun systemNode(matches: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
+        fun find(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+            if (node == null) return null
+            if (node.isVisibleToUser && matches(node)) return node
+            for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+            return null
+        }
+        return find(instrumentation.uiAutomation.rootInActiveWindow)
+    }
+
+    /** Real MediaStore album and OS photo selection; app auth success is supplied directly afterward. */
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 35)
+    @Test fun realPhotoPickerSelectionWaitsForUnlockAndStillAttachesToTheOriginalNote() {
+        org.junit.Assume.assumeTrue(Build.VERSION.SDK_INT >= 29 && Build.HARDWARE in setOf("ranchu", "goldfish"))
+        val context = instrumentation.targetContext
+        val resolver = context.contentResolver
+        val album = "DuckV2-${UUID.randomUUID().toString().take(8)}"
+        val taken = java.time.Instant.parse("2030-01-02T12:34:56Z").toEpochMilli()
+        val uri = requireNotNull(resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "duck-v2-fixture.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$album/")
+            put(MediaStore.Images.Media.IS_PENDING, 1)
+            put(MediaStore.Images.Media.DATE_TAKEN, taken)
+        }))
+        val bitmap = android.graphics.Bitmap.createBitmap(20, 30, android.graphics.Bitmap.Config.ARGB_8888)
+        val encoded = java.io.ByteArrayOutputStream().use { bytes ->
+            bitmap.eraseColor(android.graphics.Color.rgb(215, 73, 76))
+            check(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 100, bytes)); bytes.toByteArray()
+        }
+        bitmap.recycle()
+        try {
+            resolver.openOutputStream(uri).use { requireNotNull(it).write(encoded) }
+            resolver.openFileDescriptor(uri, "rw").use { descriptor ->
+                @Suppress("DEPRECATION")
+                val exif = android.media.ExifInterface(requireNotNull(descriptor).fileDescriptor)
+                exif.setAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL, "2030:01:02 12:34:56")
+                exif.setAttribute(android.media.ExifInterface.TAG_OFFSET_TIME_ORIGINAL, "+00:00")
+                exif.saveAttributes()
+            }
+            val expected = resolver.openInputStream(uri).use { requireNotNull(it).readBytes() }
+            assertEquals(1, resolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0); put(MediaStore.Images.Media.DATE_TAKEN, taken) }, null, null))
+            resolver.query(uri, arrayOf(MediaStore.Images.Media.DATE_TAKEN), null, null, null).use { cursor ->
+                check(requireNotNull(cursor).moveToFirst()); assertEquals("Synthetic photo date positive control", taken, cursor.getLong(0))
+            }
+            lateinit var lock: AppLockSession
+            scenario?.onActivity { activity ->
+                lock = ViewModelProvider(activity)[AppLockSession::class.java]
+                lock.begin(); lock.finish(true)
+                ViewModelProvider(activity)[SettingsViewModel::class.java].setLockEnabled(true)
+            }
+            compose.waitUntil(10_000) { resources.advanceSettingsWork(); settings.state.value.settings.lockEnabled }
+            selectNote()
+            compose.onNodeWithContentDescription("Add image").performScrollTo().performClick()
+            val day = java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy", java.util.Locale.US)
+                .format(java.time.Instant.ofEpochMilli(taken).atZone(java.time.ZoneId.systemDefault()))
+            var selected: AccessibilityNodeInfo? = null
+            compose.waitUntil(20_000) {
+                systemNode { node ->
+                    val description = node.contentDescription?.toString().orEmpty()
+                    description.startsWith("Photo", ignoreCase = true) && description.contains(day)
+                }.also { selected = it } != null
+            }
+            var clickable = selected
+            while (clickable != null && !clickable.isClickable) clickable = clickable.parent
+            assertTrue("Synthetic system photo target was not clickable", clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
+            val add = systemNode { it.isClickable && it.text?.toString()?.startsWith("Add") == true }
+            add?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            compose.waitUntil(20_000) { compose.onAllNodesWithText("Set device screen lock").fetchSemanticsNodes().isNotEmpty() || compose.onAllNodesWithText("Unlock").fetchSemanticsNodes().isNotEmpty() }
+            runBlocking { kotlinx.coroutines.delay(500); assertTrue("Photo attachment was imported before app authentication", database.attachmentDao().forNote(id).isEmpty()) }
+            scenario?.onActivity { lock.begin(); lock.finish(true) }
+            compose.waitUntil(20_000) { runBlocking { database.attachmentDao().forNote(id).size == 1 } }
+            val image = runBlocking { database.attachmentDao().forNote(id).single() }
+            assertArrayEquals(expected, File(context.filesDir, image.uri).readBytes())
+            runBlocking { assertTrue(database.noteDao().getById(id)?.body.orEmpty().contains(app.duck.notes.domain.markdown.MarkdownScanner.imageRef(image.id))) }
+        } finally {
+            if (instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()?.contains(".providers.media") == true) {
+                instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                instrumentation.waitForIdleSync()
+            }
+            resolver.delete(uri, null, null)
+            runBlocking { database.attachmentDao().forNote(id).forEach { app.duck.notes.data.repository.AttachmentStorageImpl(context).delete(it.uri) } }
+        }
+    }
+
+    @androidx.test.filters.SdkSuppress(minSdkVersion = 35)
+    @Test fun filesAndBackupControlsRemainUsableOnAnArabicPhoneAtTwoHundredPercentText() {
+        org.junit.Assume.assumeTrue(Build.HARDWARE in setOf("ranchu", "goldfish"))
+        fun shell(command: String) = android.os.ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+            .use { it.readBytes().toString(Charsets.UTF_8).trim() }
+        val size = Regex("Override size: (\\d+x\\d+)").find(shell("wm size"))?.groupValues?.get(1) ?: "reset"
+        val density = Regex("Override density: (\\d+)").find(shell("wm density"))?.groupValues?.get(1) ?: "reset"
+        val oldFont = shell("settings get system font_scale")
+        val font = if (oldFont == "null") null else requireNotNull(oldFont.toFloatOrNull()).toString()
+        try {
+            shell("wm size 720x1600"); shell("wm density 320"); shell("settings put system font_scale 2.0")
+            instrumentation.waitForIdleSync()
+            scenario?.onActivity { activity ->
+                ViewModelProvider(activity)[SettingsViewModel::class.java].setLanguage(app.duck.notes.domain.model.LanguagePreference.Arabic)
+            }
+            compose.waitUntil(15_000) {
+                resources.advanceSettingsWork()
+                compose.onAllNodesWithText("الملفات").fetchSemanticsNodes().isNotEmpty()
+            }
+            scenario?.onActivity { activity ->
+                assertEquals(720, activity.resources.displayMetrics.widthPixels)
+                assertEquals(1600, activity.resources.displayMetrics.heightPixels)
+                assertEquals(2f, activity.resources.configuration.fontScale, 0.01f)
+                assertEquals(android.view.View.LAYOUT_DIRECTION_RTL, activity.resources.configuration.layoutDirection)
+            }
+            val files = compose.onNodeWithText("الملفات").assertIsDisplayed()
+            val bounds = files.fetchSemanticsNode().boundsInRoot
+            assertTrue("Files touch target is shorter than 48 dp", bounds.height >= 96f)
+            files.performClick()
+            compose.onNodeWithText("استيراد ملاحظات").assertIsDisplayed()
+            compose.onNodeWithText("تصدير هذه المجموعة").assertIsDisplayed()
+            instrumentation.uiAutomation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("استيراد ملاحظات").fetchSemanticsNodes().isEmpty() }
+            instrumentation.waitForIdleSync()
+            compose.onNodeWithContentDescription("فتح القائمة الجانبية").assertIsDisplayed().performClick()
+            compose.onNodeWithText("الإعدادات").assertIsDisplayed().performClick()
+            compose.onNodeWithText("إنشاء نسخة احتياطية مشفرة").performScrollTo().assertIsDisplayed().performClick()
+            compose.onNodeWithTag("backupPassphrase").performScrollTo().assertIsDisplayed()
+            assertTrue("Passphrase field lacks password accessibility semantics", compose.onNodeWithTag("backupPassphrase").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Password))
+            compose.onNodeWithText("إنشاء النسخة").assertIsDisplayed()
+            compose.onNodeWithText("إلغاء").assertIsDisplayed().performClick()
+            runBlocking { assertEquals(body, database.noteDao().getById(id)?.body) }
+        } finally {
+            scenario?.close(); scenario = null
+            instrumentation.runOnMainSync { instrumentation.targetContext.getSystemService(LocaleManager::class.java).applicationLocales = LocaleList.getEmptyLocaleList() }
+            shell(if (font == null) "settings delete system font_scale" else "settings put system font_scale $font")
+            shell("wm density $density"); shell("wm size $size")
+        }
     }
 
     /** Real settings/password controls: mismatches cannot start work; backgrounding clears secrets. */
@@ -235,6 +373,25 @@ class TransferActivityTest {
             runBlocking { port.discardPrepared(document.id) }
             resolver.call(output, "revoke", null, null)
         }
+    }
+
+    /** Real failed SQLite save -> Settings -> recreation -> Retry; leaving the editor cannot hide it. */
+    @Test fun saveFailureAndRetryRemainVisibleInSettingsAcrossRecreation() {
+        runBlocking { database.useWriterConnection { it.execSQL("CREATE TRIGGER settings_save_failure BEFORE UPDATE ON notes BEGIN SELECT RAISE(ABORT, 'settings save test'); END") } }
+        selectNote()
+        val editor = compose.onNodeWithTag("noteEditor")
+        editor.performSemanticsAction(SemanticsActions.SetSelection) { it(body.length, body.length, false) }
+        editor.performTextInput(" Kept in Settings.")
+        val message = "Edits to “Transfer fixture” were not saved. Retry before leaving."
+        compose.waitUntil(10_000) { compose.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText(message).assertIsDisplayed()
+        scenario?.recreate()
+        compose.onNodeWithText(message).assertIsDisplayed()
+        runBlocking { database.useWriterConnection { it.execSQL("DROP TRIGGER settings_save_failure") } }
+        compose.onNodeWithText("Try again").assertIsDisplayed().performClick()
+        compose.waitUntil(10_000) { runBlocking { database.noteDao().getById(id)?.body == body + " Kept in Settings." } }
+        compose.onNodeWithText(message).assertDoesNotExist()
     }
 
     /** Real ACTION_OPEN_DOCUMENT, actual system cancellation, and retained user-visible result. */

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.content.contentReceiver
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
@@ -66,7 +67,7 @@ import kotlin.math.roundToInt
  * re-query Room" — which is what makes *"kill the app mid-typing"* true for real rather than true up
  * to a `Bundle` size.
  *
- * This composable now holds **nothing saveable**. Do not give it a fallback `TextFieldState`: a
+ * The note body is never saved by this composable. Do not give it a fallback `TextFieldState`: a
  * default would let a caller silently get a detached buffer that autosave never sees.
  *
  * ## Phase 8c hung the format toolbar under it
@@ -111,6 +112,7 @@ fun MarkdownEditorScreen(
      * previews and the gallery, which have no panel to request from.
      */
     scrollToOffset: Flow<Int>? = null,
+    scroll: ScrollState = rememberScrollState(),
 ) {
     // Three remembers with three different lifetimes, and the split is the point.
     //
@@ -173,9 +175,6 @@ fun MarkdownEditorScreen(
         SpanPlanner.wikiLinkTargets(text.toString(), scan.tokens, plan, selection.start, selection.end)
     }
     val sections = remember(text) { SectionFolding.sections(text.toString(), scan.tokens) }
-
-    // Hoisted out of the modifier below so the contents panel can drive it. Phase 9e.
-    val scroll = rememberScrollState()
 
     // Scroll a heading into view on request from the info panel's table of contents.
     //

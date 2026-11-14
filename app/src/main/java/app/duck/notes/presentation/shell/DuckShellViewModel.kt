@@ -75,6 +75,9 @@ import app.duck.notes.domain.usecase.RestoreNote
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.asStateFlow
+
+internal data class ImagePickerSelection(val uri: String?)
 
 /** Owns per-note editor sessions; text never changes identity during a suspended operation. */
 @HiltViewModel
@@ -122,6 +125,8 @@ class DuckShellViewModel @Inject constructor(
     private var pendingCreatedId: String? = null
     private var pendingUndo: PendingUndo? = null
     private var pickerSession: EditorSession? = null
+    private val pendingImageSelection = MutableStateFlow<ImagePickerSelection?>(null)
+    internal val imagePickerSelection = pendingImageSelection.asStateFlow()
     private val undo = MutableStateFlow<TagPrompt?>(null)
     private val search = MutableStateFlow(SearchState(query = handle.get<String>(KEY_SEARCH_TEXT).orEmpty(), filters = restoredSearchFilters()))
     private val noteOrder = MutableStateFlow(NoteOrder(NoteSort.Modified, Locale.getDefault()))
@@ -658,9 +663,17 @@ class DuckShellViewModel @Inject constructor(
         return true
     }
     fun onImagePickerResult(sourceUri: String?, mime: String) {
+        pendingImageSelection.value = null
         val origin = pickerSession
         pickerSession = null
         if (sourceUri != null) onAttachImages(origin, listOf(sourceUri to mime))
+    }
+    fun queueImagePickerSelection(sourceUri: String?) {
+        if (pickerSession != null && pendingImageSelection.value == null) pendingImageSelection.value = ImagePickerSelection(sourceUri)
+    }
+    internal fun consumeImagePickerSelection(selected: ImagePickerSelection, mime: String) {
+        if (pendingImageSelection.value !== selected) return
+        onImagePickerResult(selected.uri, mime)
     }
     fun onAttachImage(sourceUri: String, mime: String) = onAttachImages(listOf(sourceUri to mime))
     fun onAttachImages(images: List<Pair<String, String>>) = onAttachImages(editorSession, images)

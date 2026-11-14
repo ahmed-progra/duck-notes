@@ -25,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalConfiguration
@@ -123,13 +124,16 @@ class MainActivity : AppCompatActivity() {
             val systemDark = isNight(if (ui.snapshot.settings.theme == ThemePreference.System) systemResources.configuration else configuration)
             val dark = effectiveDark(ui.snapshot.settings.theme, systemDark)
             DuckTheme(dark = dark, editorFont = ui.snapshot.settings.editorFont, editorSizeSp = ui.snapshot.settings.editorSizeSp) {
+                val unlockedViews = rememberSaveableStateHolder()
                 val ready = welcomeState != WelcomeStartupState.Loading && (ui.snapshot.readStatus != SettingsReadStatus.Loading || ui.startupTimedOut)
                 val canAccess = ready && mayShowNotes(securitySnapshot, lock.authenticated) && !lock.authenticating
                 if (ready) {
                     if (canAccess) {
-                        DuckScreen(settingsViewModel = settingsViewModel, shellViewModel = shellViewModel,
-                            canAuthenticate = deviceSecure, onLockChange = ::requestLockChange, transferViewModel = transferViewModel,
-                            canUseTransfers = ::canUseTransfers)
+                        unlockedViews.SaveableStateProvider("notes") {
+                            DuckScreen(settingsViewModel = settingsViewModel, shellViewModel = shellViewModel,
+                                canAuthenticate = deviceSecure, onLockChange = ::requestLockChange, transferViewModel = transferViewModel,
+                                canUseTransfers = ::canUseTransfers)
+                        }
                     } else {
                         AppLockScreen(deviceSecure, lock.authenticating, onUnlock = { requestAuthentication() },
                             onRetry = settingsViewModel::retryRead, onConfigureLock = ::configureDeviceLock)

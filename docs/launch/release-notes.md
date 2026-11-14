@@ -1,22 +1,22 @@
-# Duck Notes 0.1.1
+# Duck Notes 2.0.0
 
-Duck Notes is an offline Markdown notes app for Android 8.0 and later. This update improves security and reliability and introduces a consistent Duck visual identity.
+Duck Notes is an offline Markdown notes app for Android 8.0 and later. Version 2 improves writing, organization, and recovery while preserving local notes and Duck's visual identity.
 
-- Optional app lock uses your Android device PIN, pattern, or password. Leaving the foreground locks the session, and screenshots and Recents previews are protected.
-- Malformed-link parsing avoids repeated suffix scans, and the embedded preferences parser is updated.
-- Unreadable or corrupted security preferences fail closed.
-- Backup rules require supported encryption capabilities or device transfer; temporary imports remain excluded.
-- Tag-merge Undo restores original customization and is invalidated by later metadata changes.
-- The Duck mark now appears consistently in the launcher, splash screen, empty states, and About screen.
-
-Markdown editing, nested and pinned tags, search, wiki links/backlinks, image attachments, Archive/Trash, English/Arabic support, and themes remain available offline.
+- Responsive navigation keeps the sidebar accessible on phones and wider windows. Focus mode hides secondary panes and formatting controls; Back exits Focus first. Editor scroll position survives pane and Focus changes.
+- Undo/Redo includes formatting, tasks, and literal Find/Replace. Replace All is one undoable edit. Primary formatting controls have an accessible overflow menu.
+- System, English, and Arabic language selection; right-to-left layouts; light/dark/system themes; serif, sans-serif, and monospace editor fonts at 14-24sp with Android font scaling.
+- Pin notes without changing their modification timestamps. Sort by modified date, created date, or title, with deterministic ties. Search combines tag subtree, pinned, unfinished-task, image, and active/archive filters.
+- Tap images to zoom; long-press for actions, with confirmation before removal. Pending image-picker results wait for ordinary app authentication.
+- Import UTF-8 Markdown/plain text and Duck Markdown ZIP packages as new notes. Export/share individual notes or the filtered collection, including relative image files in ZIP packages. Failed saves block export with Retry.
+- Create passphrase-protected `.duckbackup` files containing notes, timestamps, pin/archive/trash state, tag customization, and images. Restore adds missing note IDs and skips existing IDs without overwriting them. Existing tag customization wins. Complete authentication and archive validation happen before restore.
+- Security hardening retains device-credential app lock, protected screenshots and Recents, private staging, restricted Android backup rules, and no network permission. Save failure and Retry remain visible in Settings.
 
 ## Installation
 
-Download `duck-notes-0.1.1.apk` from this release. Existing installations can update with the same signing certificate. Do not uninstall or clear app storage when upgrading real notes.
+Download `duck-notes-2.0.0.apk` from this release. Upgrade in place; do not uninstall or clear app storage when keeping real notes. The release uses the original signing certificate. Public certificate, checksums, and license notices accompany the APK.
 
-## Privacy and verification limits
+## Privacy and recovery
 
-App lock controls interface access; Duck does not separately encrypt its files. New backup rules do not erase older backups. Android controls transport behavior and recovery, and cloud backup has a 25 MB per-app quota. See SECURITY.md for dependency applicability and remaining limits.
+App lock controls interface access and does not encrypt the live database or images. Manual backups use authenticated streaming encryption; forgotten backup passphrases cannot be recovered. Backups include Archive and Trash, but exclude credentials and device security settings. Android-managed backup remains subject to transport behavior and the 25 MB cloud quota. See [SECURITY.md](../../SECURITY.md), [portability](../portability.md), and [backup format](../backup-format.md).
 
-The APK was checked on an Android 15 emulator, including a signed upgrade from 0.1.0. Physical-phone and OEM certification is not claimed. Public license, certificate, and checksum files accompany the APK.
+Cloud sync, accounts, rich tables/formulas, OCR, widgets, permanent Trash deletion, and live-database encryption are not included. Physical-phone/OEM and native reference-app behavior are not certified; no zero-bug guarantee is implied.

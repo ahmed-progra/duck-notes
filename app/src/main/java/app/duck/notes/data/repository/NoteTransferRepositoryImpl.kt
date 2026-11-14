@@ -144,7 +144,7 @@ class NoteTransferRepositoryImpl @Inject internal constructor(
             if (zipped) {
                 if (MarkdownArchive.read(inputFile, directory).manifest.kind != "markdown") throw IOException("Not a Markdown package")
             } else {
-                val body = readNoteText(inputFile)
+                val body = readNoteText(inputFile).removePrefix("\uFEFF")
                 if (!File(directory, "notes").mkdir() || !File(directory, "assets").mkdir()) throw IOException("Temporary storage unavailable")
                 val now = System.currentTimeMillis()
                 val note = ArchiveNote(UUID.randomUUID().toString(), now, now, false, false, false, null)

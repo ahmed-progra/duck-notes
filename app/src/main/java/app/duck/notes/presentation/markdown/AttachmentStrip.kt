@@ -188,7 +188,7 @@ private fun ZoomDialog(attachment: Attachment, onDismiss: () -> Unit) {
     }
     Dialog(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().clip(DuckTheme.shapes.medium).background(DuckTheme.colors.surface)) {
-            Box(Modifier.fillMaxWidth().height(360.dp).clip(DuckTheme.shapes.medium).onSizeChanged { size = it }.transformable(transform)) {
+            Box(Modifier.fillMaxWidth().weight(1f, fill = false).height(360.dp).clip(DuckTheme.shapes.medium).onSizeChanged { size = it }.transformable(transform)) {
                 AsyncImage(
                     model = attachmentRequest(attachment.uri, AttachmentImageLimits.DECODE_SIDE),
                     contentDescription = stringResource(R.string.attachment_image),
@@ -200,9 +200,9 @@ private fun ZoomDialog(attachment: Attachment, onDismiss: () -> Unit) {
                 )
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                TextButton(onClick = { scale = (scale - 1f).coerceAtLeast(1f); pan = Offset.Zero }, enabled = scale > 1f) { Text(stringResource(R.string.attachment_zoom_out)) }
-                TextButton(onClick = { scale = (scale + 1f).coerceAtMost(5f) }, enabled = scale < 5f) { Text(stringResource(R.string.attachment_zoom_in)) }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.attachment_close)) }
+                TextButton(onClick = { scale = (scale - 1f).coerceAtLeast(1f); pan = Offset.Zero }, enabled = scale > 1f, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.attachment_zoom_out)) }
+                TextButton(onClick = { scale = (scale + 1f).coerceAtMost(5f) }, enabled = scale < 5f, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.attachment_zoom_in)) }
+                TextButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.attachment_close)) }
             }
         }
     }

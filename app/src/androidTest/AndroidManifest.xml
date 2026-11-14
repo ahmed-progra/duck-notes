@@ -59,4 +59,14 @@
         android:targetPackage="app.duck.notes"
         android:functionalTest="false"
         android:handleProfiling="false" />
+    <instrumentation
+        android:name="app.duck.notes.qualification.ReleaseProbeRunner"
+        android:targetPackage="app.duck.notes"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
+    <instrumentation
+        android:name="androidx.test.runner.AndroidJUnitRunner"
+        android:targetPackage="app.duck.notes"
+        android:functionalTest="false"
+        android:handleProfiling="false" />
 </manifest>
